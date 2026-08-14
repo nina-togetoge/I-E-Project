@@ -1,0 +1,72 @@
+# ============================================================
+# 校园创新创业项目管理平台 - Docker Compose 编排文件
+# 仅部署 FastAPI 应用；MySQL 和 Redis 使用本地已部署服务
+# 使用：docker-compose up -d --build
+# ============================================================
+version: "3.8"
+
+services:
+  # ============================================================
+  # FastAPI 应用
+  # ============================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ie-app
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      # ---- 应用配置 ----
+      APP_NAME: "校园创新创业项目管理平台"
+      DEBUG: "True"
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      # ---- MySQL（连接宿主机本地 MySQL）----
+      # host.docker.internal 是 Docker 容器访问宿主机的特殊域名
+      DB_HOST: "host.docker.internal"
+      DB_PORT: "3306"
+      DB_USER: "root"
+      DB_PASSWORD: "2023011630"
+      DB_NAME: "ie_project_db"
+      DB_CHARSET: "utf8mb4"
+      # ---- Redis（连接宿主机本地 Docker Redis）----
+      REDIS_HOST: "host.docker.internal"
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: "2023011630"  # 如果你的 Redis 有密码，在这里填写
+      REDIS_DB: "0"
+      # ---- JWT ----
+      JWT_SECRET_KEY: "ie_project_management_secret_key_2024_change_in_production"
+      JWT_ALGORITHM: "HS256"
+      ACCESS_TOKEN_EXPIRE_MINUTES: "120"
+      REFRESH_TOKEN_EXPIRE_DAYS: "7"
+      # ---- 文件上传 ----
+      UPLOAD_DIR: "static/uploads"
+      MAX_UPLOAD_SIZE: "10485760"
+      ALLOWED_EXTENSIONS: ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.zip,.rar"
+      # ---- 全文检索 ----
+      WHOOSH_INDEX_DIR: "static/whoosh_index"
+    ports:
+      - "8000:8000"
+    volumes:
+      # ★ 开发模式：挂载源码，改代码后自动热重载，无需重建镜像
+      - ./app:/app/app
+      - ./main.py:/app/main.py
+      # 附件持久化
+      - app_uploads:/app/static/uploads
+      # 索引持久化
+      - app_index:/app/static/whoosh_index
+    extra_hosts:
+      # 确保容器内可以解析 host.docker.internal
+      - "host.docker.internal:host-gateway"
+    # ★ 开发模式：--reload 热重载
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+
+# ============================================================
+# 数据卷
+# ============================================================
+volumes:
+  app_uploads:
+    driver: local
+  app_index:
+    driver: local

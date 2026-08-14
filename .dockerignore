@@ -1,0 +1,15 @@
+# Docker 构建时忽略的文件/目录（减小镜像体积 + 加速构建）
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+.env
+*.md
+static/uploads/*
+static/whoosh_index/*
+alembic/versions/*
+Dockerfile
+docker-compose.yml
+.dockerignore

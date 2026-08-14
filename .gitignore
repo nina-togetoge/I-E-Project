@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 环境变量
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker 数据
+mysql_data/
+redis_data/
+
+# 上传文件与索引
+static/uploads/*
+static/whoosh_index/*
+!static/uploads/.gitkeep
+!static/whoosh_index/.gitkeep
+
+# 日志
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node（前端用）
+node_modules/
