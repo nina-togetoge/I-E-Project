@@ -11,7 +11,7 @@ services:
   # ============================================================
   app:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     container_name: ie-app
     restart: unless-stopped
@@ -50,8 +50,8 @@ services:
       - "8000:8000"
     volumes:
       # ★ 开发模式：挂载源码，改代码后自动热重载，无需重建镜像
-      - ./app:/app/app
-      - ./main.py:/app/main.py
+      - ./backend/app:/app/app
+      - ./backend/main.py:/app/main.py
       # 附件持久化
       - app_uploads:/app/static/uploads
       # 索引持久化
