@@ -40,6 +40,26 @@ class ReviewCRUD:
         ).first() is not None
 
     @staticmethod
+    def paginate(
+        db: Session, offset: int, limit: int,
+        stage: Optional[int] = None, status: Optional[int] = None,
+        keyword: Optional[str] = None,
+    ) -> Tuple[List[ProjReview], int]:
+        q = db.query(ProjReview).filter(ProjReview.is_deleted == 0)
+        if stage:
+            q = q.filter(ProjReview.review_stage == stage)
+        if status is not None:
+            q = q.filter(ProjReview.review_result == status)
+        if keyword:
+            kw = f"%{keyword}%"
+            q = q.join(ProjProject, ProjReview.project_id == ProjProject.id).filter(
+                or_(ProjProject.project_name.like(kw), ProjProject.project_no.like(kw))
+            )
+        total = q.with_entities(func.count(ProjReview.id)).scalar() or 0
+        items = q.order_by(ProjReview.created_at.desc()).offset(offset).limit(limit).all()
+        return items, total
+
+    @staticmethod
     def expert_pending_projects(db: Session, expert_id: int, offset: int, limit: int,
                                 keyword: Optional[str] = None) -> Tuple[List[ProjProject], int]:
         """

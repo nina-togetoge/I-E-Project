@@ -22,17 +22,17 @@
       @page-change="handlePageChange"
     >
       <template #status="{ row }">
-        <el-tag :type="row.status === 0 ? 'warning' : 'success'">
-          {{ row.status === 0 ? '待评审' : '已评审' }}
+        <el-tag :type="row.my_review_result == null ? 'warning' : 'success'">
+          {{ row.my_review_result == null ? '待评审' : '已评审' }}
         </el-tag>
       </template>
       <template #actions="{ row }">
         <el-button
-          v-if="row.status === 0"
+          v-if="row.my_review_result == null"
           link
           type="primary"
           size="small"
-          @click="router.push(`/review/${row.id}`)"
+          @click="router.push(`/review/${row.project_id}`)"
         >
           评审
         </el-button>
@@ -47,7 +47,7 @@ import { useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import PaginationTable from '@/components/PaginationTable.vue'
 import type { TableColumn } from '@/components/PaginationTable.vue'
-import { getReviewList } from '@/api/review'
+import { getExpertTasks } from '@/api/review'
 
 const router = useRouter()
 const searchForm = reactive({ keyword: '' })
@@ -58,17 +58,19 @@ const page = ref(1)
 const pageSize = ref(10)
 
 const columns: TableColumn[] = [
-  { prop: 'project_code', label: '项目编号', minWidth: 140 },
-  { prop: 'project_title', label: '项目名称', minWidth: 200 },
-  { prop: 'reviewer_name', label: '专家', width: 100 },
-  { prop: 'status', label: '状态', slot: 'status', width: 100 },
-  { prop: 'created_at', label: '分配时间', minWidth: 160 },
+  { prop: 'project_no', label: '项目编号', minWidth: 140 },
+  { prop: 'project_name', label: '项目名称', minWidth: 200 },
+  { prop: 'project_type_name', label: '类别', width: 120 },
+  { prop: 'leader_name', label: '负责人', width: 100 },
+  { prop: 'college_name', label: '学院', width: 140 },
+  { prop: 'my_score', label: '我的评分', width: 100 },
+  { prop: 'submit_time', label: '分配时间', minWidth: 160 },
 ]
 
 async function loadData() {
   loading.value = true
   try {
-    const res = await getReviewList({ page: page.value, page_size: pageSize.value, stage: 3, ...searchForm })
+    const res = await getExpertTasks({ page: page.value, page_size: pageSize.value, ...searchForm })
     tableData.value = res.data.items
     total.value = res.data.total
   } finally {

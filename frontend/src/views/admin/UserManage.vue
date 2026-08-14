@@ -26,7 +26,7 @@
         </el-form-item>
         <el-form-item label="学院">
           <el-select v-model="searchForm.college_id" placeholder="全部学院" clearable style="width: 150px">
-            <el-option v-for="c in colleges" :key="c.id" :label="c.name" :value="c.id" />
+            <el-option v-for="c in colleges" :key="c.id" :label="c.college_name" :value="c.id" />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -108,7 +108,7 @@
         </el-form-item>
         <el-form-item v-if="userForm.role !== 4" label="学院" prop="college_id">
           <el-select v-model="userForm.college_id" placeholder="请选择学院" style="width: 100%">
-            <el-option v-for="c in colleges" :key="c.id" :label="c.name" :value="c.id" />
+            <el-option v-for="c in colleges" :key="c.id" :label="c.college_name" :value="c.id" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -121,7 +121,15 @@
     <!-- 批量导入弹窗 -->
     <el-dialog v-model="importDialogVisible" title="批量导入用户" width="500px">
       <el-alert title="请先下载模板，按模板格式填写后上传" type="info" :closable="false" show-icon />
-      <FileUpload drag :limit="1" :accept="['.xlsx', '.xls']" @success="handleImportSuccess" />
+      <!-- Excel 批量导入后端接口为 /api/excel/import/user（只需要 file 字段，无需 biz_type） -->
+      <FileUpload
+        drag
+        :limit="1"
+        :accept="['.xlsx', '.xls']"
+        action="/api/excel/import/user"
+        name="file"
+        @success="handleImportSuccess"
+      />
     </el-dialog>
   </div>
 </template>
@@ -322,7 +330,7 @@ function handleImportSuccess() {
 
 async function handleDownloadTemplate() {
   // 调用后端下载模板接口
-  window.open('/api/users/import/template', '_blank')
+  window.open('/api/excel/template/user', '_blank')
 }
 
 // ==================== 工具函数 ====================

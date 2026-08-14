@@ -59,28 +59,40 @@ def api_health():
 @router_common.get("/dict/{dict_type}", response_model=ResponseModel, summary="按类型查询系统字典")
 def api_get_dict(dict_type: str, db: Session = Depends(get_db)):
     """优先Redis缓存，未命中则查库并写入缓存"""
-    cache_key = CacheKeys.DICT_BY_TYPE.format(dict_type=dict_type)
-    cached = redis_client.get_json(cache_key)
-    if cached is not None:
-        return success(data=cached)
+    try:
+        cache_key = CacheKeys.DICT_BY_TYPE.format(dict_type=dict_type)
+        cached = redis_client.get_json(cache_key)
+        if cached is not None:
+            return success(data=cached)
+    except Exception:
+        pass
     from app.models import SysDict
     items = db.query(SysDict).filter(
         SysDict.dict_type == dict_type, SysDict.status == 1
     ).order_by(SysDict.sort_order.asc()).all()
     data = [{"code": i.dict_code, "label": i.dict_label, "value": i.dict_value} for i in items]
-    redis_client.set_json(cache_key, data, CacheKeys.DICT_TTL)
+    try:
+        redis_client.set_json(cache_key, data, CacheKeys.DICT_TTL)
+    except Exception:
+        pass
     return success(data=data)
 
 
 @router_common.get("/colleges", response_model=ResponseModel, summary="查询学院列表(带缓存)")
 def api_college_list_cache(db: Session = Depends(get_db)):
-    cached = redis_client.get_json(CacheKeys.COLLEGE_LIST)
-    if cached is not None:
-        return success(data=cached)
+    try:
+        cached = redis_client.get_json(CacheKeys.COLLEGE_LIST)
+        if cached is not None:
+            return success(data=cached)
+    except Exception:
+        pass
     from app.schemas.user import CollegeResponse
     cols = CollegeCRUD.list_all(db)
     data = [CollegeResponse.model_validate(c).model_dump(mode="json") for c in cols]
-    redis_client.set_json(CacheKeys.COLLEGE_LIST, data, CacheKeys.COLLEGE_LIST_TTL)
+    try:
+        redis_client.set_json(CacheKeys.COLLEGE_LIST, data, CacheKeys.COLLEGE_LIST_TTL)
+    except Exception:
+        pass
     return success(data=data)
 
 

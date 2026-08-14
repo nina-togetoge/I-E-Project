@@ -282,16 +282,31 @@ class ProjectService:
 
     # ========== 统计分析 ==========
     @staticmethod
-    def statistics_overview(db: Session, data_scope: DataScope) -> ProjectStatisticsResponse:
-        """项目概览统计"""
-        # 构造子查询限定权限范围
+    def statistics_overview(db: Session, data_scope: DataScope,
+                            college_id: Optional[int] = None,
+                            project_type: Optional[int] = None,
+                            start_year: Optional[int] = None,
+                            end_year: Optional[int] = None,
+                            ) -> ProjectStatisticsResponse:
+        """项目概览统计（支持按学院/类型/立项年份过滤）"""
         from app.models import ProjProject
         q = db.query(func.count(ProjProject.id)).filter(ProjProject.is_deleted == 0)
         q_pending = q.filter(ProjProject.status.in_([1, 2, 3, 4, 5]))
         q_approved = q.filter(ProjProject.status.in_([6, 7, 8, 9]))
         q_finished = q.filter(ProjProject.status == 9)
 
-        def apply_scope(query):
+        def apply_filters_and_scope(query):
+            # 1) 用户前端 UI 显式选中的筛选条件
+            if college_id is not None:
+                query = query.filter(ProjProject.college_id == college_id)
+            if project_type is not None:
+                query = query.filter(ProjProject.project_type == project_type)
+            if start_year is not None:
+                # created_at 年份 >= start_year
+                query = query.filter(extract("year", ProjProject.created_at) >= start_year)
+            if end_year is not None:
+                query = query.filter(extract("year", ProjProject.created_at) <= end_year)
+            # 2) 角色数据权限范围
             if data_scope.scope.get("all"):
                 return query
             if data_scope.scope.get("college_ids"):
@@ -302,18 +317,17 @@ class ProjectService:
                 return query.filter(ProjProject.teacher_id.in_(data_scope.scope["teacher_user_ids"]))
             return query
 
-        total = apply_scope(q.with_entities(func.count(ProjProject.id))).scalar() or 0
-        pending = apply_scope(q_pending.with_entities(func.count(ProjProject.id))).scalar() or 0
-        approved = apply_scope(q_approved.with_entities(func.count(ProjProject.id))).scalar() or 0
-        finished = apply_scope(q_finished.with_entities(func.count(ProjProject.id))).scalar() or 0
-        total_budget = apply_scope(db.query(func.coalesce(func.sum(ProjProject.budget_amount), 0))).scalar() or 0
-        total_used = apply_scope(db.query(func.coalesce(func.sum(ProjProject.used_amount), 0))).scalar() or 0
+        total = apply_filters_and_scope(q.with_entities(func.count(ProjProject.id))).scalar() or 0
+        pending = apply_filters_and_scope(q_pending.with_entities(func.count(ProjProject.id))).scalar() or 0
+        approved = apply_filters_and_scope(q_approved.with_entities(func.count(ProjProject.id))).scalar() or 0
+        finished = apply_filters_and_scope(q_finished.with_entities(func.count(ProjProject.id))).scalar() or 0
+        total_budget = apply_filters_and_scope(db.query(func.coalesce(func.sum(ProjProject.budget_amount), 0))).scalar() or 0
+        total_used = apply_filters_and_scope(db.query(func.coalesce(func.sum(ProjProject.used_amount), 0))).scalar() or 0
 
         rate = 0.0
-        # 立项率 = 已立项及以上 / (已立项 + 已驳回 + 评审中结束的) —— 简化：已立项/(已立项+已驳回)
-        from app.models import ProjProject
-        denied = apply_scope(db.query(func.count(ProjProject.id))
-                             .filter(ProjProject.status == 10)).scalar() or 0
+        # 立项率：在相同过滤范围下，已立项及以上 / (已立项及以上 + 已驳回)
+        denied = apply_filters_and_scope(db.query(func.count(ProjProject.id))
+                                         .filter(ProjProject.status == 10)).scalar() or 0
         rate = round((approved / (approved + denied) * 100.0), 2) if (approved + denied) > 0 else 0.0
 
         return ProjectStatisticsResponse(

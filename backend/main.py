@@ -40,6 +40,7 @@ from app.api.routers.review_router import (
 from app.api.routers.common_router import (
     router_common, router_upload, router_search, router_excel, router_health,
 )
+from app.api.routers.expense_router import router_expense
 
 
 def create_app() -> FastAPI:
@@ -104,6 +105,9 @@ def create_app() -> FastAPI:
     app.include_router(router_review, prefix=api_prefix)
     app.include_router(router_midterm, prefix=api_prefix)
     app.include_router(router_change, prefix=api_prefix)
+
+    # 经费报销
+    app.include_router(router_expense, prefix=api_prefix)
 
     # 通用工具 / 文件 / 搜索 / Excel / 健康检查
     app.include_router(router_common, prefix=api_prefix)

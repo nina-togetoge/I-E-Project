@@ -16,14 +16,14 @@
       <el-card shadow="never" class="section-card">
         <template #header><span>项目信息</span></template>
         <el-descriptions :column="3" border>
-          <el-descriptions-item label="项目编号">{{ project.project_code }}</el-descriptions-item>
-          <el-descriptions-item label="项目名称">{{ project.title }}</el-descriptions-item>
-          <el-descriptions-item label="类别">{{ project.category_name }}</el-descriptions-item>
+          <el-descriptions-item label="项目编号">{{ project.project_no }}</el-descriptions-item>
+          <el-descriptions-item label="项目名称">{{ project.project_name }}</el-descriptions-item>
+          <el-descriptions-item label="类别">{{ project.project_type_name }}</el-descriptions-item>
           <el-descriptions-item label="负责人">{{ project.leader_name }}</el-descriptions-item>
           <el-descriptions-item label="指导教师">{{ project.teacher_name }}</el-descriptions-item>
           <el-descriptions-item label="学院">{{ project.college_name }}</el-descriptions-item>
-          <el-descriptions-item label="预算">¥ {{ project.total_budget?.toFixed(2) }}</el-descriptions-item>
-          <el-descriptions-item label="提交时间">{{ project.submitted_at }}</el-descriptions-item>
+          <el-descriptions-item label="预算">¥ {{ Number(project.budget_amount || 0).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item label="提交时间">{{ project.submit_time }}</el-descriptions-item>
           <el-descriptions-item label="状态"><StatusTag :status="project.status" /></el-descriptions-item>
         </el-descriptions>
       </el-card>
@@ -32,11 +32,9 @@
       <el-card shadow="never" class="section-card">
         <template #header><span>项目方案</span></template>
         <el-descriptions :column="1" border>
-          <el-descriptions-item label="摘要">{{ project.abstract }}</el-descriptions-item>
-          <el-descriptions-item label="背景">{{ project.background }}</el-descriptions-item>
-          <el-descriptions-item label="目标">{{ project.objectives }}</el-descriptions-item>
-          <el-descriptions-item label="技术路线">{{ project.methodology }}</el-descriptions-item>
-          <el-descriptions-item label="预期成果">{{ project.expected_outcomes }}</el-descriptions-item>
+          <el-descriptions-item label="摘要">{{ project.project_summary }}</el-descriptions-item>
+          <el-descriptions-item label="创新点">{{ project.innovation_points }}</el-descriptions-item>
+          <el-descriptions-item label="预期成果">{{ project.expected_results }}</el-descriptions-item>
         </el-descriptions>
       </el-card>
 
@@ -46,21 +44,15 @@
 
         <!-- 专家评分（仅专家角色） -->
         <el-form v-if="userStore.isExpert" ref="scoreFormRef" :model="scoreForm" :rules="scoreRules" label-width="120px">
-          <el-form-item label="创新性评分" prop="innovation_score">
-            <el-rate v-model="scoreForm.innovation_score" :max="100" show-score />
-          </el-form-item>
-          <el-form-item label="可行性评分" prop="feasibility_score">
-            <el-rate v-model="scoreForm.feasibility_score" :max="100" show-score />
-          </el-form-item>
-          <el-form-item label="实用性评分" prop="practical_score">
-            <el-rate v-model="scoreForm.practical_score" :max="100" show-score />
+          <el-form-item label="评分(百分制)" prop="score">
+            <el-input-number v-model="scoreForm.score" :min="0" :max="100" :precision="2" style="width: 200px" />
           </el-form-item>
         </el-form>
 
         <el-form ref="reviewFormRef" :model="reviewForm" :rules="reviewRules" label-width="120px">
-          <el-form-item label="审核意见" prop="opinion">
+          <el-form-item label="审核意见" prop="review_comment">
             <el-input
-              v-model="reviewForm.opinion"
+              v-model="reviewForm.review_comment"
               type="textarea"
               :rows="4"
               placeholder="请填写审核意见（驳回时必填）"
@@ -100,20 +92,16 @@ const reviewFormRef = ref<FormInstance>()
 const scoreFormRef = ref<FormInstance>()
 
 const reviewForm = reactive({
-  opinion: '',
+  review_comment: '',
 })
 
 const scoreForm = reactive({
-  innovation_score: 0,
-  feasibility_score: 0,
-  practical_score: 0,
+  score: 0,
 })
 
 const reviewRules: FormRules = {}
 const scoreRules: FormRules = {
-  innovation_score: [{ required: true, message: '请评分', trigger: 'change' }],
-  feasibility_score: [{ required: true, message: '请评分', trigger: 'change' }],
-  practical_score: [{ required: true, message: '请评分', trigger: 'change' }],
+  score: [{ required: true, message: '请评分', trigger: 'change' }],
 }
 
 async function loadData() {
@@ -122,17 +110,17 @@ async function loadData() {
   try {
     const [detailRes, reviewRes] = await Promise.all([
       getProjectDetail(id),
-      getReviewHistory(id).catch(() => ({ data: [] })),
+      getReviewHistory(id).catch(() => ({ data: { records: [] } })),
     ])
     project.value = detailRes.data
-    reviewHistory.value = reviewRes.data
+    reviewHistory.value = reviewRes.data?.records || []
   } finally {
     loading.value = false
   }
 }
 
 async function handleReview(type: 'pass' | 'reject') {
-  if (type === 'reject' && !reviewForm.opinion.trim()) {
+  if (type === 'reject' && !reviewForm.review_comment.trim()) {
     ElMessage.warning('驳回时必须填写审核意见')
     return
   }
@@ -140,21 +128,20 @@ async function handleReview(type: 'pass' | 'reject') {
   submitLoading.value = true
   try {
     if (userStore.isExpert) {
-      // 专家评分提交
+      // 专家评审
       await submitExpertReview({
         project_id: Number(route.params.id),
-        score: Math.round((scoreForm.innovation_score + scoreForm.feasibility_score + scoreForm.practical_score) / 3),
-        innovation_score: scoreForm.innovation_score,
-        feasibility_score: scoreForm.feasibility_score,
-        practical_score: scoreForm.practical_score,
-        opinion: reviewForm.opinion,
+        score: scoreForm.score,
+        review_result: type === 'pass' ? 1 : 2,
+        review_comment: reviewForm.review_comment,
       })
     } else {
       // 普通审核
       await submitReview({
         project_id: Number(route.params.id),
-        review_type: type,
-        opinion: reviewForm.opinion,
+        review_stage: 1,
+        review_result: type === 'pass' ? 1 : 2,
+        review_comment: reviewForm.review_comment,
       })
     }
     ElMessage.success(type === 'pass' ? '已通过' : '已驳回')

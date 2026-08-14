@@ -1,7 +1,7 @@
 /**
  * 用户管理接口
  */
-import { get, post, put, del } from '@/utils/request'
+import { get, post, put, patch, del } from '@/utils/request'
 import type { PageResult } from '@/utils/request'
 import type { UserInfo } from '@/store/user'
 
@@ -19,7 +19,7 @@ export function getUserList(params: {
 
 /** 获取个人信息 */
 export function getUserInfo() {
-  return get<UserInfo>('/api/users/me')
+  return get<UserInfo>('/api/auth/me')
 }
 
 /** 修改个人信息 */
@@ -27,13 +27,14 @@ export function updateUserInfo(data: {
   real_name?: string
   email?: string
   phone?: string
+  avatar?: string
 }) {
-  return put<UserInfo>('/api/users/me', data)
+  return patch<UserInfo>('/api/users/me/profile', data)
 }
 
 /** 修改密码 */
 export function changePassword(old_password: string, new_password: string) {
-  return post('/api/users/me/password', { old_password, new_password })
+  return patch('/api/users/me/profile', { old_password, new_password })
 }
 
 /** 创建用户 */
@@ -70,12 +71,17 @@ export function deleteUser(id: number) {
 export function importUsers(file: File) {
   const formData = new FormData()
   formData.append('file', file)
-  return post('/api/users/import', formData, {
+  return post('/api/excel/import/user', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
 
 /** 下载导入模板 */
 export function downloadUserTemplate() {
-  return get('/api/users/import/template', {}, { responseType: 'blob' })
+  return get('/api/excel/template/user', {}, { responseType: 'blob' })
+}
+
+/** 批量修改用户状态（启/禁用） */
+export function batchUpdateUserStatus(userIds: number[], status: number) {
+  return patch('/api/users/batch/status', { user_ids: userIds, status })
 }

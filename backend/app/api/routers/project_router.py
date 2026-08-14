@@ -3,7 +3,7 @@
 """
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.deps import PaginationParams, DataScope, OperationContext
@@ -179,11 +179,19 @@ def api_achievement_delete(
 @router_stats.get("/overview", response_model=ResponseModel[ProjectStatisticsResponse],
                   summary="项目总览统计(ECharts适配)")
 def api_stats_overview(
+    college_id: Optional[int] = Query(default=None, description="学院过滤"),
+    project_type: Optional[int] = Query(default=None, ge=1, le=3, description="项目类别过滤"),
+    start_year: Optional[int] = Query(default=None, description="立项年份起过滤"),
+    end_year: Optional[int] = Query(default=None, description="立项年份止过滤"),
     db: Session = Depends(get_db),
     data_scope: DataScope = Depends(),
     current_user: SysUser = require_login,
 ):
-    return success(data=ProjectService.statistics_overview(db, data_scope))
+    return success(data=ProjectService.statistics_overview(
+        db, data_scope,
+        college_id=college_id, project_type=project_type,
+        start_year=start_year, end_year=end_year,
+    ))
 
 
 @router_stats.get("/trend", response_model=ResponseModel[list[StatisticsTrendItem]],

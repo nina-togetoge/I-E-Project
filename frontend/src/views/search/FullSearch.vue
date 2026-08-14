@@ -27,12 +27,12 @@
           :key="item.id"
           shadow="hover"
           class="result-item"
-          @click="router.push(`/projects/${item.id}`)"
+          @click="router.push(`/projects/${item.project_id}`)"
         >
-          <h3 v-html="highlight(item.title)"></h3>
-          <p class="result-abstract" v-html="highlight(item.abstract || '')"></p>
+          <h3 v-html="highlight(item.project_name)"></h3>
+          <p class="result-abstract" v-html="highlight(item.project_summary || '')"></p>
           <div class="result-meta">
-            <el-tag size="small">{{ item.category_name }}</el-tag>
+            <el-tag size="small">{{ item.project_no }}</el-tag>
             <span class="meta-item">负责人：{{ item.leader_name }}</span>
             <span class="meta-item">学院：{{ item.college_name }}</span>
           </div>

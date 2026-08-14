@@ -12,6 +12,8 @@
       :limit="limit"
       :accept="acceptStr"
       :max-size="maxSize"
+      :name="name"
+      :data="formData"
       :before-upload="beforeUpload"
       :on-success="handleSuccess"
       :on-error="handleError"
@@ -54,6 +56,10 @@ const props = withDefaults(
     drag?: boolean
     listType?: 'text' | 'picture' | 'picture-card'
     autoUpload?: boolean
+    /** 额外随文件上传的表单字段（如 biz_type、biz_id） */
+    formData?: Record<string, any>
+    /** 文件字段名（后端默认为 file） */
+    name?: string
   }>(),
   {
     action: '/api/files/upload',
@@ -64,6 +70,8 @@ const props = withDefaults(
     drag: false,
     listType: 'text',
     autoUpload: true,
+    formData: () => ({}),
+    name: 'file',
   }
 )
 

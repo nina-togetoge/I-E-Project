@@ -61,13 +61,13 @@ const page = ref(1)
 const pageSize = ref(10)
 
 const columns: TableColumn[] = [
-  { prop: 'operator_name', label: '操作人', width: 100 },
-  { prop: 'operator_role', label: '角色', width: 100 },
+  { prop: 'real_name', label: '操作人', width: 100 },
+  { prop: 'user_role', label: '角色', width: 100, formatter: (v: number) => ({1:'学生',2:'教师',3:'专家',4:'管理员'})[v] || '-' },
   { prop: 'module_name', label: '模块', width: 120 },
   { prop: 'operation_type', label: '操作类型', slot: 'operation_type', width: 100 },
-  { prop: 'description', label: '描述', minWidth: 200 },
+  { prop: 'operation_desc', label: '描述', minWidth: 200 },
   { prop: 'ip_address', label: 'IP', width: 130 },
-  { prop: 'created_at', label: '操作时间', minWidth: 160 },
+  { prop: 'operation_time', label: '操作时间', minWidth: 160 },
 ]
 
 async function loadData() {
@@ -90,7 +90,7 @@ function handleSearch() { page.value = 1; loadData() }
 function handlePageChange(p: number, ps: number) { page.value = p; pageSize.value = ps; loadData() }
 
 async function handleExport() {
-  await download('/api/logs/export', searchForm, '操作日志.xlsx')
+  await download('/api/excel/export/logs', searchForm, '操作日志.xlsx')
   ElMessage.success('导出成功')
 }
 

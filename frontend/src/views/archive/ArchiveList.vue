@@ -55,19 +55,19 @@ const currentYear = new Date().getFullYear()
 const years = computed(() => Array.from({ length: 5 }, (_, i) => currentYear - i))
 
 const columns: TableColumn[] = [
-  { prop: 'project_code', label: '项目编号', minWidth: 140 },
-  { prop: 'title', label: '项目名称', minWidth: 200 },
+  { prop: 'project_no', label: '项目编号', minWidth: 140 },
+  { prop: 'project_name', label: '项目名称', minWidth: 200 },
   { prop: 'leader_name', label: '负责人', width: 100 },
   { prop: 'teacher_name', label: '指导教师', width: 100 },
   { prop: 'college_name', label: '学院', width: 120 },
-  { prop: 'total_budget', label: '预算(¥)', width: 100, formatter: (v: number) => v?.toFixed(2) || '0.00' },
-  { prop: 'approved_at', label: '结题时间', minWidth: 160 },
+  { prop: 'budget_amount', label: '预算(¥)', width: 100, formatter: (v: number) => Number(v || 0).toFixed(2) },
+  { prop: 'created_at', label: '结题时间', minWidth: 160 },
 ]
 
 async function loadData() {
   loading.value = true
   try {
-    const res = await getProjectList({ page: page.value, page_size: pageSize.value, status: 90, ...searchForm })
+    const res = await getProjectList({ page: page.value, page_size: pageSize.value, status: 9, ...searchForm })
     tableData.value = res.data.items
     total.value = res.data.total
   } finally {

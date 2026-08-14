@@ -83,7 +83,7 @@ import {
   Document, Files, Wallet, TrendCharts, EditPen, Bell, DataAnalysis, Box
 } from '@element-plus/icons-vue'
 import { useUserStore } from '@/store/user'
-import { getStatistics } from '@/api/project'
+import { getStatistics, getTrend } from '@/api/project'
 import EChart from '@/components/EChart.vue'
 
 const router = useRouter()
@@ -119,8 +119,9 @@ const greeting = computed(() => {
 const stats = ref({
   total_projects: 0,
   approved_projects: 0,
-  archived_projects: 0,
+  finished_projects: 0,
   total_budget: 0,
+  pending_review: 0,
 })
 
 const statCards = computed(() => {
@@ -128,8 +129,8 @@ const statCards = computed(() => {
     return [
       { label: '项目总数', value: stats.value.total_projects, icon: Files, color: '#409EFF' },
       { label: '已立项', value: stats.value.approved_projects, icon: Document, color: '#67C23A' },
-      { label: '已结题', value: stats.value.archived_projects, icon: Box, color: '#E6A23C' },
-      { label: '经费总额(¥)', value: stats.value.total_budget.toLocaleString(), icon: Wallet, color: '#F56C6C' },
+      { label: '已结题', value: stats.value.finished_projects, icon: Box, color: '#E6A23C' },
+      { label: '经费总额(¥)', value: Number(stats.value.total_budget || 0).toLocaleString(), icon: Wallet, color: '#F56C6C' },
     ]
   } else if (userStore.isStudent) {
     return [
@@ -171,32 +172,41 @@ const trendChartOption = ref<any>({})
 async function loadStatistics() {
   if (!userStore.isAdmin) return
   try {
-    const res = await getStatistics()
+    const [statsRes, trendRes] = await Promise.all([
+      getStatistics(),
+      getTrend(),
+    ])
     stats.value = {
-      total_projects: res.data.total_projects,
-      approved_projects: res.data.approved_projects,
-      archived_projects: res.data.archived_projects,
-      total_budget: res.data.total_budget,
+      total_projects: statsRes.data.total_projects || 0,
+      approved_projects: statsRes.data.approved_projects || 0,
+      finished_projects: statsRes.data.finished_projects || 0,
+      total_budget: statsRes.data.total_budget || 0,
+      pending_review: statsRes.data.pending_review || 0,
     }
 
+    const trend = (trendRes.data || []) as any[]
     statusChartOption.value = {
       tooltip: { trigger: 'item' },
       legend: { bottom: 0 },
       series: [{
         type: 'pie',
         radius: ['40%', '70%'],
-        data: res.data.by_status,
+        data: [
+          { name: '已立项', value: statsRes.data.approved_projects || 0 },
+          { name: '已结题', value: statsRes.data.finished_projects || 0 },
+          { name: '待审核', value: statsRes.data.pending_review || 0 },
+        ],
         itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 2 },
       }],
     }
 
     trendChartOption.value = {
       tooltip: { trigger: 'axis' },
-      xAxis: { type: 'category', data: res.data.trend_by_month.map((d: any) => d.month) },
+      xAxis: { type: 'category', data: trend.map((d: any) => d.period) },
       yAxis: { type: 'value' },
       series: [{
         type: 'line',
-        data: res.data.trend_by_month.map((d: any) => d.count),
+        data: trend.map((d: any) => d.apply_count),
         smooth: true,
         areaStyle: { opacity: 0.3 },
         itemStyle: { color: '#409EFF' },

@@ -8,7 +8,7 @@
     <el-row :gutter="20" class="stat-row">
       <el-col :span="6">
         <el-card shadow="hover"><div class="stat-card">
-          <p class="stat-value">¥ {{ summary.total_budget?.toFixed(2) || '0.00' }}</p>
+          <p class="stat-value">¥ {{ Number(summary.total_amount || 0).toFixed(2) }}</p>
           <p class="stat-label">总预算</p>
         </div></el-card>
       </el-col>
@@ -38,10 +38,14 @@
           <el-input v-model="searchForm.keyword" placeholder="项目名称/编号" clearable />
         </el-form-item>
         <el-form-item label="状态">
-          <el-select v-model="searchForm.status" placeholder="全部" clearable style="width: 100px">
-            <el-option label="待审批" :value="0" />
-            <el-option label="已通过" :value="1" />
-            <el-option label="已驳回" :value="2" />
+          <el-select v-model="searchForm.status" placeholder="全部" clearable style="width: 140px">
+            <el-option label="待导师审批" :value="1" />
+            <el-option label="导师审批通过" :value="2" />
+            <el-option label="待学院审批" :value="3" />
+            <el-option label="学院审批通过" :value="4" />
+            <el-option label="待财务审批" :value="5" />
+            <el-option label="已完成" :value="6" />
+            <el-option label="已驳回" :value="7" />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -58,13 +62,11 @@
       @page-change="handlePageChange"
     >
       <template #status="{ row }">
-        <el-tag :type="row.status === 0 ? 'warning' : row.status === 1 ? 'success' : 'danger'">
-          {{ ['待审批', '已通过', '已驳回'][row.status] }}
-        </el-tag>
+        <el-tag :type="expenseStatusTagType(row.status)">{{ row.status_text || '未知' }}</el-tag>
       </template>
       <template #actions="{ row }">
-        <el-button v-if="row.status === 0" link type="success" size="small" @click="handleApprove(row, true)">通过</el-button>
-        <el-button v-if="row.status === 0" link type="danger" size="small" @click="handleApprove(row, false)">驳回</el-button>
+        <el-button v-if="row.status >= 0 && row.status <= 5" link type="success" size="small" @click="handleApprove(row, true)">通过</el-button>
+        <el-button v-if="row.status >= 0 && row.status <= 5" link type="danger" size="small" @click="handleApprove(row, false)">驳回</el-button>
       </template>
     </PaginationTable>
   </div>
@@ -76,7 +78,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import PaginationTable from '@/components/PaginationTable.vue'
 import type { TableColumn } from '@/components/PaginationTable.vue'
-import { post, put } from '@/utils/request'
+import service, { post, patch } from '@/utils/request'
 
 const searchForm = reactive({ keyword: '', status: undefined as number | undefined })
 const tableData = ref<any[]>([])
@@ -87,9 +89,9 @@ const pageSize = ref(10)
 const summary = ref<any>({})
 
 const columns: TableColumn[] = [
-  { prop: 'project_title', label: '项目', minWidth: 200 },
-  { prop: 'subject', label: '科目', width: 120 },
-  { prop: 'amount', label: '金额(¥)', width: 100, formatter: (v: number) => `¥ ${v?.toFixed(2)}` },
+  { prop: 'expense_no', label: '报销单号', width: 160 },
+  { prop: 'project_name', label: '项目', minWidth: 200 },
+  { prop: 'expense_amount', label: '金额(¥)', width: 120, formatter: (v: number) => `¥ ${Number(v || 0).toFixed(2)}` },
   { prop: 'applicant_name', label: '申请人', width: 100 },
   { prop: 'status', label: '状态', slot: 'status', width: 100 },
   { prop: 'created_at', label: '申请时间', minWidth: 160 },
@@ -98,7 +100,14 @@ const columns: TableColumn[] = [
 async function loadData() {
   loading.value = true
   try {
-    const res = await post('/api/expenses/list', { page: page.value, page_size: pageSize.value, ...searchForm })
+    // page/page_size 通过 URL Query 传（后端 PaginationParams = Depends() 读 Query）
+    // 过滤条件 status/keyword 通过 POST Body 传
+    const res: any = await service({
+      method: 'post',
+      url: '/api/expenses/list',
+      params: { page: page.value, page_size: pageSize.value },
+      data: searchForm,
+    })
     tableData.value = res.data.items || []
     total.value = res.data.total || 0
     summary.value = res.data.summary || {}
@@ -113,12 +122,27 @@ function handlePageChange(p: number, ps: number) { page.value = p; pageSize.valu
 async function handleApprove(row: any, approve: boolean) {
   if (!approve) {
     const { value } = await ElMessageBox.prompt('请输入驳回原因', '驳回', { type: 'warning' })
-    await put(`/api/expenses/${row.id}/review`, { status: 2, opinion: value })
+    await patch(`/api/expenses/${row.id}/review`, { approved: false, opinion: value })
   } else {
-    await put(`/api/expenses/${row.id}/review`, { status: 1, opinion: '同意' })
+    await patch(`/api/expenses/${row.id}/review`, { approved: true, opinion: '同意' })
   }
   ElMessage.success(approve ? '已通过' : '已驳回')
   loadData()
+}
+
+/** 报销状态 → el-tag type 映射（8态模型） */
+function expenseStatusTagType(status: number): string {
+  const map: Record<number, string> = {
+    0: 'info',       // 草稿
+    1: 'warning',    // 待导师审批
+    2: '',            // 导师审批通过
+    3: 'warning',    // 待学院审批
+    4: '',            // 学院审批通过
+    5: 'warning',    // 待财务审批
+    6: 'success',   // 已完成
+    7: 'danger',    // 已驳回
+  }
+  return map[status] || 'info'
 }
 
 onMounted(() => loadData())

@@ -7,86 +7,45 @@ import type { PageResult } from '@/utils/request'
 /** 项目列表项 */
 export interface ProjectListItem {
   id: number
-  project_code: string
-  title: string
-  category: number
-  category_name: string
-  status: number
-  leader_name: string
-  teacher_name: string
+  project_no: string | null
+  project_name: string
+  project_type: number
+  project_type_name: string
+  project_level: number
+  project_level_name: string
+  college_id: number
   college_name: string
-  created_at: string
-  submitted_at: string | null
-  approved_at: string | null
-  total_budget: number
-}
-
-/** 项目详情 */
-export interface ProjectDetail {
-  id: number
-  project_code: string
-  title: string
-  category: number
-  category_name: string
-  status: number
   leader_id: number
   leader_name: string
   teacher_id: number | null
   teacher_name: string | null
-  college_id: number
-  college_name: string
-  abstract: string
-  keywords: string
-  background: string
-  objectives: string
-  methodology: string
-  expected_outcomes: string
-  total_budget: number
   start_date: string | null
   end_date: string | null
+  budget_amount: number
+  used_amount: number
+  status: number
+  status_name: string
+  submit_time: string | null
   created_at: string
-  submitted_at: string | null
-  approved_at: string | null
-  team_members: TeamMember[]
-  budgets: BudgetItem[]
-  achievements: Achievement[]
 }
 
-export interface TeamMember {
-  id: number
-  student_id: string
-  student_name: string
-  role: string
-  contribution: string
-}
-
-export interface BudgetItem {
-  id: number
-  subject: string
-  amount: number
-  remark: string
-}
-
-export interface Achievement {
-  id: number
-  type: number
-  title: string
-  description: string
-  authors: string
-  publish_date: string | null
+/** 项目详情 */
+export interface ProjectDetail extends ProjectListItem {
+  project_summary: string | null
+  innovation_points: string | null
+  expected_results: string | null
+  reject_reason: string | null
 }
 
 /** 项目统计 */
 export interface StatisticsData {
   total_projects: number
+  pending_review: number
   approved_projects: number
-  archived_projects: number
+  finished_projects: number
   total_budget: number
+  total_used: number
   approval_rate: number
-  by_category: { name: string; value: number }[]
-  by_college: { name: string; value: number }[]
-  by_status: { name: string; value: number }[]
-  trend_by_month: { month: string; count: number }[]
 }
 
 /** 项目列表 */
@@ -95,8 +54,11 @@ export function getProjectList(params: {
   page_size: number
   keyword?: string
   status?: number
-  category?: number
+  project_type?: number
+  project_level?: number
   college_id?: number
+  leader_id?: number
+  teacher_id?: number
 }) {
   return get<PageResult<ProjectListItem>>('/api/projects', params)
 }
@@ -106,9 +68,14 @@ export function getProjectDetail(id: number) {
   return get<ProjectDetail>(`/api/projects/${id}`)
 }
 
-/** 创建项目 */
+/** 创建项目（保存草稿） */
 export function createProject(data: any) {
   return post('/api/projects', data)
+}
+
+/** 创建并直接提交审核（非草稿） */
+export function createAndSubmitProject(data: any) {
+  return post('/api/projects/submit-draft', data)
 }
 
 /** 修改项目 */
@@ -133,20 +100,19 @@ export function deleteProject(id: number) {
 
 /** 项目统计 */
 export function getStatistics(params?: {
-  start_date?: string
-  end_date?: string
+  start_year?: number
+  end_year?: number
   college_id?: number
-  category?: number
+  project_type?: number
 }) {
   return get<StatisticsData>('/api/statistics/overview', params)
 }
 
-/** 趋势统计 */
+/** 趋势统计（与后端对齐：start_year/end_year 为年份整数） */
 export function getTrend(params: {
-  start_date?: string
-  end_date?: string
-  group_by?: string
-}) {
+  start_year?: number
+  end_year?: number
+} = {}) {
   return get('/api/statistics/trend', params)
 }
 
@@ -154,8 +120,49 @@ export function getTrend(params: {
 export function exportProjects(params: {
   keyword?: string
   status?: number
-  category?: number
+  project_type?: number
+  project_level?: number
   college_id?: number
 }) {
-  return get('/api/projects/export', params, { responseType: 'blob' })
+  return get('/api/excel/export/projects', params, { responseType: 'blob' })
+}
+
+// ========== 项目成果 ==========
+/** 查询项目下的成果列表 */
+export function listAchievements(projectId: number) {
+  return get<Array<{
+    id: number
+    project_id: number
+    achievement_type: number
+    title: string
+    author?: string
+    publish_date?: string
+    publisher?: string
+    achievement_no?: string
+    level?: number
+    award_level?: string
+    summary?: string
+    created_at: string
+  }>>(`/api/achievements/by-project/${projectId}`)
+}
+
+/** 登记项目成果 */
+export function createAchievement(data: {
+  project_id: number
+  achievement_type: number
+  title: string
+  author?: string
+  publish_date?: string
+  publisher?: string
+  achievement_no?: string
+  level?: number
+  award_level?: string
+  summary?: string
+}) {
+  return post('/api/achievements', data)
+}
+
+/** 删除项目成果 */
+export function deleteAchievement(pk: number) {
+  return del(`/api/achievements/${pk}`)
 }

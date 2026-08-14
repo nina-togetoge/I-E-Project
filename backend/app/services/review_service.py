@@ -258,6 +258,22 @@ class ReviewService:
             records=records,
         )
 
+    # ---------- 审核列表(教师/管理员) ----------
+    @staticmethod
+    def paginate(db: Session, pager: PaginationParams, stage: Optional[int] = None,
+                 status: Optional[int] = None, keyword: Optional[str] = None):
+        items, total = ReviewCRUD.paginate(db, pager.offset, pager.limit, stage, status, keyword)
+        result = []
+        for r in items:
+            project = ProjectCRUD.get_by_id(db, r.project_id)
+            item = ReviewRecordItem.model_validate(r)
+            item.review_stage_name = REVIEW_STAGE_NAME.get(item.review_stage, "")
+            item.review_result_name = REVIEW_RESULT_NAME.get(item.review_result, "已分配")
+            if item.review_result == 99:
+                item.review_result_name = "待评审"
+            result.append(item)
+        return result, total
+
     # ---------- 专家待评项目列表 ----------
     @staticmethod
     def expert_pending_projects(db: Session, expert_id: int, pager: PaginationParams,

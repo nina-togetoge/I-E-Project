@@ -6,7 +6,7 @@
   <div class="page-container" v-loading="loading">
     <el-page-header @back="router.back()">
       <template #content>
-        <span class="header-title">{{ project?.title || '项目详情' }}</span>
+        <span class="header-title">{{ project?.project_name || '项目详情' }}</span>
         <StatusTag v-if="project" :status="project.status" />
       </template>
     </el-page-header>
@@ -19,16 +19,16 @@
           <el-timeline-item
             v-for="(review, idx) in reviewHistory"
             :key="idx"
-            :timestamp="review.reviewed_at || review.created_at"
+            :timestamp="review.review_time || review.created_at"
             placement="top"
-            :type="review.status === 1 ? 'success' : review.status === 2 ? 'danger' : 'primary'"
+            :type="review.review_result === 1 ? 'success' : 'danger'"
           >
-            <h4>{{ review.stage_name }}</h4>
+            <h4>{{ review.review_stage_name }}</h4>
             <p>审核人：{{ review.reviewer_name || '待分配' }}</p>
-            <p v-if="review.opinion">意见：{{ review.opinion }}</p>
+            <p v-if="review.review_comment">意见：{{ review.review_comment }}</p>
             <p v-if="review.score">评分：{{ review.score }}</p>
-            <el-tag size="small" :type="review.status === 1 ? 'success' : review.status === 2 ? 'danger' : 'warning'">
-              {{ review.status === 1 ? '通过' : review.status === 2 ? '驳回' : '待审核' }}
+            <el-tag size="small" :type="review.review_result === 1 ? 'success' : 'danger'">
+              {{ review.review_result_name || (review.review_result === 1 ? '通过' : '驳回') }}
             </el-tag>
           </el-timeline-item>
         </el-timeline>
@@ -38,15 +38,15 @@
       <el-card shadow="never" class="section-card">
         <template #header><span>基本信息</span></template>
         <el-descriptions :column="3" border>
-          <el-descriptions-item label="项目编号">{{ project.project_code }}</el-descriptions-item>
-          <el-descriptions-item label="项目名称">{{ project.title }}</el-descriptions-item>
-          <el-descriptions-item label="项目类别">{{ project.category_name }}</el-descriptions-item>
+          <el-descriptions-item label="项目编号">{{ project.project_no }}</el-descriptions-item>
+          <el-descriptions-item label="项目名称">{{ project.project_name }}</el-descriptions-item>
+          <el-descriptions-item label="项目类别">{{ project.project_type_name }}</el-descriptions-item>
           <el-descriptions-item label="负责人">{{ project.leader_name }}</el-descriptions-item>
           <el-descriptions-item label="指导教师">{{ project.teacher_name || '未绑定' }}</el-descriptions-item>
           <el-descriptions-item label="所属学院">{{ project.college_name }}</el-descriptions-item>
           <el-descriptions-item label="开始日期">{{ project.start_date || '-' }}</el-descriptions-item>
           <el-descriptions-item label="结束日期">{{ project.end_date || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="总预算">¥ {{ project.total_budget?.toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item label="总预算">¥ {{ Number(project.budget_amount || 0).toFixed(2) }}</el-descriptions-item>
         </el-descriptions>
       </el-card>
 
@@ -54,12 +54,9 @@
       <el-card shadow="never" class="section-card">
         <template #header><span>项目摘要</span></template>
         <el-descriptions :column="1" border>
-          <el-descriptions-item label="摘要">{{ project.abstract }}</el-descriptions-item>
-          <el-descriptions-item label="关键词">{{ project.keywords }}</el-descriptions-item>
-          <el-descriptions-item label="项目背景">{{ project.background }}</el-descriptions-item>
-          <el-descriptions-item label="研究目标">{{ project.objectives }}</el-descriptions-item>
-          <el-descriptions-item label="技术路线">{{ project.methodology }}</el-descriptions-item>
-          <el-descriptions-item label="预期成果">{{ project.expected_outcomes }}</el-descriptions-item>
+          <el-descriptions-item label="摘要">{{ project.project_summary }}</el-descriptions-item>
+          <el-descriptions-item label="创新点">{{ project.innovation_points }}</el-descriptions-item>
+          <el-descriptions-item label="预期成果">{{ project.expected_results }}</el-descriptions-item>
         </el-descriptions>
       </el-card>
 
@@ -109,10 +106,10 @@ async function loadData() {
   try {
     const [detailRes, reviewRes] = await Promise.all([
       getProjectDetail(id),
-      getReviewHistory(id).catch(() => ({ data: [] })),
+      getReviewHistory(id).catch(() => ({ data: { records: [] } })),
     ])
     project.value = detailRes.data
-    reviewHistory.value = reviewRes.data
+    reviewHistory.value = reviewRes.data?.records || []
   } catch {
     ElMessage.error('加载失败')
   } finally {

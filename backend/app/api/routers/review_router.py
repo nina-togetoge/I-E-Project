@@ -31,6 +31,22 @@ router_change = APIRouter(prefix="/changes", tags=["变更/延期申请"])
 # 项目审核流程接口
 # ====================================================================
 
+@router_review.get("", response_model=ResponseModel[PageResult[ReviewRecordItem]],
+                   summary="审核记录列表(教师/管理员)")
+def api_review_list(
+    keyword: Optional[str] = None,
+    stage: Optional[int] = None,
+    status: Optional[int] = None,
+    pager: PaginationParams = Depends(),
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(RequireRole(
+        RoleEnum.TEACHER, RoleEnum.ADMIN
+    )),
+):
+    items, total = ReviewService.paginate(db, pager, stage, status, keyword)
+    return success(data=PageResult.create(items, total, pager.page, pager.page_size))
+
+
 @router_review.post("", response_model=ResponseModel[ReviewRecordItem],
                     summary="提交审核结果(学院初审/校级复审/结题验收通用)")
 def api_do_review(

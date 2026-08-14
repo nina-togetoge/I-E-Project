@@ -31,29 +31,19 @@
       @page-change="handlePageChange"
     >
       <template #stage="{ row }">
-        <el-tag :type="stageTagType(row.stage)">{{ row.stage_name }}</el-tag>
+        <el-tag :type="stageTagType(row.review_stage)">{{ row.review_stage_name }}</el-tag>
       </template>
       <template #status="{ row }">
-        <el-tag :type="row.status === 0 ? 'warning' : row.status === 1 ? 'success' : 'danger'">
-          {{ row.status === 0 ? '待审核' : row.status === 1 ? '已通过' : '已驳回' }}
+        <el-tag :type="row.review_result === 1 ? 'success' : 'danger'">
+          {{ row.review_result_name || (row.review_result === 1 ? '通过' : '驳回') }}
         </el-tag>
       </template>
       <template #actions="{ row }">
         <el-button
-          v-if="row.status === 0"
           link
           type="primary"
           size="small"
-          @click="router.push(`/review/${row.id}`)"
-        >
-          审核
-        </el-button>
-        <el-button
-          v-else
-          link
-          type="info"
-          size="small"
-          @click="router.push(`/review/${row.id}`)"
+          @click="router.push(`/review/${row.project_id}`)"
         >
           查看
         </el-button>
@@ -84,13 +74,13 @@ const page = ref(1)
 const pageSize = ref(10)
 
 const columns: TableColumn[] = [
-  { prop: 'project_code', label: '项目编号', minWidth: 140 },
-  { prop: 'project_title', label: '项目名称', minWidth: 200 },
-  { prop: 'stage', label: '审核阶段', slot: 'stage', width: 120 },
+  { prop: 'project_id', label: '项目ID', width: 80 },
+  { prop: 'review_stage', label: '审核阶段', slot: 'stage', width: 120 },
   { prop: 'reviewer_name', label: '审核人', width: 100 },
-  { prop: 'status', label: '状态', slot: 'status', width: 100 },
-  { prop: 'created_at', label: '提交时间', minWidth: 160 },
-  { prop: 'reviewed_at', label: '审核时间', minWidth: 160 },
+  { prop: 'review_result', label: '结果', slot: 'status', width: 100 },
+  { prop: 'review_comment', label: '审核意见', minWidth: 200 },
+  { prop: 'created_at', label: '创建时间', minWidth: 160 },
+  { prop: 'review_time', label: '审核时间', minWidth: 160 },
 ]
 
 async function loadData() {

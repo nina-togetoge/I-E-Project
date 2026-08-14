@@ -23,7 +23,7 @@ export interface PageResult<T = any> {
   page_size: number
 }
 
-const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
+const baseURL = import.meta.env.VITE_API_BASE_URL || '/'
 
 const service: AxiosInstance = axios.create({
   baseURL,
@@ -131,9 +131,21 @@ async function handleTokenExpired(config: AxiosRequestConfig): Promise<any> {
   }
 }
 
+/** 清理 params 中的 undefined/null 值，避免序列化出 "undefined" 字符串 */
+function cleanParams(params?: Record<string, any>): Record<string, any> | undefined {
+  if (!params) return undefined
+  const cleaned: Record<string, any> = {}
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') {
+      cleaned[key] = value
+    }
+  }
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined
+}
+
 /** GET 请求 */
-export function get<T = any>(url: string, params?: object, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
-  return service({ method: 'get', url, params, ...config })
+export function get<T = any>(url: string, params?: Record<string, any>, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
+  return service({ method: 'get', url, params: cleanParams(params), ...config })
 }
 
 /** POST 请求 */
@@ -146,9 +158,14 @@ export function put<T = any>(url: string, data?: object, config?: AxiosRequestCo
   return service({ method: 'put', url, data, ...config })
 }
 
+/** PATCH 请求 */
+export function patch<T = any>(url: string, data?: object, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
+  return service({ method: 'patch', url, data, ...config })
+}
+
 /** DELETE 请求 */
-export function del<T = any>(url: string, params?: object, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
-  return service({ method: 'delete', url, params, ...config })
+export function del<T = any>(url: string, params?: Record<string, any>, config?: AxiosRequestConfig): Promise<ApiResponse<T>> {
+  return service({ method: 'delete', url, params: cleanParams(params), ...config })
 }
 
 /** 文件上传 */
@@ -169,8 +186,8 @@ export function upload<T = any>(url: string, file: File | File[], config?: Axios
 }
 
 /** 文件下载 */
-export async function download(url: string, params?: object, filename?: string): Promise<void> {
-  const res = await service({ method: 'get', url, params, responseType: 'blob' })
+export async function download(url: string, params?: Record<string, any>, filename?: string): Promise<void> {
+  const res = await service({ method: 'get', url, params: cleanParams(params), responseType: 'blob' })
   const blob = new Blob([res.data])
   const link = document.createElement('a')
   link.href = URL.createObjectURL(blob)

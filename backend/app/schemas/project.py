@@ -211,3 +211,59 @@ class ProjectStatisticsResponse(BaseModel):
     total_budget: Decimal
     total_used: Decimal
     approval_rate: float = Field(default=0, description="整体立项率%")
+
+
+# ====================================================================
+# 经费报销 Schema
+# ====================================================================
+EXPENSE_STATUS_DRAFT = 0               # 草稿
+EXPENSE_STATUS_PENDING_ADVISOR = 1      # 待导师审批
+EXPENSE_STATUS_ADVISOR_APPROVED = 2     # 导师审批通过
+EXPENSE_STATUS_PENDING_COLLEGE = 3      # 待学院审批
+EXPENSE_STATUS_COLLEGE_APPROVED = 4     # 学院审批通过
+EXPENSE_STATUS_PENDING_FINANCE = 5      # 待财务审批
+EXPENSE_STATUS_COMPLETED = 6            # 已完成（已报销）
+EXPENSE_STATUS_REJECTED = 7            # 已驳回
+
+
+class ExpenseCreate(BaseModel):
+    """创建报销申请"""
+    project_id: int
+    expense_amount: Decimal
+    expense_desc: str = Field(min_length=1, max_length=500)
+    invoice_no: Optional[str] = None
+    budget_item_id: Optional[int] = None
+
+
+class ExpenseListItem(BaseModel):
+    """报销列表项"""
+    id: int
+    expense_no: str
+    project_id: int
+    project_name: Optional[str] = None
+    applicant_id: int
+    applicant_name: str
+    expense_amount: Decimal
+    expense_desc: str
+    status: int
+    status_text: str = ""
+    reject_reason: Optional[str] = None
+    submit_time: Optional[datetime] = None
+    approval_time: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ExpenseReviewRequest(BaseModel):
+    """审批请求：approved=True通过(推进下一阶段)，False驳回"""
+    approved: bool = Field(..., description="True=通过 False=驳回")
+    opinion: Optional[str] = None
+
+
+class ExpenseSummary(BaseModel):
+    """报销汇总"""
+    total_count: int = 0
+    total_amount: Decimal = Decimal("0")
+    approved_amount: Decimal = Decimal("0")
+    pending_count: int = 0

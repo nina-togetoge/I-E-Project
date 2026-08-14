@@ -21,15 +21,14 @@
         </el-form-item>
         <el-form-item label="学院">
           <el-select v-model="filterForm.college_id" placeholder="全部学院" clearable style="width: 150px">
-            <el-option v-for="c in colleges" :key="c.id" :label="c.name" :value="c.id" />
+            <el-option v-for="c in colleges" :key="c.id" :label="c.college_name" :value="c.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="类别">
-          <el-select v-model="filterForm.category" placeholder="全部类别" clearable style="width: 130px">
+          <el-select v-model="filterForm.project_type" placeholder="全部类别" clearable style="width: 130px">
             <el-option label="创新训练" :value="1" />
             <el-option label="创业训练" :value="2" />
             <el-option label="创业实践" :value="3" />
-            <el-option label="创新竞赛" :value="4" />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -100,7 +99,7 @@ import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Download, Files, Document, Box, Wallet } from '@element-plus/icons-vue'
 import EChart from '@/components/EChart.vue'
-import { getStatistics, exportProjects } from '@/api/project'
+import { getStatistics, getTrend } from '@/api/project'
 import { getColleges } from '@/api/auth'
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
@@ -109,7 +108,7 @@ import { saveAs } from 'file-saver'
 const filterForm = reactive({
   dateRange: [] as string[],
   college_id: undefined as number | undefined,
-  category: undefined as number | undefined,
+  project_type: undefined as number | undefined,
 })
 
 const colleges = ref<any[]>([])
@@ -117,45 +116,54 @@ const colleges = ref<any[]>([])
 // ==================== 统计数据 ====================
 const stats = ref({
   total_projects: 0,
+  pending_review: 0,
   approved_projects: 0,
-  archived_projects: 0,
+  finished_projects: 0,
   total_budget: 0,
+  total_used: 0,
   approval_rate: 0,
-  by_category: [] as { name: string; value: number }[],
-  by_college: [] as { name: string; value: number }[],
-  by_status: [] as { name: string; value: number }[],
-  trend_by_month: [] as { month: string; count: number }[],
 })
+
+// 趋势数据（单独接口）
+const trendData = ref<{ period: string; apply_count: number; approved_count: number }[]>([])
 
 const statCards = computed(() => [
   { label: '申报总数', value: stats.value.total_projects, icon: Files, color: '#409EFF' },
-  { label: '立项数', value: stats.value.approved_projects, icon: Document, color: '#67C23A' },
-  { label: '结题数', value: stats.value.archived_projects, icon: Box, color: '#E6A23C' },
-  { label: '经费总额(¥)', value: stats.value.total_budget.toLocaleString(), icon: Wallet, color: '#F56C6C' },
+  { label: '待审核', value: stats.value.pending_review, icon: Document, color: '#E6A23C' },
+  { label: '已立项', value: stats.value.approved_projects, icon: Box, color: '#67C23A' },
+  { label: '经费总额(¥)', value: Number(stats.value.total_budget || 0).toLocaleString(), icon: Wallet, color: '#F56C6C' },
 ])
 
 // ==================== 图表配置 ====================
 const trendOption = computed(() => ({
   tooltip: { trigger: 'axis' },
-  xAxis: { type: 'category', data: stats.value.trend_by_month.map((d) => d.month) },
+  xAxis: { type: 'category', data: (trendData.value || []).map((d) => d.period) },
   yAxis: { type: 'value' },
-  series: [{
-    name: '申报数量',
-    type: 'line',
-    data: stats.value.trend_by_month.map((d) => d.count),
-    smooth: true,
-    areaStyle: { opacity: 0.3 },
-    itemStyle: { color: '#409EFF' },
-  }],
+  series: [
+    {
+      name: '申报数',
+      type: 'line',
+      data: (trendData.value || []).map((d) => d.apply_count),
+      smooth: true,
+      itemStyle: { color: '#409EFF' },
+    },
+    {
+      name: '立项数',
+      type: 'line',
+      data: (trendData.value || []).map((d) => d.approved_count),
+      smooth: true,
+      itemStyle: { color: '#67C23A' },
+    },
+  ],
 }))
 
 const collegeOption = computed(() => ({
   tooltip: { trigger: 'axis' },
-  xAxis: { type: 'category', data: stats.value.by_college.map((d) => d.name), axisLabel: { rotate: 30 } },
+  xAxis: { type: 'category', data: ['总览'], axisLabel: { rotate: 30 } },
   yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%' } },
   series: [{
     type: 'bar',
-    data: stats.value.by_college.map((d) => d.value),
+    data: [{ value: Math.round(stats.value.approval_rate || 0), name: '立项率' }],
     itemStyle: { color: '#67C23A' },
     label: { show: true, position: 'top', formatter: '{c}%' },
   }],
@@ -167,7 +175,12 @@ const categoryOption = computed(() => ({
   series: [{
     type: 'pie',
     radius: ['40%', '70%'],
-    data: stats.value.by_category,
+    data: [
+      { name: '申报总数', value: stats.value.total_projects },
+      { name: '已立项', value: stats.value.approved_projects },
+      { name: '已结题', value: stats.value.finished_projects },
+      { name: '待审核', value: stats.value.pending_review },
+    ],
     itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 2 },
     label: { formatter: '{b}: {d}%' },
   }],
@@ -179,7 +192,7 @@ const budgetOption = computed(() => ({
     progress: { show: true, width: 18 },
     axisLine: { lineStyle: { width: 18 } },
     detail: { formatter: '{value}%', fontSize: 24, offsetCenter: [0, '70%'] },
-    data: [{ value: Math.round(stats.value.approval_rate), name: '立项率' }],
+    data: [{ value: Math.round(stats.value.approval_rate || 0), name: '立项率' }],
   }],
 }))
 
@@ -189,7 +202,11 @@ const statusOption = computed(() => ({
   series: [{
     type: 'pie',
     radius: '60%',
-    data: stats.value.by_status,
+    data: [
+      { name: '已立项', value: stats.value.approved_projects },
+      { name: '已结题', value: stats.value.finished_projects },
+      { name: '待审核', value: stats.value.pending_review },
+    ],
     itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
   }],
 }))
@@ -198,15 +215,20 @@ const statusOption = computed(() => ({
 async function loadData() {
   const params: any = {}
   if (filterForm.dateRange.length === 2) {
-    params.start_date = filterForm.dateRange[0]
-    params.end_date = filterForm.dateRange[1]
+    // 后端 overview 接口用 start_year/end_year 整数年份过滤
+    params.start_year = new Date(filterForm.dateRange[0]).getFullYear()
+    params.end_year = new Date(filterForm.dateRange[1]).getFullYear()
   }
   if (filterForm.college_id) params.college_id = filterForm.college_id
-  if (filterForm.category) params.category = filterForm.category
+  if (filterForm.project_type) params.project_type = filterForm.project_type
 
   try {
-    const res = await getStatistics(params)
-    stats.value = res.data
+    const [statsRes, trendRes] = await Promise.all([
+      getStatistics(params),
+      getTrend(),
+    ])
+    stats.value = statsRes.data
+    trendData.value = (trendRes.data || []) as any[]
   } catch {
     ElMessage.error('数据加载失败')
   }
@@ -215,38 +237,27 @@ async function loadData() {
 // ==================== 导出 ====================
 async function handleExport() {
   try {
-    // 生成 Excel
     const wb = XLSX.utils.book_new()
-    
+
     // 统计概览
     const overviewData = [
       ['指标', '数值'],
       ['申报总数', stats.value.total_projects],
-      ['立项数', stats.value.approved_projects],
-      ['结题数', stats.value.archived_projects],
+      ['待审核', stats.value.pending_review],
+      ['已立项', stats.value.approved_projects],
+      ['已结题', stats.value.finished_projects],
       ['经费总额', stats.value.total_budget],
+      ['已使用经费', stats.value.total_used],
       ['立项率', `${stats.value.approval_rate}%`],
     ]
     const ws1 = XLSX.utils.aoa_to_sheet(overviewData)
     XLSX.utils.book_append_sheet(wb, ws1, '统计概览')
 
-    // 学院分布
-    const collegeData = [['学院', '立项率(%)']]
-    stats.value.by_college.forEach((d) => collegeData.push([d.name, d.value]))
-    const ws2 = XLSX.utils.aoa_to_sheet(collegeData)
-    XLSX.utils.book_append_sheet(wb, ws2, '学院分布')
-
-    // 类别分布
-    const categoryData = [['类别', '数量']]
-    stats.value.by_category.forEach((d) => categoryData.push([d.name, d.value]))
-    const ws3 = XLSX.utils.aoa_to_sheet(categoryData)
-    XLSX.utils.book_append_sheet(wb, ws3, '类别分布')
-
     // 趋势
-    const trendData = [['月份', '申报数量']]
-    stats.value.trend_by_month.forEach((d) => trendData.push([d.month, d.count]))
-    const ws4 = XLSX.utils.aoa_to_sheet(trendData)
-    XLSX.utils.book_append_sheet(wb, ws4, '月度趋势')
+    const trendExportData = [['时间', '申报数', '立项数']]
+    ;(trendData.value || []).forEach((d) => trendExportData.push([d.period, d.apply_count, d.approved_count]))
+    const ws2 = XLSX.utils.aoa_to_sheet(trendExportData)
+    XLSX.utils.book_append_sheet(wb, ws2, '趋势')
 
     const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' })
     saveAs(new Blob([buf]), '统计报表.xlsx')

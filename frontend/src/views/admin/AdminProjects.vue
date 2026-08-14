@@ -10,18 +10,24 @@
           <el-input v-model="searchForm.keyword" placeholder="项目名称/编号" clearable />
         </el-form-item>
         <el-form-item label="状态">
-          <el-select v-model="searchForm.status" placeholder="全部状态" clearable style="width: 130px">
+          <el-select v-model="searchForm.status" placeholder="全部状态" clearable style="width: 150px">
             <el-option label="草稿" :value="0" />
-            <el-option label="审核中" :value="20" />
-            <el-option label="已立项" :value="50" />
-            <el-option label="已驳回" :value="60" />
-            <el-option label="进行中" :value="70" />
-            <el-option label="已归档" :value="90" />
+            <el-option label="待学院初审" :value="1" />
+            <el-option label="学院初审通过" :value="2" />
+            <el-option label="待校级复审" :value="3" />
+            <el-option label="校级复审通过" :value="4" />
+            <el-option label="待专家评审" :value="5" />
+            <el-option label="已立项" :value="6" />
+            <el-option label="中期检查中" :value="7" />
+            <el-option label="待结题" :value="8" />
+            <el-option label="已结题" :value="9" />
+            <el-option label="已驳回" :value="10" />
+            <el-option label="已撤销" :value="11" />
           </el-select>
         </el-form-item>
         <el-form-item label="学院">
-          <el-select v-model="searchForm.college_id" placeholder="全部学院" clearable style="width: 150px">
-            <el-option v-for="c in colleges" :key="c.id" :label="c.name" :value="c.id" />
+          <el-select v-model="searchForm.college_id" placeholder="全部学院" clearable style="width: 180px">
+            <el-option v-for="c in colleges" :key="c.id" :label="c.college_name" :value="c.id" />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -43,7 +49,7 @@
       </template>
       <template #actions="{ row }">
         <el-button link type="primary" size="small" @click="router.push(`/projects/${row.id}`)">详情</el-button>
-        <el-button v-if="row.status === 30 || row.status === 40" link type="warning" size="small" @click="openAssignDialog(row)">
+        <el-button v-if="row.status === 4 || row.status === 5" link type="warning" size="small" @click="openAssignDialog(row)">
           分配专家
         </el-button>
       </template>
@@ -101,13 +107,13 @@ const selectedExperts = ref<number[]>([])
 const currentProject = ref<any>(null)
 
 const columns: TableColumn[] = [
-  { prop: 'project_code', label: '项目编号', minWidth: 140 },
-  { prop: 'title', label: '项目名称', minWidth: 200 },
-  { prop: 'category_name', label: '类别', width: 120 },
+  { prop: 'project_no', label: '项目编号', minWidth: 140 },
+  { prop: 'project_name', label: '项目名称', minWidth: 200 },
+  { prop: 'project_type_name', label: '类别', width: 120 },
   { prop: 'leader_name', label: '负责人', width: 100 },
   { prop: 'teacher_name', label: '指导教师', width: 100 },
   { prop: 'college_name', label: '学院', width: 120 },
-  { prop: 'total_budget', label: '预算(¥)', width: 100, formatter: (val: number) => val?.toFixed(2) || '0.00' },
+  { prop: 'budget_amount', label: '预算(¥)', width: 100, formatter: (val: number) => val?.toFixed(2) || '0.00' },
   { prop: 'status', label: '状态', slot: 'status', width: 100 },
 ]
 
@@ -134,7 +140,7 @@ function handlePageChange(p: number, ps: number) {
 }
 
 async function handleExport() {
-  await download('/api/projects/export', searchForm, '项目名单.xlsx')
+  await download('/api/excel/export/projects', searchForm, '项目名单.xlsx')
   ElMessage.success('导出成功')
 }
 

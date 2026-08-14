@@ -4,7 +4,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { get, post, put } from '@/utils/request'
+import { get, post, put, patch } from '@/utils/request'
 
 /** 用户信息接口 */
 export interface UserInfo {
@@ -86,7 +86,7 @@ export const useUserStore = defineStore('user', () => {
       userInfo.value = JSON.parse(cached)
     }
     try {
-      const res = await get<UserInfo>('/api/users/me')
+      const res = await get<UserInfo>('/api/auth/me')
       userInfo.value = res.data
       localStorage.setItem('user_info', JSON.stringify(res.data))
     } catch {
@@ -97,18 +97,15 @@ export const useUserStore = defineStore('user', () => {
   /**
    * 更新个人信息
    */
-  async function updateProfile(data: { real_name?: string; email?: string; phone?: string }) {
-    const res = await put<UserInfo>('/api/users/me', data)
+  async function updateProfile(data: { real_name?: string; email?: string; phone?: string; avatar?: string }) {
+    const res = await patch<UserInfo>('/api/users/me/profile', data)
     userInfo.value = res.data
     localStorage.setItem('user_info', JSON.stringify(res.data))
     return res.data
   }
 
-  /**
-   * 修改密码
-   */
   async function changePassword(oldPassword: string, newPassword: string) {
-    await post('/api/users/me/password', {
+    await patch('/api/users/me/profile', {
       old_password: oldPassword,
       new_password: newPassword,
     })

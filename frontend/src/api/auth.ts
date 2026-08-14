@@ -36,5 +36,5 @@ export function getColleges() {
 }
 
 export function getDictByType(dictType: string) {
-  return get('/api/dict/list', { dict_type: dictType })
+  return get('/api/common/dict/' + dictType)
 }
