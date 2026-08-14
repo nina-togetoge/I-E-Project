@@ -40,3 +40,12 @@ Thumbs.db
 
 # Node（前端用）
 node_modules/
+.npm-cache
+.npm/
+
+# 前端构建产物
+frontend/dist/
+frontend/.vite/
+
+# 前端本地环境
+frontend/.env.local
