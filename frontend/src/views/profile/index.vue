@@ -20,7 +20,7 @@
 
       <el-col :span="16">
         <el-card shadow="never">
-          <el-tabs v-model="activeTab">
+          <el-tabs v-model="activeTab" :before-leave="beforeTabChange">
             <el-tab-pane label="基本信息" name="info">
               <el-form ref="infoFormRef" :model="infoForm" :rules="infoRules" label-width="80px">
                 <el-form-item label="用户名">
@@ -65,17 +65,52 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, type FormInstance, type FormRules } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { useUserStore } from '@/store/user'
 
 const userStore = useUserStore()
+const route = useRoute()
 const activeTab = ref('info')
+/** [P0-2] 强制改密模式：锁死 Tab 切换，必须改密 */
+const forceResetMode = ref(false)
 
 const infoFormRef = ref<FormInstance>()
 const pwdFormRef = ref<FormInstance>()
 const saveLoading = ref(false)
 const pwdLoading = ref(false)
+
+/** 强制改密时，禁止切换到其他 Tab */
+function beforeTabChange(newTab: string) {
+  if (forceResetMode.value && newTab !== 'password') {
+    ElMessageBox.alert('为保障账户安全，请先修改初始密码后再继续使用。', '请先修改密码', {
+      confirmButtonText: '我知道了',
+      type: 'warning',
+      showClose: false,
+    })
+    return false
+  }
+  return true
+}
+
+/** 监听 URL 参数，进入强制改密模式 */
+watch(
+  () => [route.query.tab, route.query.forceReset],
+  ([tab, forceReset], _old, onCleanup) => {
+    let cancelled = false
+    onCleanup(() => { cancelled = true })
+    if (cancelled) return
+    if (tab === 'password') {
+      activeTab.value = 'password'
+    }
+    if (forceReset === '1') {
+      forceResetMode.value = true
+      activeTab.value = 'password'
+    }
+  },
+  { immediate: true },
+)
 
 const infoForm = reactive({
   real_name: '',
@@ -103,7 +138,7 @@ const pwdRules: FormRules = {
   confirm_password: [
     { required: true, message: '请确认密码', trigger: 'blur' },
     {
-      validator: (_rule, value, callback) => {
+      validator: (_rule: any, value: string, callback: (error?: Error) => void) => {
         if (value !== pwdForm.new_password) callback(new Error('两次密码不一致'))
         else callback()
       },
@@ -114,7 +149,7 @@ const pwdRules: FormRules = {
 
 async function handleSaveInfo() {
   if (!infoFormRef.value) return
-  await infoFormRef.value.validate(async (valid) => {
+  await infoFormRef.value.validate(async (valid: boolean) => {
     if (!valid) return
     saveLoading.value = true
     try {
@@ -132,7 +167,7 @@ async function handleSaveInfo() {
 
 async function handleChangePassword() {
   if (!pwdFormRef.value) return
-  await pwdFormRef.value.validate(async (valid) => {
+  await pwdFormRef.value.validate(async (valid: boolean) => {
     if (!valid) return
     pwdLoading.value = true
     try {

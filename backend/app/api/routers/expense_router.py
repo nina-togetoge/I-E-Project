@@ -15,6 +15,7 @@ from app.database.session import get_db
 from app.models import SysUser
 from app.schemas.project import (
     ExpenseCreate, ExpenseListItem, ExpenseReviewRequest, ExpenseSummary,
+    ExpenseQueryRequest,
 )
 from app.services.expense_service import ExpenseService
 
@@ -23,15 +24,15 @@ router_expense = APIRouter(prefix="/expenses", tags=["经费报销"])
 
 @router_expense.post("/list", response_model=ResponseModel, summary="报销列表(分页)")
 def api_expense_list(
-    data: dict = {},
+    data: ExpenseQueryRequest,  # [P1-5] 改为Pydantic schema校验
     pager: PaginationParams = Depends(),
     db: Session = Depends(get_db),
     current_user: SysUser = require_login,
 ):
     """POST方式列表查询，支持筛选"""
-    applicant_id = data.get("applicant_id")
-    status = data.get("status")
-    keyword = data.get("keyword")
+    applicant_id = data.applicant_id
+    status = data.status
+    keyword = data.keyword
 
     # 管理员/教师可看全部，学生只看自己的
     if current_user.role not in (RoleEnum.ADMIN, RoleEnum.TEACHER):
@@ -43,7 +44,8 @@ def api_expense_list(
         status=status,
         keyword=keyword,
     )
-    item_list = [ExpenseService.to_list_item(db, i) for i in items]
+    # [P1-4] 改为批量转换，一次性IN查询消除每条记录的单查Project的N+1
+    item_list = ExpenseService.to_list_items(db, items)
     summary = ExpenseService.get_summary(db, applicant_id)
     return success(data={
         "items": item_list,

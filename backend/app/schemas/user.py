@@ -64,6 +64,13 @@ class RefreshTokenRequest(BaseModel):
     refresh_token: str = Field(..., description="刷新令牌")
 
 
+class LogoutRequest(BaseModel):
+    """[P1-8] 登出请求：前端本地缓存的 refresh_token 一起吊销（可空）
+    - refresh_token 可为空：仅从 Authorization 头中提取的 access_token 也能单独加入黑名单，
+      避免前端忘记带 refresh_token 或本地已清理时，登出接口直接 422 报错失效。"""
+    refresh_token: Optional[str] = Field(default=None, description="刷新令牌(可选，若提供则一并吊销)")
+
+
 # ====================================================================
 # 用户核心模型
 # ====================================================================
@@ -137,13 +144,31 @@ class UserInfo(BaseModel):
     college_name: Optional[str] = None  # 关联查询后赋值
     avatar: Optional[str]
     status: int
+    force_change_pwd: int = 0  # 首次登录强制改密标志
     last_login_at: Optional[datetime]
     created_at: datetime
 
 
 class UserListItem(UserInfo):
-    """用户列表项响应"""
+    """用户列表项响应（管理员/教师使用，包含完整PII字段）"""
     updated_at: datetime
+
+
+class UserSafeListItem(BaseModel):
+    """
+    脱敏的用户列表项响应（学生端调用用户查询接口时返回）
+    仅保留用于"选人"的必要字段，隐藏邮箱/手机/状态/登录信息等PII
+    """
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    real_name: str
+    role: int
+    role_name: str = ""
+    college_id: Optional[int]
+    college_name: Optional[str] = None
+    avatar: Optional[str]
 
 
 # ====================================================================

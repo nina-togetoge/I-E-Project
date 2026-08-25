@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import (
     verify_password, create_access_token, create_refresh_token,
-    decode_token, RoleEnum, ROLE_NAME_MAP, hash_password,
+    decode_token, extract_jti_exp, RoleEnum, ROLE_NAME_MAP, hash_password,
 )
 from app.core.exceptions import (
     AuthException, ParamValidateException, ResourceNotFoundException,
@@ -19,12 +19,13 @@ from app.core.exceptions import (
 from app.core.deps import PaginationParams, DataScope
 from app.schemas.user import (
     LoginRequest, LoginResponse, UserCreate, UserUpdate, UserProfileUpdate,
-    UserInfo, UserListItem, UserQueryParams, CollegeCreate, CollegeUpdate,
+    UserInfo, UserListItem, UserSafeListItem, UserQueryParams, CollegeCreate, CollegeUpdate,
     CollegeResponse, OperationLogQueryParams, RefreshTokenRequest,
     UserRegister, ImportResultResponse,
 )
 from app.crud.user import UserCRUD, CollegeCRUD, OperationLogCRUD
 from app.models import SysUser, SysCollege
+from app.utils.redis_cache import TokenBlacklist
 
 
 class AuthService:
@@ -67,6 +68,10 @@ class AuthService:
         payload = decode_token(req.refresh_token)
         if payload.get("type") != "refresh":
             raise AuthException(message="刷新令牌类型错误")
+        # [P1-8] Refresh Token 黑名单校验（用户登出时已吊销）
+        jti = payload.get("jti")
+        if TokenBlacklist.is_blacklisted("refresh", jti):
+            raise AuthException(message="刷新令牌已失效，请重新登录")
         user_id = payload.get("uid")
         username = payload.get("sub")
         if not user_id or not username:
@@ -85,6 +90,29 @@ class AuthService:
         )
 
     @staticmethod
+    def logout(current_user: SysUser, access_token_raw: str, refresh_token_raw: Optional[str] = None) -> None:
+        """
+        [P1-8] 登出：将当前 access & refresh token 加入 Redis 黑名单
+        """
+        # 1. Access Token 吊销
+        try:
+            payload = decode_token(access_token_raw)
+            jti, remaining = extract_jti_exp(payload)
+            TokenBlacklist.add("access", jti, remaining)
+        except Exception:
+            # 前端给的access可能快过期了，decode失败忽略
+            pass
+        # 2. Refresh Token 吊销（若提供）
+        if refresh_token_raw:
+            try:
+                payload = decode_token(refresh_token_raw)
+                if payload.get("type") == "refresh":
+                    jti, remaining = extract_jti_exp(payload)
+                    TokenBlacklist.add("refresh", jti, remaining)
+            except Exception:
+                pass
+
+    @staticmethod
     def register_student(db: Session, req: UserRegister) -> UserInfo:
         """学生自助注册：只允许学生角色，检查账号唯一性"""
         # 账号唯一校验
@@ -97,6 +125,7 @@ class AuthService:
         data = req.model_dump()
         data["role"] = RoleEnum.STUDENT
         data["status"] = 1
+        data["force_change_pwd"] = 1  # 自助注册后首次登录必须改密
         user = UserCRUD.create(db, data)
         db.commit()
         db.refresh(user)
@@ -105,12 +134,24 @@ class AuthService:
     @staticmethod
     def _build_user_info(user: SysUser) -> UserInfo:
         """构建UserInfo响应，含角色名、学院名（通过关联对象）"""
-        info = UserInfo.model_validate(user)
+        info = UserInfo.model_validate(user, from_attributes=True)
         info.role_name = ROLE_NAME_MAP.get(user.role, f"未知({user.role})")
         # 通过ORM关联对象取学院名
         if user.college:
             info.college_name = user.college.college_name
         return info
+
+    @staticmethod
+    def _build_safe_list_item(user: SysUser) -> UserSafeListItem:
+        """学生端用户列表：仅返回非敏感字段（用于选人，隐藏邮箱/手机/状态等）"""
+        item = UserSafeListItem.model_validate(user, from_attributes=True)
+        item.role_name = ROLE_NAME_MAP.get(user.role, f"未知({user.role})")
+        try:
+            if user.college:
+                item.college_name = user.college.college_name
+        except Exception:
+            pass
+        return item
 
 
 class UserService:
@@ -135,8 +176,38 @@ class UserService:
 
     @staticmethod
     def paginate(db: Session, pager: PaginationParams, params: UserQueryParams,
-                 data_scope: DataScope) -> Tuple[List[UserListItem], int]:
-        """分页查询用户列表，注入行级数据权限"""
+                 data_scope: DataScope) -> Tuple[List, int]:
+        """分页查询用户列表，自动按角色注入数据权限 & 学生端脱敏返回"""
+        is_student_caller = (data_scope.role == RoleEnum.STUDENT)
+
+        # ----------------------------------------------------------------
+        # [安全补丁 P0-4] 学生角色只能查"选人"场景下的白名单角色：
+        #   role=1(STUDENT) —— 选团队成员（同学院）
+        #   role=2(TEACHER) —— 选指导教师（同学院）
+        # 禁止学生查 role=3(EXPERT)、role=4(ADMIN)，更不允许 role=None 查全部！
+        # ----------------------------------------------------------------
+        if is_student_caller:
+            if params.role not in (RoleEnum.STUDENT, RoleEnum.TEACHER):
+                raise PermissionDeniedException(
+                    message="学生端用户查询仅支持按角色筛选：学生(1)或指导教师(2)"
+                )
+            # 学生端强制只能看本院数据 + 脱敏返回
+            effective_scope = DataScope.__new__(DataScope)
+            effective_scope.user = data_scope.user
+            effective_scope.db = data_scope.db
+            effective_scope.role = data_scope.role
+            effective_scope.college_id = data_scope.college_id
+            effective_scope.user_id = data_scope.user_id
+            effective_scope.scope = {
+                "all": False,
+                "college_ids": [data_scope.college_id] if data_scope.college_id else None,
+                "owner_user_ids": None,
+                "is_student_whitelist": True,
+                "role_whitelist": [params.role],
+            }
+        else:
+            effective_scope = data_scope
+
         users, total = UserCRUD.paginate(
             db,
             offset=pager.offset,
@@ -145,17 +216,21 @@ class UserService:
             role=params.role,
             college_id=params.college_id,
             status=params.status,
-            data_scope=data_scope,
+            data_scope=effective_scope,
             order_by=pager.order_by or "created_at",
             order_dir=pager.order_dir,
         )
-        items: List[UserListItem] = []
+        items: List = []
         for u in users:
             info = AuthService._build_user_info(u)
-            item = UserListItem.model_validate(u)
-            item.role_name = info.role_name
-            item.college_name = info.college_name
-            items.append(item)
+            if is_student_caller:
+                # 学生端返回脱敏版（无邮箱/手机/状态等PII）
+                items.append(AuthService._build_safe_list_item(u))
+            else:
+                item = UserListItem.model_validate(u, from_attributes=True)
+                item.role_name = info.role_name
+                item.college_name = info.college_name
+                items.append(item)
         return items, total
 
     @staticmethod
@@ -178,7 +253,9 @@ class UserService:
         if req.college_id and not CollegeCRUD.get_by_id(db, req.college_id):
             raise ParamValidateException(message="所属学院不存在")
 
-        user = UserCRUD.create(db, req.model_dump())
+        data = req.model_dump()
+        data.setdefault("force_change_pwd", 1)  # 新建用户首次登录强制改密
+        user = UserCRUD.create(db, data)
         db.commit()
         db.refresh(user)
         return AuthService._build_user_info(user)
@@ -233,6 +310,8 @@ class UserService:
             if not verify_password(req.old_password or "", current_user.password_hash):
                 raise ParamValidateException(message="原密码不正确")
             update_data["password_hash"] = hash_password(req.new_password)
+            # 改密成功则清除"首次登录强制改密"标记
+            update_data["force_change_pwd"] = 0
         user = UserCRUD.update(db, current_user, update_data)
         db.commit()
         db.refresh(user)

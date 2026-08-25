@@ -141,6 +141,7 @@ class ProjectCRUD:
     def create(db: Session, data: Dict[str, Any]) -> ProjProject:
         team_members_data = data.pop("team_members", [])
         budgets_data = data.pop("budgets", [])
+        data.pop("attachment_ids", None)
         obj = ProjProject(**data)
         db.add(obj)
         db.flush()

@@ -113,9 +113,21 @@ class ReviewService:
             raise ResourceNotFoundException(message="项目不存在")
         ReviewService._ensure_can_review(project, req.review_stage, operator)
 
-        # 同一阶段同一人只允许一次
-        if ReviewCRUD.exist_by_project_stage_reviewer(db, project.id, req.review_stage, operator.id):
+        # 同一阶段同一人只允许一次（排除占位记录）
+        if ReviewCRUD.exist_real_review(db, project.id, req.review_stage, operator.id):
             raise ParamValidateException(message="您已在该阶段审核过此项目，请勿重复提交")
+
+        # 如果存在占位记录，先删除再写正式记录
+        from app.models import ProjReview
+        placeholder = db.query(ProjReview).filter(
+            ProjReview.project_id == project.id,
+            ProjReview.review_stage == req.review_stage,
+            ProjReview.reviewer_id == operator.id,
+            ProjReview.review_result == 99,
+            ProjReview.is_deleted == 0,
+        ).first()
+        if placeholder:
+            db.delete(placeholder)
 
         # 写审核记录
         record = ReviewCRUD.create(db, {
@@ -164,7 +176,8 @@ class ReviewService:
 
         # 专家是否被分配到此项目
         old = ReviewCRUD.get_expert_score(db, project.id, operator.id)
-        if old and old.review_result:
+        # 占位记录 review_result=99 表示"已分配但未评审"，不能视为已完成
+        if old and old.review_result and old.review_result != 99:
             raise ParamValidateException(message="您已完成此项目的评审，不能重复打分")
 
         # 更新或创建评审记录
@@ -263,14 +276,29 @@ class ReviewService:
     def paginate(db: Session, pager: PaginationParams, stage: Optional[int] = None,
                  status: Optional[int] = None, keyword: Optional[str] = None):
         items, total = ReviewCRUD.paginate(db, pager.offset, pager.limit, stage, status, keyword)
+
+        # [P1-4] 消除N+1：原来每条 review 都单独查一次 Project
+        # 用 IN 查询一次性把所有关联项目拉到内存 dict，再在结果循环中 O(1) 取
+        project_id_to_name: dict = {}
+        project_ids = list({r.project_id for r in items if r.project_id})
+        if project_ids:
+            from app.models import ProjProject
+            rows = db.query(ProjProject.id, ProjProject.project_name).filter(
+                ProjProject.id.in_(project_ids),
+                ProjProject.is_deleted == 0,
+            ).all()
+            project_id_to_name = {pid: pname for pid, pname in rows}
+
         result = []
         for r in items:
-            project = ProjectCRUD.get_by_id(db, r.project_id)
             item = ReviewRecordItem.model_validate(r)
             item.review_stage_name = REVIEW_STAGE_NAME.get(item.review_stage, "")
             item.review_result_name = REVIEW_RESULT_NAME.get(item.review_result, "已分配")
             if item.review_result == 99:
                 item.review_result_name = "待评审"
+            # 回填项目名（若ReviewRecordItem有project_name字段则自动生效）
+            if hasattr(item, "project_name") and not item.project_name:
+                item.project_name = project_id_to_name.get(r.project_id)
             result.append(item)
         return result, total
 
@@ -281,11 +309,43 @@ class ReviewService:
         items, total = ReviewCRUD.expert_pending_projects(
             db, expert_id, pager.offset, pager.limit, keyword
         )
+
+        # [P1-4] 消除N+1：原代码每个项目做 3 次DB查询（专家分数/学院/负责人）
+        # 一次性批量查出所有需要的数据，然后按 ID 建字典
+        project_ids = [p.id for p in items]
+        college_ids = list({p.college_id for p in items if p.college_id})
+        leader_ids = list({p.leader_id for p in items if p.leader_id})
+
+        # 1) 各项目分配给该专家的打分 (ProjReview)
+        score_by_project: dict = {}
+        if project_ids:
+            from app.models import ProjReview
+            rows = db.query(ProjReview).filter(
+                ProjReview.project_id.in_(project_ids),
+                ProjReview.reviewer_id == expert_id,
+                ProjReview.review_stage == REVIEW_STAGE_EXPERT,
+                ProjReview.is_deleted == 0,
+            ).all()
+            for r in rows:
+                score_by_project[r.project_id] = r
+
+        # 2) 学院批量查询
+        college_by_id: dict = {}
+        if college_ids:
+            colleges = CollegeCRUD.list_by_ids(db, college_ids)
+            college_by_id = {c.id: c for c in colleges}
+
+        # 3) 负责人批量查询
+        leader_by_id: dict = {}
+        if leader_ids:
+            leaders = UserCRUD.list_by_ids(db, leader_ids)
+            leader_by_id = {u.id: u for u in leaders}
+
         result: List[ExpertProjectItem] = []
         for p in items:
-            record = ReviewCRUD.get_expert_score(db, p.id, expert_id)
-            college = CollegeCRUD.get_by_id(db, p.college_id)
-            leader = UserCRUD.get_by_id(db, p.leader_id)
+            record = score_by_project.get(p.id)
+            college = college_by_id.get(p.college_id)
+            leader = leader_by_id.get(p.leader_id)
             result.append(ExpertProjectItem(
                 project_id=p.id,
                 project_no=p.project_no,

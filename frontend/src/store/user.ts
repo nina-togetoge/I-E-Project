@@ -19,6 +19,7 @@ export interface UserInfo {
   college_name: string | null
   avatar: string | null
   status: number
+  force_change_pwd: number  // 首次登录强制改密: 0-否 1-是
   last_login_at: string | null
   created_at: string
 }
@@ -39,7 +40,6 @@ export const useUserStore = defineStore('user', () => {
   const isExpert = computed(() => role.value === 3)
 
   // ========== Actions ==========
-
   /**
    * 登录
    */
@@ -51,14 +51,16 @@ export const useUserStore = defineStore('user', () => {
       expires_in: number
       user_info: UserInfo
     }>('/api/auth/login', { username, password })
-
-    accessToken.value = res.data.access_token
-    refreshToken.value = res.data.refresh_token
-    userInfo.value = res.data.user_info
-
-    localStorage.setItem('access_token', res.data.access_token)
-    localStorage.setItem('refresh_token', res.data.refresh_token)
-    localStorage.setItem('user_info', JSON.stringify(res.data.user_info))
+    // 后端统一响应格式：{ code, message, data: LoginResponse }
+    // 注意：LoginResponse.user_info 才是用户对象，不要和外层 data 混淆
+    const payload = res.data
+    accessToken.value = payload.access_token
+    refreshToken.value = payload.refresh_token
+    const info: UserInfo = payload.user_info
+    userInfo.value = info
+    localStorage.setItem('access_token', payload.access_token)
+    localStorage.setItem('refresh_token', payload.refresh_token)
+    localStorage.setItem('user_info', JSON.stringify(info))
   }
 
   /**
@@ -69,10 +71,8 @@ export const useUserStore = defineStore('user', () => {
       access_token: string
       refresh_token: string
     }>('/api/auth/refresh', { refresh_token: refreshToken.value })
-
     accessToken.value = res.data.access_token
     refreshToken.value = res.data.refresh_token
-
     localStorage.setItem('access_token', res.data.access_token)
     localStorage.setItem('refresh_token', res.data.refresh_token)
   }
@@ -109,13 +109,25 @@ export const useUserStore = defineStore('user', () => {
       old_password: oldPassword,
       new_password: newPassword,
     })
+    // 改密成功后，清零强制改密标志
+    if (userInfo.value) {
+      userInfo.value.force_change_pwd = 0
+      localStorage.setItem('user_info', JSON.stringify(userInfo.value))
+    }
   }
 
   /**
-   * 退出登录
+   * 退出登录（调用后端接口吊销 Token，失败也强制本地清理）
    */
-  function logout() {
-    clearAuth()
+  async function logout() {
+    try {
+      // 后端会同时从 Authorization 头提取 access_token，并把 refresh_token 一并加入 Redis 黑名单
+      await post('/api/auth/logout', { refresh_token: refreshToken.value })
+    } catch {
+      // 忽略后端错误，确保本地登出始终执行
+    } finally {
+      clearAuth()
+    }
   }
 
   /**
@@ -142,7 +154,7 @@ export const useUserStore = defineStore('user', () => {
     isTeacher,
     isExpert,
     login,
-    refreshToken: refreshTokenAction,
+    doRefreshToken: refreshTokenAction,
     fetchUserInfo,
     updateProfile,
     changePassword,

@@ -79,6 +79,16 @@ class UserCRUD:
         users = query.order_by(order_func).offset(offset).limit(limit).all()
         return users, total
 
+    @staticmethod
+    def list_by_ids(db: Session, user_ids: List[int]) -> List[SysUser]:
+        """[P1-4] 按ID列表批量查询用户（消除N+1使用）"""
+        if not user_ids:
+            return []
+        return db.query(SysUser).filter(
+            SysUser.id.in_(user_ids),
+            SysUser.is_deleted == 0,
+        ).all()
+
     # ====================================================================
     # 用户增删改
     # ====================================================================
@@ -148,6 +158,15 @@ class CollegeCRUD:
         if not include_disabled:
             q = q.filter(SysCollege.status == 1)
         return q.order_by(SysCollege.sort_order.asc(), SysCollege.id.asc()).all()
+
+    @staticmethod
+    def list_by_ids(db: Session, college_ids: List[int]) -> List[SysCollege]:
+        """[P1-4] 按ID列表批量查询学院（消除N+1使用）"""
+        if not college_ids:
+            return []
+        return db.query(SysCollege).filter(
+            SysCollege.id.in_(college_ids),
+        ).all()
 
     @staticmethod
     def create(db: Session, obj_in: dict) -> SysCollege:

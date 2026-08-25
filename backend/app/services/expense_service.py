@@ -76,11 +76,35 @@ class ExpenseService:
 
     @staticmethod
     def to_list_item(db: Session, exp: ProjExpense) -> ExpenseListItem:
-        project = db.query(ProjProject).filter(ProjProject.id == exp.project_id).first()
-        item = ExpenseListItem.model_validate(exp)
-        item.project_name = project.project_name if project else None
-        item.status_text = EXPENSE_STATUS_MAP.get(exp.status, "未知")
-        return item
+        # 单条场景：保留旧接口但尽量复用批量逻辑
+        results = ExpenseService.to_list_items(db, [exp])
+        return results[0]
+
+    @staticmethod
+    def to_list_items(db: Session, exps: list) -> list:
+        """
+        [P1-4] 批量把 Expense ORM 对象 → ExpenseListItem
+        一次性通过 IN 查询取出所有关联项目，避免 O(N) 次单查（原 N+1 问题）
+        """
+        if not exps:
+            return []
+        project_ids = list({e.project_id for e in exps if e.project_id})
+        project_by_id: dict = {}
+        if project_ids:
+            rows = db.query(ProjProject.id, ProjProject.project_name).filter(
+                ProjProject.id.in_(project_ids),
+                ProjProject.is_deleted == 0,
+            ).all()
+            project_by_id = {pid: pname for pid, pname in rows}
+
+        out: list = []
+        for exp in exps:
+            item = ExpenseListItem.model_validate(exp)
+            proj_name = project_by_id.get(exp.project_id)
+            item.project_name = proj_name
+            item.status_text = EXPENSE_STATUS_MAP.get(exp.status, "未知")
+            out.append(item)
+        return out
 
     @staticmethod
     def get_summary(db: Session, applicant_id: Optional[int] = None) -> ExpenseSummary:

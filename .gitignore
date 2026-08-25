@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -7,6 +7,9 @@ __pycache__/
 dist/
 build/
 
+# Python 离线依赖解包目录（本地 Windows 开发专用，体积数百 MB + 含 .pyd 跨平台不兼容）
+backend/python_packages/
+
 # 虚拟环境
 .venv/
 venv/
@@ -14,6 +17,7 @@ env/
 
 # 环境变量
 .env
+.env.*.local
 
 # IDE
 .idea/
@@ -30,6 +34,15 @@ static/uploads/*
 static/whoosh_index/*
 !static/uploads/.gitkeep
 !static/whoosh_index/.gitkeep
+backend/static/uploads/*
+backend/static/whoosh_index/*
+
+# 上传/测试时产生的临时文件（任何层级）
+test_upload.*
+# 测试导入/导出模板文件
+test_*.xlsx
+test_*.xls
+test_*.csv
 
 # 日志
 *.log
@@ -42,10 +55,19 @@ Thumbs.db
 node_modules/
 .npm-cache
 .npm/
+.pnpm-store/
+.yarn/
 
 # 前端构建产物
 frontend/dist/
 frontend/.vite/
+frontend/tsconfig.tsbuildinfo
 
 # 前端本地环境
 frontend/.env.local
+frontend/.env.development.local
+frontend/.env.production.local
+frontend/.env.test.local
+
+# 临时脚本/沙箱文件
+_tmp_*.*

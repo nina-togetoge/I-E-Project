@@ -27,6 +27,7 @@ CREATE TABLE sys_user (
     college_id      BIGINT          DEFAULT NULL                         COMMENT '所属学院ID',
     avatar          VARCHAR(255)    DEFAULT NULL                         COMMENT '头像URL',
     status          TINYINT         NOT NULL DEFAULT 1                   COMMENT '状态: 0-禁用 1-启用',
+    force_change_pwd TINYINT        NOT NULL DEFAULT 0                   COMMENT '首次登录强制改密: 0-否 1-是',
     last_login_at   DATETIME        DEFAULT NULL                         COMMENT '最后登录时间',
     last_login_ip   VARCHAR(64)     DEFAULT NULL                         COMMENT '最后登录IP',
     created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP    COMMENT '创建时间',
@@ -36,7 +37,9 @@ CREATE TABLE sys_user (
     UNIQUE KEY uk_username (username),
     KEY idx_college (college_id),
     KEY idx_role (role),
-    KEY idx_status (status)
+    KEY idx_status (status),
+    KEY idx_email (email),
+    KEY idx_phone (phone)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统用户表';
 
 -- ====================================================================
@@ -110,9 +113,10 @@ CREATE TABLE proj_team_member (
     task_desc       VARCHAR(255)    DEFAULT NULL                         COMMENT '分工描述',
     join_time       DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP    COMMENT '加入时间',
     created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP    COMMENT '创建时间',
+    updated_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted      TINYINT         NOT NULL DEFAULT 0                   COMMENT '软删除标记',
     PRIMARY KEY (id),
     UNIQUE KEY uk_project_student (project_id, student_id),
-    KEY idx_project (project_id),
     KEY idx_student (student_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目团队成员表';
 
@@ -126,16 +130,19 @@ CREATE TABLE proj_review (
     review_stage    TINYINT         NOT NULL                             COMMENT '审核阶段: 1-学院初审 2-校级复审 3-专家评审 4-结题验收',
     reviewer_id     BIGINT          NOT NULL                             COMMENT '审核人ID',
     reviewer_name   VARCHAR(64)     NOT NULL                             COMMENT '审核人姓名(冗余)',
-    review_result   TINYINT         NOT NULL                             COMMENT '审核结果: 1-通过 2-驳回 3-修改后重提',
+    review_result   TINYINT         NOT NULL                             COMMENT '审核结果: 1-通过 2-驳回 3-修改后重提 99-待评审(占位)',
     score           DECIMAL(5,2)    DEFAULT NULL                         COMMENT '评分(百分制,专家评审用)',
     review_comment  VARCHAR(1000)   DEFAULT NULL                         COMMENT '评审意见',
     review_time     DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP    COMMENT '审核时间',
     created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP    COMMENT '创建时间',
+    updated_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted      TINYINT         NOT NULL DEFAULT 0                   COMMENT '软删除标记',
     PRIMARY KEY (id),
     KEY idx_project (project_id),
     KEY idx_reviewer (reviewer_id),
     KEY idx_stage (review_stage),
-    KEY idx_project_stage (project_id, review_stage)
+    KEY idx_project_stage (project_id, review_stage),
+    CONSTRAINT chk_review_result CHECK (review_result IN (1,2,3,99))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目审核记录表';
 
 -- ====================================================================
@@ -151,8 +158,10 @@ CREATE TABLE proj_budget (
     remark          VARCHAR(255)    DEFAULT NULL                         COMMENT '备注说明',
     created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP    COMMENT '创建时间',
     updated_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    is_deleted      TINYINT         NOT NULL DEFAULT 0                   COMMENT '软删除标记',
     PRIMARY KEY (id),
-    KEY idx_project (project_id)
+    KEY idx_project (project_id),
+    KEY idx_project_budget_item (project_id, budget_item)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目预算表';
 
 -- ====================================================================
@@ -180,7 +189,9 @@ CREATE TABLE proj_expense (
     UNIQUE KEY uk_expense_no (expense_no),
     KEY idx_project (project_id),
     KEY idx_applicant (applicant_id),
-    KEY idx_status (status)
+    KEY idx_status (status),
+    KEY idx_created_at (created_at),
+    KEY idx_budget_item (budget_item_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='经费报销申请表';
 
 -- ====================================================================
@@ -204,7 +215,8 @@ CREATE TABLE proj_achievement (
     is_deleted      TINYINT         NOT NULL DEFAULT 0                   COMMENT '软删除标记',
     PRIMARY KEY (id),
     KEY idx_project (project_id),
-    KEY idx_type (achievement_type)
+    KEY idx_type (achievement_type),
+    KEY idx_achievement_no (achievement_no)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目成果表';
 
 -- ====================================================================
@@ -218,7 +230,7 @@ CREATE TABLE sys_attachment (
     file_name       VARCHAR(255)    NOT NULL                             COMMENT '原始文件名',
     file_path       VARCHAR(500)    NOT NULL                             COMMENT '存储路径',
     file_size       BIGINT          NOT NULL                             COMMENT '文件大小(字节)',
-    file_type       VARCHAR(64)     DEFAULT NULL                         COMMENT '文件MIME类型',
+    file_type       VARCHAR(255)    DEFAULT NULL                         COMMENT '文件MIME类型',
     file_ext        VARCHAR(16)     DEFAULT NULL                         COMMENT '文件扩展名',
     uploader_id     BIGINT          NOT NULL                             COMMENT '上传人ID',
     uploader_name   VARCHAR(64)     NOT NULL                             COMMENT '上传人姓名(冗余)',
@@ -253,6 +265,7 @@ CREATE TABLE sys_operation_log (
     operation_time  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP    COMMENT '操作时间',
     PRIMARY KEY (id),
     KEY idx_user (user_id),
+    KEY idx_username (username),
     KEY idx_operation (operation_type, module_name),
     KEY idx_time (operation_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='操作日志审计表';
@@ -301,7 +314,8 @@ CREATE TABLE proj_change_request (
     created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP    COMMENT '创建时间',
     PRIMARY KEY (id),
     KEY idx_project (project_id),
-    KEY idx_type_status (change_type, status)
+    KEY idx_type_status (change_type, status),
+    KEY idx_applicant (applicant_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目变更/延期申请表';
 
 -- ====================================================================
@@ -356,3 +370,96 @@ INSERT INTO sys_dict (dict_type, dict_code, dict_label, sort_order) VALUES
 ('project_level', '1', '校级项目', 1),
 ('project_level', '2', '省级项目', 2),
 ('project_level', '3', '国家级项目', 3);
+
+-- ====================================================================
+-- 外键约束（所有表创建完成后追加，避免循环依赖/建表顺序问题）
+--   ON DELETE 策略：
+--     用户/学院删除 -> SET NULL（保留历史数据）
+--     项目删除 -> CASCADE（子表随项目一起删）
+-- ====================================================================
+
+-- sys_user -> sys_college
+ALTER TABLE sys_user ADD CONSTRAINT fk_user_college
+    FOREIGN KEY (college_id) REFERENCES sys_college(id)
+    ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- sys_college -> sys_user (dean)
+ALTER TABLE sys_college ADD CONSTRAINT fk_college_dean
+    FOREIGN KEY (dean_id) REFERENCES sys_user(id)
+    ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- proj_project -> sys_user (leader/teacher)
+ALTER TABLE proj_project ADD CONSTRAINT fk_project_leader
+    FOREIGN KEY (leader_id) REFERENCES sys_user(id)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE proj_project ADD CONSTRAINT fk_project_teacher
+    FOREIGN KEY (teacher_id) REFERENCES sys_user(id)
+    ON DELETE SET NULL ON UPDATE CASCADE;
+-- proj_project -> sys_college
+ALTER TABLE proj_project ADD CONSTRAINT fk_project_college
+    FOREIGN KEY (college_id) REFERENCES sys_college(id)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- proj_team_member -> proj_project / sys_user
+ALTER TABLE proj_team_member ADD CONSTRAINT fk_team_project
+    FOREIGN KEY (project_id) REFERENCES proj_project(id)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE proj_team_member ADD CONSTRAINT fk_team_student
+    FOREIGN KEY (student_id) REFERENCES sys_user(id)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- proj_review -> proj_project / sys_user
+ALTER TABLE proj_review ADD CONSTRAINT fk_review_project
+    FOREIGN KEY (project_id) REFERENCES proj_project(id)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE proj_review ADD CONSTRAINT fk_review_reviewer
+    FOREIGN KEY (reviewer_id) REFERENCES sys_user(id)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- proj_budget -> proj_project
+ALTER TABLE proj_budget ADD CONSTRAINT fk_budget_project
+    FOREIGN KEY (project_id) REFERENCES proj_project(id)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- proj_expense -> proj_project / sys_user / proj_budget
+ALTER TABLE proj_expense ADD CONSTRAINT fk_expense_project
+    FOREIGN KEY (project_id) REFERENCES proj_project(id)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE proj_expense ADD CONSTRAINT fk_expense_applicant
+    FOREIGN KEY (applicant_id) REFERENCES sys_user(id)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE proj_expense ADD CONSTRAINT fk_expense_budget_item
+    FOREIGN KEY (budget_item_id) REFERENCES proj_budget(id)
+    ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- proj_achievement -> proj_project
+ALTER TABLE proj_achievement ADD CONSTRAINT fk_achievement_project
+    FOREIGN KEY (project_id) REFERENCES proj_project(id)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- sys_attachment -> sys_user
+ALTER TABLE sys_attachment ADD CONSTRAINT fk_attachment_uploader
+    FOREIGN KEY (uploader_id) REFERENCES sys_user(id)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- proj_midterm_check -> proj_project / sys_user
+ALTER TABLE proj_midterm_check ADD CONSTRAINT fk_midterm_project
+    FOREIGN KEY (project_id) REFERENCES proj_project(id)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE proj_midterm_check ADD CONSTRAINT fk_midterm_reviewer
+    FOREIGN KEY (reviewer_id) REFERENCES sys_user(id)
+    ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- proj_change_request -> proj_project / sys_user
+ALTER TABLE proj_change_request ADD CONSTRAINT fk_change_project
+    FOREIGN KEY (project_id) REFERENCES proj_project(id)
+    ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE proj_change_request ADD CONSTRAINT fk_change_applicant
+    FOREIGN KEY (applicant_id) REFERENCES sys_user(id)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- sys_operation_log -> sys_user (log留存历史，不级联删除)
+ALTER TABLE sys_operation_log ADD CONSTRAINT fk_log_user
+    FOREIGN KEY (user_id) REFERENCES sys_user(id)
+    ON DELETE SET NULL ON UPDATE CASCADE;
+

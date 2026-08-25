@@ -279,3 +279,37 @@ class CacheKeys:
     # 项目详情
     PROJECT_DETAIL = "proj:detail:{project_id}"
     PROJECT_TTL = CACHE_5_MIN
+
+    # JWT Token 黑名单
+    BLACKLIST_ACCESS = "auth:blacklist:access:{jti}"
+    BLACKLIST_REFRESH = "auth:blacklist:refresh:{jti}"
+
+
+class TokenBlacklist:
+    """
+    JWT Token 黑名单（用户登出 / 强制下线使用）
+    - 存入Redis时 TTL 自动设为 Token 剩余过期时间
+    - Redis不可用时降级为本地内存缓存
+    """
+    @staticmethod
+    def _key(token_type: str, jti: str) -> str:
+        if token_type == "refresh":
+            return CacheKeys.BLACKLIST_REFRESH.format(jti=jti)
+        return CacheKeys.BLACKLIST_ACCESS.format(jti=jti)
+
+    @classmethod
+    def add(cls, token_type: str, jti: str, ttl_seconds: int) -> None:
+        """将指定token加入黑名单（过期时间=token剩余有效期）"""
+        if not jti or ttl_seconds <= 0:
+            return
+        key = cls._key(token_type, jti)
+        # 值写 1 表示已吊销，TTL 由 Redis 自动清理，过期后该黑名单条目无意义
+        redis_client.set(key, 1, expire_seconds=ttl_seconds)
+
+    @classmethod
+    def is_blacklisted(cls, token_type: str, jti: str) -> bool:
+        """检查 token 是否已被加入黑名单"""
+        if not jti:
+            return False
+        key = cls._key(token_type, jti)
+        return redis_client.exists(key)

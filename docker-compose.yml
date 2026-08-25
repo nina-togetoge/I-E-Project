@@ -1,13 +1,28 @@
 # ============================================================
 # 校园创新创业项目管理平台 - Docker Compose 编排文件
-# 仅部署 FastAPI 应用；MySQL 和 Redis 使用本地已部署服务
-# 使用：docker-compose up -d --build
+# 编排：后端(FastAPI) + 两种前端模式（生产 Nginx / 开发 Vite Dev）；MySQL/Redis 用本地部署
+#
+# 启动方式：
+#   ┌─────────────────────────────────────────────────────────────────────┐
+#   │ 生产模式 (Nginx 托管 dist)：                                        │
+#   │   docker compose up -d --build   # 前端访问 http://127.0.0.1:8080   │
+#   │                                                                     │
+#   │ 开发模式 (Vite + 热重载 HMR)：                                      │
+#   │   docker compose --profile dev up -d   # 前端访问 http://127.0.0.1:5173 │
+#   │   ★ 改 src/** 代码 → 自动轮询监听 → HMR 推送 → 浏览器无刷新更新     │
+#   │                                                                     │
+#   │ 关闭：                                                              │
+#   │   docker compose --profile dev down  # 连带关闭 dev 模式服务        │
+#   └─────────────────────────────────────────────────────────────────────┘
+#
+# 后端接口 / 文档：
+#   http://127.0.0.1:8000 / http://127.0.0.1:8000/docs
 # ============================================================
 version: "3.8"
 
 services:
   # ============================================================
-  # FastAPI 应用
+  # FastAPI 应用（源码挂载 + uvicorn --reload，始终热重载）
   # ============================================================
   app:
     build:
@@ -22,30 +37,35 @@ services:
       DEBUG: "True"
       HOST: "0.0.0.0"
       PORT: "8000"
-      # ---- MySQL（连接宿主机本地 MySQL）----
-      # host.docker.internal 是 Docker 容器访问宿主机的特殊域名
+      # CORS：覆盖三种入口来源
+      #   5173 → Vite dev (docker 或本机 npm run dev)
+      #   8080 → Nginx 生产容器
+      #   80   → 无端口直访
+      CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173","http://localhost:8080","http://127.0.0.1:8080","http://localhost","http://127.0.0.1"]'
+      # ---- 数据库/Redis连接：容器访问宿主机用 host.docker.internal ----
       DB_HOST: "host.docker.internal"
       DB_PORT: "3306"
       DB_USER: "root"
-      DB_PASSWORD: "2023011630"
       DB_NAME: "ie_project_db"
       DB_CHARSET: "utf8mb4"
-      # ---- Redis（连接宿主机本地 Docker Redis）----
       REDIS_HOST: "host.docker.internal"
       REDIS_PORT: "6379"
-      REDIS_PASSWORD: "2023011630"  # 如果你的 Redis 有密码，在这里填写
       REDIS_DB: "0"
-      # ---- JWT ----
-      JWT_SECRET_KEY: "ie_project_management_secret_key_2024_change_in_production"
+      # ---- JWT过期时间 ----
       JWT_ALGORITHM: "HS256"
       ACCESS_TOKEN_EXPIRE_MINUTES: "120"
       REFRESH_TOKEN_EXPIRE_DAYS: "7"
+      # ---- 安全：敏感配置全部从 backend/.env 读取 ----
+      #   env_file 会从 backend/.env 注入：DB_PASSWORD / REDIS_PASSWORD / JWT_SECRET_KEY
       # ---- 文件上传 ----
       UPLOAD_DIR: "static/uploads"
       MAX_UPLOAD_SIZE: "10485760"
       ALLOWED_EXTENSIONS: ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.zip,.rar"
       # ---- 全文检索 ----
       WHOOSH_INDEX_DIR: "static/whoosh_index"
+    # 从 backend/.env 读取敏感配置（DB_PASSWORD / REDIS_PASSWORD / JWT_SECRET_KEY 等）
+    env_file:
+      - ./backend/.env
     ports:
       - "8000:8000"
     volumes:
@@ -57,10 +77,73 @@ services:
       # 索引持久化
       - app_index:/app/static/whoosh_index
     extra_hosts:
-      # 确保容器内可以解析 host.docker.internal
+      # 确保容器内可以解析 host.docker.internal（访问宿主机 MySQL / Redis）
       - "host.docker.internal:host-gateway"
     # ★ 开发模式：--reload 热重载
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]
+
+  # ============================================================
+  # 前端【生产模式】：Nginx 托管 dist 静态产物
+  #   - 用 Dockerfile 多阶段构建 Vite 产物
+  #   - 访问端口：宿主机 8080 → 容器 Nginx 80
+  #   - 代码变更后需要重新构建镜像：docker compose up -d --build frontend
+  # ============================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ie-frontend
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      # 把 Nginx 80 映射到宿主机 8080，避免跟 Vite dev 的 5173 端口冲突
+      # 想默认 80 端口直访可改成 "80:80"
+      - "8080:80"
+    depends_on:
+      - app
+    # Nginx 容器内通过 compose 内部 DNS 直接以服务名 "app:8000" 反代后端 /api
+
+  # ============================================================
+  # 前端【开发模式】：Vite Dev Server + HMR 热重载
+  #   - 不默认启动（profiles: [dev]），需加 --profile dev 参数
+  #   - 端口：宿主机 5173 → 容器 5173
+  #   - 挂载：
+  #       ./frontend          → /app             源码实时同步（改 .vue/.ts 立即生效）
+  #       frontend_node_modules → /app/node_modules  匿名卷缓存 Linux 依赖，不覆盖宿主机
+  #   - 监听策略：vite.config.ts 会根据 DOCKER_RUNNING=1 启用 usePolling 轮询
+  #       Windows + bind mount 下 inotify 不可靠，轮询是唯一稳定方案
+  # ============================================================
+  frontend-dev:
+    image: node:20-alpine
+    container_name: ie-frontend-dev
+    profiles: ["dev"]
+    restart: unless-stopped
+    working_dir: /app
+    environment:
+      TZ: Asia/Shanghai
+      DOCKER_RUNNING: "1"
+      # 告诉 Vite dev server /api 代理 → compose 后端服务名
+      VITE_PROXY_TARGET: "http://app:8000"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - app
+    volumes:
+      # 整个前端源码挂载进容器，本地保存文件容器里立刻同步
+      - ./frontend:/app
+      # node_modules 用独立 Docker 卷，避免：
+      #   1) 宿主机 node_modules（Windows 包）覆盖容器内 Linux 原生依赖
+      #   2) 每次启动都重新 npm ci，节省几分钟
+      - frontend_node_modules:/app/node_modules
+    # 首次启动：先装依赖 → 启动 Vite dev server
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5173/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
 
 # ============================================================
 # 数据卷
@@ -70,3 +153,7 @@ volumes:
     driver: local
   app_index:
     driver: local
+  # 前端 dev 模式：容器内 node_modules 持久化缓存（重装/重启容器不丢依赖）
+  frontend_node_modules:
+    driver: local
+

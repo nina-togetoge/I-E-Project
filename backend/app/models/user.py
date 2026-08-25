@@ -48,6 +48,7 @@ class SysUser(BaseModel):
     )
     avatar: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="头像URL")
     status: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, comment="状态: 0-禁用 1-启用")
+    force_change_pwd: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, comment="首次登录强制改密:0-否 1-是")
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="最后登录时间")
     last_login_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, comment="最后登录IP")
 
@@ -148,7 +149,7 @@ class SysAttachment(BaseModel):
     file_name: Mapped[str] = mapped_column(String(255), nullable=False, comment="原始文件名")
     file_path: Mapped[str] = mapped_column(String(500), nullable=False, comment="存储路径")
     file_size: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="文件大小(字节)")
-    file_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, comment="文件MIME类型")
+    file_type: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="文件MIME类型")
     file_ext: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, comment="文件扩展名")
     uploader_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="上传人ID")
     uploader_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="上传人姓名(冗余)")

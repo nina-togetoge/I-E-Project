@@ -16,6 +16,8 @@ from app.core.exceptions import (
 from app.core.deps import PaginationParams, DataScope
 from app.crud.user import CollegeCRUD, UserCRUD
 from app.crud.project import ProjectCRUD, AchievementCRUD
+from app.crud.review import ReviewCRUD
+from app.schemas.review import REVIEW_STAGE_COLLEGE
 from app.models import (
     ProjProject, SysUser, ProjAchievement,
 )
@@ -185,6 +187,20 @@ class ProjectService:
         elif "leader_id" not in data or not data.get("leader_id"):
             raise ParamValidateException(message="管理员创建需额外指定负责人（通过扩展字段，此示例暂不支持）")
 
+        # 直接提交时，必须先校验必填项（与 submit 方法保持一致）
+        if not as_draft:
+            missing = []
+            if not req.project_name:
+                missing.append("项目名称")
+            if not req.teacher_id:
+                missing.append("指导教师")
+            if not req.team_members or len(req.team_members) == 0:
+                missing.append("团队成员(至少1人)")
+            if not req.budgets or len(req.budgets) == 0:
+                missing.append("预算明细")
+            if missing:
+                raise ParamValidateException(message="提交前请完善以下必填项：" + "、".join(missing))
+
         data["status"] = PROJECT_STATUS_DRAFT if as_draft else PROJECT_STATUS_PENDING_COLLEGE
         if not as_draft:
             data["submit_time"] = datetime.now()
@@ -195,6 +211,15 @@ class ProjectService:
             year = date.today().year
             obj.project_no = ProjectCRUD.generate_project_no(db, year)
             db.flush()
+
+        # 4. 关联临时附件（biz_id=0 的附件）到新项目
+        if req.attachment_ids:
+            from app.models.user import SysAttachment
+            db.query(SysAttachment).filter(
+                SysAttachment.id.in_(req.attachment_ids),
+                SysAttachment.biz_type == "project",
+                SysAttachment.biz_id == 0,
+            ).update({SysAttachment.biz_id: obj.id}, synchronize_session=False)
 
         db.commit()
         db.refresh(obj)
@@ -245,6 +270,22 @@ class ProjectService:
             year = date.today().year
             obj.project_no = ProjectCRUD.generate_project_no(db, year)
         db.flush()
+
+        # 创建学院初审占位审核记录，使指导教师在待审核列表中看到该项目
+        if obj.teacher_id and not ReviewCRUD.exist_by_project_stage_reviewer(
+            db, obj.id, REVIEW_STAGE_COLLEGE, obj.teacher_id
+        ):
+            teacher = UserCRUD.get_by_id(db, obj.teacher_id)
+            ReviewCRUD.create(db, {
+                "project_id": obj.id,
+                "review_stage": REVIEW_STAGE_COLLEGE,
+                "reviewer_id": obj.teacher_id,
+                "reviewer_name": teacher.real_name if teacher else "",
+                "review_result": 99,  # 占位=待评审
+                "review_comment": None,
+                "review_time": datetime.now(),
+            })
+
         db.commit()
         return ProjectSubmitResponse(
             project_id=obj.id,

@@ -13,3 +13,6 @@ alembic/versions/*
 Dockerfile
 docker-compose.yml
 .dockerignore
+# ★ Windows 本地离线依赖目录：里面的 .pyd 二进制仅适用于 Windows
+#   容器内必须使用镜像构建阶段 pip install -r requirements.txt 安装的 Linux 版本
+python_packages/

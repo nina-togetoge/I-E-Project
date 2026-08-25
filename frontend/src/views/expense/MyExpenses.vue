@@ -47,8 +47,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, type FormInstance, type FormRules } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, onMounted } from 'vue'
+import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import PaginationTable from '@/components/PaginationTable.vue'
 import type { TableColumn } from '@/components/PaginationTable.vue'
@@ -116,7 +116,7 @@ function handlePageChange(p: number, ps: number) {
 
 async function handleSubmit() {
   if (!formRef.value) return
-  await formRef.value.validate(async (valid) => {
+  await formRef.value.validate(async (valid: boolean) => {
     if (!valid) return
     submitLoading.value = true
     try {

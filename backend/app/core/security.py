@@ -5,6 +5,7 @@ JWT 认证与权限控制核心模块
 from typing import Optional, List, Set, Dict, Any
 from datetime import datetime, timedelta, timezone
 from enum import IntEnum
+import uuid
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -16,6 +17,19 @@ from app.core.config import settings
 from app.core.exceptions import AuthException, PermissionDeniedException
 from app.database.session import get_db
 from app.models import SysUser
+from app.utils.redis_cache import TokenBlacklist
+
+
+# ====================================================================
+# Token 来源 URL 白名单
+# ====================================================================
+# 仅以下路由前缀允许从 ?token= URL 查询参数 / Cookie 兜底携带 access token
+# 其他接口必须严格从 Authorization: Bearer <token> 头中携带，避免Referer/日志泄露
+URL_TOKEN_WHITELIST_PREFIXES: tuple = (
+    "/api/files/download/",   # 文件下载（<a>直链场景无header能力）
+    "/api/files/preview/",    # 文件预览（<img>/<iframe>直链场景）
+    "/api/projects/export",   # 项目导出（浏览器新标签页下载）
+)
 
 
 # ====================================================================
@@ -79,17 +93,28 @@ oauth2_scheme = OAuth2PasswordBearer(
 
 def _create_token(subject: str, token_type: str, expires_delta: timedelta, extra: Optional[Dict[str, Any]] = None) -> str:
     """创建JWT令牌的通用函数"""
+    now = datetime.now(timezone.utc)
     to_encode = {
-        "sub": subject,                    # 主体：存储username
-        "type": token_type,                # 令牌类型：access / refresh
-        "iat": datetime.now(timezone.utc),  # 签发时间
+        "jti": uuid.uuid4().hex,      # 令牌唯一ID（用于黑名单吊销）
+        "sub": subject,               # 主体：存储username
+        "type": token_type,           # 令牌类型：access / refresh
+        "iat": int(now.timestamp()),  # 签发时间
     }
     if extra:
         to_encode.update(extra)
-    expire = datetime.now(timezone.utc) + expires_delta
-    to_encode.update({"exp": expire})
+    expire = now + expires_delta
+    to_encode.update({"exp": int(expire.timestamp())})
     encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
     return encoded_jwt
+
+
+def extract_jti_exp(payload: Dict[str, Any]) -> tuple[Optional[str], int]:
+    """从已解析 payload 中抽取 (jti, 剩余秒数)  ——  用于黑名单登记"""
+    jti = payload.get("jti")
+    exp = payload.get("exp")
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    remaining = max(0, int(exp) - now_ts) if exp else 0
+    return jti, remaining
 
 
 def create_access_token(user: SysUser, expires_delta: Optional[timedelta] = None) -> str:
@@ -140,10 +165,14 @@ async def get_current_user(
 ) -> SysUser:
     """
     FastAPI 依赖函数：获取当前登录用户
-    优先从 Header 获取 token，验证通过后从数据库加载用户并校验状态
+    默认严格从 Authorization: Bearer 头取 token；
+    仅在白名单接口允许从 ?token= 查询参数或 Cookie 兜底携带（用于下载/预览/导出场景）。
     """
-    # 允许从 query 参数也携带 token（用于文件下载等场景）
-    if not token:
+    path = request.url.path
+    allow_url_fallback = any(path.startswith(p) for p in URL_TOKEN_WHITELIST_PREFIXES)
+
+    # [P1-1] URL token 兜底仅对白名单路径开放，其他接口强制使用 Authorization Header
+    if not token and allow_url_fallback:
         token = request.query_params.get("token") or request.cookies.get("access_token")
     if not token:
         raise AuthException(message="未登录或登录已过期，请先登录")
@@ -153,6 +182,11 @@ async def get_current_user(
     # 校验 token 类型
     if payload.get("type") != "access":
         raise AuthException(message="无效的令牌类型，请使用访问令牌")
+
+    # [P1-8] Redis 黑名单校验（登出/强制下线时吊销）
+    jti = payload.get("jti")
+    if TokenBlacklist.is_blacklisted("access", jti):
+        raise AuthException(message="登录已失效，请重新登录")
 
     user_id: Optional[int] = payload.get("uid")
     username: Optional[str] = payload.get("sub")

@@ -34,9 +34,10 @@ router_change = APIRouter(prefix="/changes", tags=["变更/延期申请"])
 @router_review.get("", response_model=ResponseModel[PageResult[ReviewRecordItem]],
                    summary="审核记录列表(教师/管理员)")
 def api_review_list(
-    keyword: Optional[str] = None,
-    stage: Optional[int] = None,
-    status: Optional[int] = None,
+    keyword: Optional[str] = Query(default=None, max_length=100),
+    # [P1-7] 阶段参数加合法值约束: 1学院 2校级 3专家 4结题
+    stage: Optional[int] = Query(default=None, ge=1, le=4, description="审核阶段 1-4"),
+    status: Optional[int] = Query(default=None, ge=0, le=2, description="审核结果 0-2"),
     pager: PaginationParams = Depends(),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(RequireRole(
@@ -199,7 +200,7 @@ def api_change_list(
                     summary="审批变更申请(通过)")
 def api_change_approve(
     change_id: int,
-    comment: str = "",
+    comment: str = Query(default="", max_length=1000, description="审批意见"),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(RequireRole(RoleEnum.TEACHER, RoleEnum.ADMIN)),
     ctx: OperationContext = Depends(),
@@ -214,7 +215,7 @@ def api_change_approve(
                     summary="审批变更申请(驳回)")
 def api_change_reject(
     change_id: int,
-    comment: str = "",
+    comment: str = Query(default="", max_length=1000, description="驳回理由"),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(RequireRole(RoleEnum.TEACHER, RoleEnum.ADMIN)),
     ctx: OperationContext = Depends(),

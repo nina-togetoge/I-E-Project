@@ -45,6 +45,7 @@ import { ElMessage } from 'element-plus'
 import { Upload, UploadFilled } from '@element-plus/icons-vue'
 import type { UploadFile, UploadProps, UploadUserFile } from 'element-plus'
 import { useUserStore } from '@/store/user'
+import { bytesToMB, formatSize } from '@/utils/format'
 
 const props = withDefaults(
   defineProps<{
@@ -101,10 +102,10 @@ const beforeUpload: UploadProps['beforeUpload'] = (file: File) => {
     ElMessage.error(`不支持的文件格式：${ext}，仅支持 ${acceptExtensions.value}`)
     return false
   }
-  // 大小校验
-  const sizeMB = file.size / 1024 / 1024
+  // 大小校验（复用统一格式工具）
+  const sizeMB = bytesToMB(file.size)
   if (sizeMB > props.maxSize) {
-    ElMessage.error(`文件大小超过限制：${sizeMB.toFixed(1)}MB，最大允许 ${props.maxSize}MB`)
+    ElMessage.error(`文件大小超过限制：${formatSize(file.size)}，最大允许 ${props.maxSize}MB`)
     return false
   }
   return true

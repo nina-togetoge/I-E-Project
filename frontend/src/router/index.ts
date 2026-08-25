@@ -171,6 +171,20 @@ router.beforeEach(async (to, _from, next) => {
       await userStore.fetchUserInfo()
     }
 
+    // [P0-2] 首次登录强制改密：仅允许访问 /profile?tab=password，其余路由全部拦截
+    if (userStore.userInfo?.force_change_pwd === 1) {
+      if (to.path === '/profile') {
+        // 强制跳转到改密 Tab，并携带 forceReset 标记锁死切换
+        if (to.query.tab !== 'password') {
+          next({ path: '/profile', query: { tab: 'password', forceReset: '1' } })
+          return
+        }
+      } else if (!whiteList.includes(to.path)) {
+        next({ path: '/profile', query: { tab: 'password', forceReset: '1' } })
+        return
+      }
+    }
+
     // 已登录访问登录页，重定向首页
     if (to.path === '/login') {
       next('/')

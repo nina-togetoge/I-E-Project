@@ -3,6 +3,7 @@
 封装路由层中常用的依赖：分页参数、数据权限范围、操作上下文等
 """
 from typing import Optional, Dict, Any
+from urllib.parse import quote
 from fastapi import Request, Depends, Response
 from sqlalchemy.orm import Session
 
@@ -22,7 +23,8 @@ class PaginationParams:
 
     def __init__(self, page: int = 1, page_size: int = 10, order_by: Optional[str] = None, order_dir: str = "desc"):
         self.page = max(1, page)                                    # 最小第1页
-        self.page_size = min(max(1, page_size), 500)                # 1~500，防拉爆
+        # [P1-7] 上限从 500 收紧到 200，进一步防止恶意大分页拉爆数据库
+        self.page_size = min(max(1, page_size), 200)                # 1~200
         self.offset = (self.page - 1) * self.page_size
         self.limit = self.page_size
         self.order_by = order_by
@@ -55,17 +57,17 @@ class OperationContext:
     def set_desc(self, desc: str) -> None:
         """设置操作描述（会被记录到操作日志）"""
         self.desc = desc
-        # 实时写入响应头，中间件后续读取
-        self.response.headers["X-Log-Desc"] = desc
+        # 实时写入响应头，中间件后续读取（URL编码中文以兼容HTTP头）
+        self.response.headers["X-Log-Desc"] = quote(str(desc))
 
     def __enter__(self):
         # 将当前用户信息写入响应头（中间件读取用）
         if self.current_user:
             self.response.headers["X-Log-User-Id"] = str(self.current_user.id)
             self.response.headers["X-Log-Username"] = self.current_user.username
-            self.response.headers["X-Log-RealName"] = self.current_user.real_name
+            self.response.headers["X-Log-RealName"] = quote(str(self.current_user.real_name))
             self.response.headers["X-Log-Role"] = str(self.current_user.role)
-            self.response.headers["X-Log-Desc"] = self.desc
+            self.response.headers["X-Log-Desc"] = quote(str(self.desc))
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

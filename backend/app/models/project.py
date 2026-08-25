@@ -21,7 +21,7 @@ class ProjProject(BaseModel):
     project_type: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, comment="项目类型")
     # 项目级别: 1-校级 2-省级 3-国家级
     project_level: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, comment="项目级别")
-    college_id: Mapped[int] = mapped_column(BigInteger, nullable=False, comment="申报学院ID")
+    college_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_college.id"), nullable=False, comment="申报学院ID")
     leader_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_user.id"), nullable=False, comment="项目负责人ID")
     teacher_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("sys_user.id"), nullable=True, comment="指导教师ID")
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, comment="立项开始日期")
@@ -99,6 +99,11 @@ class ProjProject(BaseModel):
         "ProjChangeRequest",
         back_populates="project",
         foreign_keys="ProjChangeRequest.project_id"
+    )
+    college: Mapped[Optional["SysCollege"]] = relationship(
+        "SysCollege",
+        foreign_keys=[college_id],
+        viewonly=True,
     )
 
     __table_args__ = (

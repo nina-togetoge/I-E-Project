@@ -90,6 +90,7 @@ class ProjectCreate(BaseModel):
     expected_results: Optional[str] = None
     team_members: List[TeamMemberCreate] = Field(default_factory=list, description="团队成员(不含负责人)")
     budgets: List[BudgetItemCreate] = Field(default_factory=list, description="预算明细")
+    attachment_ids: List[int] = Field(default_factory=list, description="上传时 biz_id=0 的临时附件IDs，创建后关联到项目")
 
     @model_validator(mode="after")
     def check_dates(self):
@@ -259,6 +260,13 @@ class ExpenseReviewRequest(BaseModel):
     """审批请求：approved=True通过(推进下一阶段)，False驳回"""
     approved: bool = Field(..., description="True=通过 False=驳回")
     opinion: Optional[str] = None
+
+
+class ExpenseQueryRequest(BaseModel):
+    """[P1-5] 经费列表查询请求（Pydantic校验，替代裸dict）"""
+    applicant_id: Optional[int] = Field(default=None, ge=1, description="申请人ID")
+    status: Optional[int] = Field(default=None, ge=1, le=7, description="报销状态 1-7")
+    keyword: Optional[str] = Field(default=None, max_length=100, description="关键词(项目名称/单号/说明)")
 
 
 class ExpenseSummary(BaseModel):

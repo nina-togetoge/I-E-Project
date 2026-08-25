@@ -6,6 +6,7 @@ import uuid
 import mimetypes
 from datetime import datetime
 from typing import Optional
+from urllib.parse import quote as _url_quote
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
@@ -37,6 +38,16 @@ router_upload = APIRouter(prefix="/files", tags=["附件管理"])
 router_search = APIRouter(prefix="/search", tags=["全文检索"])
 router_excel = APIRouter(prefix="/excel", tags=["Excel导入导出"])
 router_health = APIRouter(tags=["系统"])
+
+
+def _attachment_header(filename: str) -> dict:
+    """生成兼容中文文件名的 Content-Disposition 头(RFC 6266)。
+
+    HTTP 头只能用 latin-1 编码，直接放中文文件名会触发
+    UnicodeEncodeError。这里同时给出 ASCII fallback 与 UTF-8 编码版本。
+    """
+    encoded = _url_quote(filename, safe="")
+    return {"Content-Disposition": f"attachment; filename=\"{encoded}\"; filename*=UTF-8''{encoded}"}
 
 
 # ====================================================================
@@ -110,7 +121,7 @@ def _secure_filename(filename: str) -> str:
 @router_upload.post("/upload", response_model=ResponseModel, summary="单文件上传")
 async def api_upload(
     biz_type: str = Form(..., pattern=r"^[a-z_]{1,64}$", description="业务类型: project/expense/achievement/review"),
-    biz_id: int = Form(..., ge=1, description="业务记录ID"),
+    biz_id: int = Form(default=0, ge=0, description="业务记录ID，0表示临时上传待关联"),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: SysUser = require_login,
@@ -129,9 +140,8 @@ async def api_upload(
     with open(save_path, "wb") as f:
         f.write(bytes_data)
 
-    # 3. 权限校验：用户是否有权上传到此业务
-    # 简化：管理员可传任意；学生仅可传自己是负责人的项目
-    if current_user.role != RoleEnum.ADMIN and biz_type in ("project", "achievement"):
+    # 3. 权限校验：仅当关联已有业务记录时才校验
+    if biz_id > 0 and current_user.role != RoleEnum.ADMIN and biz_type in ("project", "achievement"):
         p = ProjectCRUD.get_by_id(db, biz_id)
         if not p:
             raise ResourceNotFoundException(message="业务记录不存在")
@@ -204,6 +214,38 @@ def api_download(
     return FileResponse(path=att.file_path, media_type=mime, filename=att.file_name, headers=headers)
 
 
+@router_upload.get("/preview/{att_id}", summary="在线预览附件（inline）")
+def api_preview(
+    att_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = require_login,
+):
+    att = db.query(SysAttachment).filter(SysAttachment.id == att_id, SysAttachment.is_deleted == 0).first()
+    if not att:
+        raise ResourceNotFoundException(message="文件不存在")
+    # 预览权限：与下载权限一致
+    if current_user.role != RoleEnum.ADMIN and att.uploader_id != current_user.id:
+        if att.biz_type in ("project", "achievement", "review"):
+            p = ProjectCRUD.get_by_id(db, att.biz_id)
+            if p:
+                ok = (p.leader_id == current_user.id or
+                      p.teacher_id == current_user.id)
+                if not ok:
+                    from app.models import ProjTeamMember
+                    ok = db.query(ProjTeamMember).filter(
+                        ProjTeamMember.project_id == p.id,
+                        ProjTeamMember.student_id == current_user.id,
+                    ).first() is not None
+                if not ok:
+                    raise PermissionDeniedException(message="无权预览此文件")
+    if not os.path.exists(att.file_path):
+        raise ResourceNotFoundException(message="服务器上文件已丢失")
+
+    mime = att.file_type or mimetypes.guess_type(att.file_name)[0] or "application/octet-stream"
+    # inline 模式：浏览器直接展示而非下载
+    return FileResponse(path=att.file_path, media_type=mime, headers={"Content-Disposition": "inline"})
+
+
 @router_upload.get("/list/{biz_type}/{biz_id}", response_model=ResponseModel, summary="查询业务下附件列表")
 def api_attachment_list(
     biz_type: str, biz_id: int,
@@ -232,7 +274,7 @@ def api_attachment_list(
 @router_excel.get("/template/user", summary="下载-用户批量导入模板")
 def api_user_template():
     xlsx = ExcelHelper.generate_template(USER_IMPORT_COLUMNS, sheet_name="用户导入")
-    headers = {"Content-Disposition": 'attachment; filename="用户批量导入模板.xlsx"'}
+    headers = _attachment_header("用户批量导入模板.xlsx")
     return StreamingResponse(
         iter([xlsx]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers=headers
@@ -242,7 +284,7 @@ def api_user_template():
 @router_excel.get("/template/project", summary="下载-项目基础信息导入模板")
 def api_project_template():
     xlsx = ExcelHelper.generate_template(PROJECT_IMPORT_COLUMNS, sheet_name="项目导入")
-    headers = {"Content-Disposition": 'attachment; filename="项目基础信息导入模板.xlsx"'}
+    headers = _attachment_header("项目基础信息导入模板.xlsx")
     return StreamingResponse(
         iter([xlsx]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers=headers
@@ -278,12 +320,12 @@ def api_export_projects(
     data_scope: DataScope = Depends(),
     current_user: SysUser = require_login,
 ):
-    # 不分页拉取全部
-    pager = PaginationParams(page=1, page_size=10000)
+    # [P1-7] 导出上限收紧：一次最多导出 2000 条（原 10000 过大，拉爆DB/内存）
+    pager = PaginationParams(page=1, page_size=2000)
     items, _ = ProjectService.paginate(db, pager, params, data_scope)
     rows = [i.model_dump(mode="python") for i in items]
     xlsx = ExcelHelper.export_list(ExportTemplates.project_list_columns(), rows, sheet_name="项目名单")
-    headers = {"Content-Disposition": f'attachment; filename="项目名单_{datetime.now().strftime("%Y%m%d")}.xlsx"'}
+    headers = _attachment_header(f'项目名单_{datetime.now().strftime("%Y%m%d")}.xlsx')
     return StreamingResponse(
         iter([xlsx]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers=headers
@@ -306,7 +348,7 @@ def api_export_logs(
     from app.schemas.user import OperationLogItem
     rows = [OperationLogItem.model_validate(o).model_dump(mode="python") for o in rows_orm]
     xlsx = ExcelHelper.export_list(ExportTemplates.operation_log_columns(), rows, sheet_name="操作日志")
-    headers = {"Content-Disposition": f'attachment; filename="操作日志_{datetime.now().strftime("%Y%m%d")}.xlsx"'}
+    headers = _attachment_header(f'操作日志_{datetime.now().strftime("%Y%m%d")}.xlsx')
     return StreamingResponse(
         iter([xlsx]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers=headers
@@ -319,7 +361,9 @@ def api_export_logs(
 @router_search.get("/projects", response_model=ResponseModel, summary="全文检索-项目")
 def api_search_projects(
     keyword: str = Query(..., min_length=1, max_length=128, description="关键词"),
-    page: int = 1, page_size: int = 20,
+    page: int = Query(default=1, ge=1),
+    # [P1-7] 搜索页大小上限从无限制 → 50，防止单页拉爆Whoosh索引
+    page_size: int = Query(default=20, ge=1, le=50, description="每页条数(最大50)"),
     college_id: Optional[int] = None,
     status: Optional[int] = None,
 ):

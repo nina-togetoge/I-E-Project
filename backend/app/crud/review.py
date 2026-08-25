@@ -31,11 +31,22 @@ class ReviewCRUD:
 
     @staticmethod
     def exist_by_project_stage_reviewer(db: Session, project_id: int, stage: int, reviewer_id: int) -> bool:
-        """判断某阶段某评审人是否已评审过"""
+        """判断某阶段某评审人是否已有审核记录（含占位记录）"""
         return db.query(ProjReview.id).filter(
             ProjReview.project_id == project_id,
             ProjReview.review_stage == stage,
             ProjReview.reviewer_id == reviewer_id,
+            ProjReview.is_deleted == 0,
+        ).first() is not None
+
+    @staticmethod
+    def exist_real_review(db: Session, project_id: int, stage: int, reviewer_id: int) -> bool:
+        """判断某阶段某评审人是否已正式评审过（排除占位记录 review_result=99）"""
+        return db.query(ProjReview.id).filter(
+            ProjReview.project_id == project_id,
+            ProjReview.review_stage == stage,
+            ProjReview.reviewer_id == reviewer_id,
+            ProjReview.review_result != 99,
             ProjReview.is_deleted == 0,
         ).first() is not None
 

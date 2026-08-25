@@ -112,7 +112,7 @@ async function handleTokenExpired(config: AxiosRequestConfig): Promise<any> {
 
   isRefreshing = true
   try {
-    await userStore.refreshToken()
+    await userStore.doRefreshToken()
     // 重试原请求
     if (config.headers) {
       config.headers.Authorization = `Bearer ${userStore.accessToken}`

@@ -16,10 +16,10 @@ from app.core.exceptions import BizException
 from app.database.session import get_db
 from app.models import SysUser
 from app.schemas.user import (
-    LoginRequest, LoginResponse, RefreshTokenRequest, UserRegister,
+    LoginRequest, LoginResponse, RefreshTokenRequest, UserRegister, LogoutRequest,
     UserCreate, UserUpdate, UserProfileUpdate, UserInfo, UserListItem,
     UserQueryParams, UserBatchStatusRequest, UserBatchDeleteRequest,
-    ImportResultResponse, CollegeCreate, CollegeUpdate, CollegeResponse,
+    UserBatchCreateRequest, ImportResultResponse, CollegeCreate, CollegeUpdate, CollegeResponse,
     OperationLogQueryParams, OperationLogItem,
 )
 from app.services.user_service import AuthService, UserService, CollegeService, OperationLogService
@@ -64,6 +64,25 @@ def api_me(current_user: SysUser = require_login, db: Session = Depends(get_db))
     """返回当前Token对应的用户信息"""
     from app.services.user_service import AuthService
     return success(data=AuthService._build_user_info(current_user))
+
+
+@router_auth.post("/logout", response_model=ResponseModel, summary="[P1-8] 用户登出（吊销Access/Refresh Token）")
+def api_logout(
+    req: LogoutRequest,
+    request: Request,
+    current_user: SysUser = require_login,
+    ctx: OperationContext = Depends(),
+):
+    """登出：将当前 access_token & refresh_token 加入Redis黑名单，立刻失效"""
+    # 从 Authorization: Bearer xxx 头中提取原始 access token 文本
+    access_token_raw: str = ""
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        access_token_raw = auth_header[7:].strip()
+    with ctx:
+        ctx.set_desc(f"用户[{current_user.username}]登出")
+        AuthService.logout(current_user, access_token_raw, req.refresh_token)
+    return success(message="已安全登出")
 
 
 # ====================================================================
@@ -163,14 +182,15 @@ def api_batch_status(
 @router_user.post("/batch/import-result", response_model=ResponseModel[ImportResultResponse],
                   summary="批量创建用户(导入结果入库)")
 def api_batch_import(
-    users_data: list[dict],
+    req: UserBatchCreateRequest,  # [P1-6] 使用Pydantic schema校验 替代 list[dict]
     db: Session = Depends(get_db),
     current_user: SysUser = require_admin,
     ctx: OperationContext = Depends(),
 ):
     """供Excel工具层导入后调用：批量创建用户并返回导入统计"""
     with ctx:
-        ctx.set_desc(f"批量导入{len(users_data)}条用户数据")
+        ctx.set_desc(f"批量导入{len(req.users)}条用户数据")
+        users_data = [u.model_dump() for u in req.users]
         result = UserService.batch_create(db, users_data, current_user)
     return success(data=result)
 

@@ -20,6 +20,7 @@ try:
     from whoosh.qparser import MultifieldParser, QueryParser
     from whoosh.query import And, Or, Term
     from whoosh import scoring, highlight
+    from whoosh.analysis import Analyzer, Token
     import jieba  # 中文分词
     HAS_SEARCH = True
 except ImportError as e:
@@ -38,8 +39,8 @@ class JiebaTokenizer:
         if value is None:
             return []
         text = str(value)
-        # 用 jieba 精确模式分词，过滤空串和纯空格
-        tokens = [w.strip() for w in jieba.cut(text) if w and w.strip()]
+        # 用 jieba 搜索引擎模式分词，过滤空串和纯空格
+        tokens = [w.strip() for w in jieba.cut_for_search(text) if w and w.strip()]
         # 去重保留顺序（简单版）
         seen = set()
         result = []
@@ -51,9 +52,48 @@ class JiebaTokenizer:
         return result
 
 
-def jieba_analyzer(x):
-    """给Whoosh字段用的analyzer（作为 callable）"""
-    return JiebaTokenizer()(x)
+class _JiebaAnalyzer(Analyzer):
+    """Whoosh 字段分析器：基于 jieba 中文分词。
+
+    必须返回带 .text 属性的 Token 对象，否则 Whoosh 的 process_text
+    (查询路径) 在 `t.text for t in ...` 处会抛 AttributeError；
+    同时需接受 positions/chars/boosts 等 kwargs 以兼容 formats.word_values 调用。
+    """
+
+    def __call__(self, value, positions=False, chars=False,
+                 removestops=True, start_pos=0, start_char=0,
+                 mode='', **kwargs):
+        if value is None:
+            return
+        text = str(value)
+        seen = set()
+        pos = start_pos
+        char_pos = start_char
+        # 用搜索引擎模式分词：长词再切短词，提升中文召回率
+        for w in jieba.cut_for_search(text):
+            raw = w
+            w = (w or "").strip()
+            if not w or w in seen:
+                char_pos += len(raw)
+                continue
+            seen.add(w)
+            t = Token(positions=positions, chars=chars,
+                      removestops=removestops, mode=mode)
+            t.text = w
+            t.boost = 1.0
+            t.stopped = False
+            if positions:
+                t.pos = pos
+                pos += 1
+            if chars:
+                t.startchar = char_pos
+                t.endchar = char_pos + len(w)
+            char_pos += len(raw)
+            yield t
+
+
+# 全局 analyzer 实例，供 schema 字段使用
+jieba_analyzer = _JiebaAnalyzer()
 
 
 # ====================================================================
@@ -249,9 +289,12 @@ class ProjectSearchEngine:
             hits = searcher.search_page(query, pagenum=page, pagelen=page_size, terms=True)
             total = len(hits)
 
-            # 高亮配置
-            hi = highlight.HtmlFormatter(before="<mark>", after="</mark>", between=" ... ")
-            frag = highlight.ContextFragmenter(maxchars=160, surround=30)
+            # 高亮配置：在 results 对象上设置 fragmenter / formatter
+            # Whoosh 2.7.4 的 hit.highlights() 不接受 formatter/fragmenter 参数，
+            # 必须设置在 Results 对象上
+            results_obj = hits.results
+            results_obj.fragmenter = highlight.ContextFragmenter(maxchars=160, surround=30)
+            results_obj.formatter = highlight.HtmlFormatter(tagname="mark", between=" ... ")
             results = []
             for hit in hits:
                 data = dict(hit)
@@ -260,7 +303,7 @@ class ProjectSearchEngine:
                 for f in search_fields:
                     if f in hit.fields() and data.get(f):
                         try:
-                            hl = hit.highlights(f, text=data[f], formatter=hi, fragmenter=frag)
+                            hl = hit.highlights(f, text=data[f])
                             if hl:
                                 highlights[f] = hl
                         except Exception:

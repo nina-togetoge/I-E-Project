@@ -1,4 +1,4 @@
-"""
+r"""
 校园创新创业项目管理平台 - FastAPI 应用入口
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 架构：分层架构（路由 -> 服务 -> CRUD -> 模型/DB）
@@ -14,7 +14,17 @@ import os
 import sys
 
 # 确保项目根目录在 sys.path 中（方便直接 python main.py 运行）
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_PROJ_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _PROJ_ROOT)
+# 本地离线依赖目录（python_packages 中预安装了 fastapi/uvicorn/sqlalchemy 等）
+# 注意：该目录内含 Windows 编译的 .pyd 二进制，在 Docker(Linux) 环境下会导致
+# ModuleNotFoundError: No module named 'pydantic_core._pydantic_core'
+# 因此仅在非容器环境（本地 Windows 开发）才把它插入 sys.path 顶部；
+# 容器内统一使用镜像构建阶段 pip install -r requirements.txt 安装的 Linux 原生版本。
+_PKGS = os.path.join(_PROJ_ROOT, "python_packages")
+_IN_CONTAINER = os.path.exists("/.dockerenv") or os.environ.get("DOCKER_RUNNING") == "1"
+if not _IN_CONTAINER and os.path.isdir(_PKGS) and _PKGS not in sys.path:
+    sys.path.insert(0, _PKGS)
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -58,13 +68,8 @@ def create_app() -> FastAPI:
             "- 缓存：Redis(自动降级内存缓存)\n"
             "- Excel：openpyxl\n"
             "- 全文检索：Whoosh + Jieba(自动降级 LIKE 查询)\n\n"
-            "### 默认账号\n"
-            "| 账号 | 密码 | 角色 |\n"
-            "| ---- | ---- | ---- |\n"
-            "| admin | admin123 | 系统管理员 |\n"
-            "| student001 | admin123 | 学生 |\n"
-            "| teacher001 | admin123 | 指导教师 |\n"
-            "| expert001 | admin123 | 评审专家 |\n"
+            "> 安全提示：初始用户密码由系统初始化脚本生成，首次登录后请立即修改。\n"
+            "> 接口默认使用 Bearer Token 认证，详细权限请参考各路由说明。"
         ),
         version=settings.APP_VERSION,
         docs_url="/docs",

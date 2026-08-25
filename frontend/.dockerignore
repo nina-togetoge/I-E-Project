@@ -1,0 +1,11 @@
+# 前端构建时忽略的文件/目录
+node_modules/
+dist/
+.vscode/
+.idea/
+*.log
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+.env.*
