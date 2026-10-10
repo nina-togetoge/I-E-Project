@@ -97,8 +97,8 @@
       <el-card shadow="never" class="section-card">
         <template #header><span>审核操作</span></template>
 
-        <!-- 专家评分（仅专家角色） -->
-        <el-form v-if="userStore.isExpert" ref="scoreFormRef" :model="scoreForm" :rules="scoreRules" label-width="120px">
+        <!-- 专家评分（仅专家评审阶段，结题验收不打分） -->
+        <el-form v-if="userStore.isExpert && currentReviewStage === 3" ref="scoreFormRef" :model="scoreForm" :rules="scoreRules" label-width="120px">
           <el-form-item label="加权总分">
             <span class="weighted-score">{{ weightedScore.toFixed(2) }} 分</span>
           </el-form-item>

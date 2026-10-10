@@ -28,19 +28,20 @@
         {{ displayCollegeName(row) }}
       </template>
       <template #status="{ row }">
-        <el-tag :type="row.my_review_result == null ? 'warning' : 'success'">
-          {{ row.my_review_result == null ? '待评审' : '已评审' }}
+        <el-tag :type="row.status === 8 ? 'danger' : (row.my_review_result == null ? 'warning' : 'success')">
+          {{ row.status === 8 ? '待结题验收' : (row.my_review_result == null ? '待评审' : '已评审') }}
         </el-tag>
       </template>
       <template #actions="{ row }">
+        <!-- 待专家评审(未评) 或 项目处于待结题(8)需专家结题验收，均需提供入口 -->
         <el-button
-          v-if="row.my_review_result == null"
+          v-if="row.my_review_result == null || row.status === 8"
           link
           type="primary"
           size="small"
           @click="router.push(`/review/${row.project_id}`)"
         >
-          评审
+          {{ row.status === 8 ? '结题验收' : '评审' }}
         </el-button>
       </template>
       <template #empty>
