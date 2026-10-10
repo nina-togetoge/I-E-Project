@@ -164,6 +164,9 @@ class ProjectSearchEngine:
         """把ORM项目实体 -> Whoosh索引文档"""
         if not project:
             return None
+        # 草稿项目(0)不进入检索索引，避免未公开内容通过检索泄露
+        if project.status == 0:
+            return None
         # 团队成员姓名拼接
         team_names = "、".join(m.student_name for m in (project.team_members or []))
         # 成果标题拼接
@@ -227,7 +230,7 @@ class ProjectSearchEngine:
                 joinedload(ProjProject.team_members),
                 joinedload(ProjProject.achievements),
                 joinedload(ProjProject.college),
-            ).filter(ProjProject.is_deleted == 0).all()
+            ).filter(ProjProject.is_deleted == 0, ProjProject.status != 0).all()
 
             if not HAS_SEARCH or self.index is None:
                 return len(all_projects), 0
@@ -310,24 +313,26 @@ class ProjectSearchEngine:
                             pass
                 data["highlights"] = highlights
                 data["score"] = hit.score
-                # 二次过滤：学院ID/状态匹配
-                if college_id or status is not None:
-                    db = SessionLocal()
-                    try:
-                        from app.models import ProjProject
-                        p = db.query(ProjProject).filter(ProjProject.id == data["project_id"]).first()
-                        if p:
-                            if college_id and p.college_id != college_id:
-                                total -= 1
-                                continue
-                            if status is not None and p.status != status:
-                                total -= 1
-                                continue
-                        else:
+                # 二次过滤：草稿(status=0)一律不返回；学院ID/状态匹配
+                db = SessionLocal()
+                try:
+                    from app.models import ProjProject
+                    p = db.query(ProjProject).filter(ProjProject.id == data["project_id"]).first()
+                    if p:
+                        if p.status == 0:
                             total -= 1
                             continue
-                    finally:
-                        db.close()
+                        if college_id and p.college_id != college_id:
+                            total -= 1
+                            continue
+                        if status is not None and p.status != status:
+                            total -= 1
+                            continue
+                    else:
+                        total -= 1
+                        continue
+                finally:
+                    db.close()
                 results.append(data)
             return results, total
 
@@ -340,6 +345,7 @@ class ProjectSearchEngine:
             kw = f"%{keyword}%"
             q = db.query(ProjProject).outerjoin(SysCollege, SysCollege.id == ProjProject.college_id).filter(
                 ProjProject.is_deleted == 0,
+                ProjProject.status != 0,
                 or_(
                     ProjProject.project_name.like(kw),
                     ProjProject.project_no.like(kw),

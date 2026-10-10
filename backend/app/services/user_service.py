@@ -315,9 +315,11 @@ class UserService:
             if req.college_id and operator.college_id and req.college_id != operator.college_id:
                 raise PermissionDeniedException(message="仅可分配本院学院")
         elif operator.id == user_id:
-            # 本人修改：禁止改 role/status/college_id
-            if req.role is not None or req.status is not None or req.college_id is not None:
-                raise PermissionDeniedException(message="无权修改角色、状态或学院字段")
+            # 本人修改：禁止改 role/status/college_id，且不得直接重置密码（改密须走 update_profile 校验原密码）
+            if (req.role is not None or req.status is not None
+                    or req.college_id is not None or req.password is not None):
+                raise PermissionDeniedException(
+                    message="无权修改角色、状态、学院或密码字段，修改密码请使用个人资料入口")
         else:
             raise PermissionDeniedException(message="只能修改本人信息，管理员除外")
 

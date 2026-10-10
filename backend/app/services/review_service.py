@@ -140,6 +140,19 @@ class ReviewService:
             raise ResourceNotFoundException(message="项目不存在")
         ReviewService._ensure_can_review(project, req.review_stage, operator)
 
+        # 结题验收前置：负责人须已提交结项验收报告，且满足结项三条件
+        if req.review_stage == REVIEW_STAGE_FINAL:
+            from app.services.project_service import ProjectService
+            ProjectService._ensure_final_conditions(db, project)
+            has_report = db.query(ProjReview).filter(
+                ProjReview.project_id == project.id,
+                ProjReview.review_stage == REVIEW_STAGE_FINAL,
+                ProjReview.review_result == 99,  # 占位：报告已提交待验收
+                ProjReview.is_deleted == 0,
+            ).first()
+            if not has_report:
+                raise ParamValidateException(message="项目尚未提交结项验收报告，无法进行结题验收")
+
         # 同一阶段同一人只允许一次（排除占位记录）
         if ReviewCRUD.exist_real_review(db, project.id, req.review_stage, operator.id):
             raise ParamValidateException(message="您已在该阶段审核过此项目，请勿重复提交")
@@ -248,10 +261,13 @@ class ReviewService:
             if reviews:
                 pass_count = sum(1 for r in reviews if r.review_result == REVIEW_RESULT_PASS)
                 total = len(reviews)
-                # 多数通过（含平票）则立项
+                # 多数通过（含平票）则立项；多数驳回则置为已驳回，避免项目卡死在待专家评审
                 if pass_count * 2 >= total:
                     project.status = 6
                     project.approval_time = datetime.now()
+                else:
+                    project.status = 10
+                    project.reject_reason = "专家评审未通过（多数专家驳回）"
         db.commit()
         db.refresh(record)
         return ReviewService._record_to_item(record)
@@ -314,6 +330,9 @@ class ReviewService:
         project = ProjectCRUD.get_by_id(db, project_id)
         if not project:
             raise ResourceNotFoundException(message="项目不存在")
+        # 权限校验：复用项目详情的可见性规则（草稿仅本人/成员，教师限本院，专家限被分配）
+        from app.services.project_service import ProjectService
+        ProjectService.get_detail(db, project_id, operator)
         records_orm = ReviewCRUD.list_by_project(db, project_id)
         records: List[ReviewRecordItem] = [
             ReviewService._record_to_item(r) for r in records_orm
@@ -514,7 +533,8 @@ class MidtermService:
         project = ProjectCRUD.get_by_id(db, req.project_id)
         if not project:
             raise ResourceNotFoundException(message="项目不存在")
-        if operator.role == RoleEnum.STUDENT and project.leader_id != operator.id:
+        # 中期检查提交仅限项目负责人本人（真超级管理员可代操作）
+        if not is_super_admin(operator) and project.leader_id != operator.id:
             raise PermissionDeniedException(message="仅项目负责人可提交中期检查")
         if project.status not in (6, 7, 8):
             raise ParamValidateException(message="仅已立项/中期/待结题阶段可提交中期检查")
@@ -589,7 +609,8 @@ class ChangeService:
             raise ResourceNotFoundException(message="项目不存在")
         if project.status not in (6, 7, 8):
             raise ParamValidateException(message="仅已立项/中期/待结题阶段可提交变更申请")
-        if operator.role == RoleEnum.STUDENT and project.leader_id != operator.id:
+        # 变更/延期申请仅限项目负责人本人发起（真超级管理员可代操作）
+        if not is_super_admin(operator) and project.leader_id != operator.id:
             raise PermissionDeniedException(message="仅项目负责人可发起变更申请")
         data = req.model_dump()
         data["applicant_id"] = operator.id

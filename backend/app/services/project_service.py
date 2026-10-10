@@ -17,7 +17,7 @@ from app.core.deps import PaginationParams, DataScope
 from app.crud.user import CollegeCRUD, UserCRUD
 from app.crud.project import ProjectCRUD, AchievementCRUD
 from app.crud.review import ReviewCRUD, MidtermCRUD
-from app.schemas.review import REVIEW_STAGE_COLLEGE, REVIEW_STAGE_TEACHER
+from app.schemas.review import REVIEW_STAGE_COLLEGE, REVIEW_STAGE_TEACHER, REVIEW_STAGE_FINAL
 from app.models import (
     ProjProject, SysUser, ProjAchievement, ProjBudget, ProjReview, ProjExpense,
 )
@@ -463,12 +463,17 @@ class ProjectService:
     @staticmethod
     def submit_final(db: Session, project_id: int, final_report: str,
                      attachment_ids: list, operator: SysUser) -> ProjectSubmitResponse:
-        """提交结项验收报告（状态8待结题 -> 9已结题）"""
+        """提交结项验收报告：仅登记报告并进入待专家验收（状态保持 8待结题）。
+
+        注意：已结题(9)只能由"被分配到该项目的专家"通过结题验收审核流转，
+        项目负责人不得提交即自批，避免绕过专家结题验收。
+        """
         from app.models import SysAttachment, ProjReview
         obj = ProjectCRUD.get_by_id(db, project_id)
         if not obj:
             raise ResourceNotFoundException(message="项目不存在")
-        if operator.role == RoleEnum.STUDENT and obj.leader_id != operator.id:
+        # 仅项目负责人本人可提交（真超级管理员可代操作）
+        if not is_super_admin(operator) and obj.leader_id != operator.id:
             raise PermissionDeniedException(message="仅项目负责人可提交结项报告")
         if obj.status != 8:
             raise ParamValidateException(message="仅待结题状态可提交结项验收报告")
@@ -478,7 +483,6 @@ class ProjectService:
         # 结项三条件校验：中期已批 + 成果≥1 + 报销已结清
         ProjectService._ensure_final_conditions(db, obj)
 
-        obj.status = PROJECT_STATUS_FINISHED
         # 关联结项附件
         if attachment_ids:
             db.query(SysAttachment).filter(
@@ -486,22 +490,32 @@ class ProjectService:
                 SysAttachment.is_deleted == 0,
             ).update({SysAttachment.biz_type: "project", SysAttachment.biz_id: obj.id},
                      synchronize_session=False)
-        # 记录结题验收审核记录
-        db.add(ProjReview(
-            project_id=obj.id,
-            review_stage=4,  # 结题验收
-            reviewer_id=operator.id,
-            reviewer_name=operator.real_name or operator.username,
-            review_result=1,  # 通过
-            review_comment=f"[结项报告] {final_report}",
-            review_time=datetime.now(),
-        ))
+        # 以占位记录(review_result=99)登记"结项验收报告已提交"，供专家结题验收时校验
+        existing = db.query(ProjReview).filter(
+            ProjReview.project_id == obj.id,
+            ProjReview.review_stage == REVIEW_STAGE_FINAL,
+            ProjReview.review_result == 99,
+            ProjReview.is_deleted == 0,
+        ).first()
+        if existing:
+            existing.review_comment = f"[结项报告] {final_report}"
+            existing.review_time = datetime.now()
+        else:
+            db.add(ProjReview(
+                project_id=obj.id,
+                review_stage=REVIEW_STAGE_FINAL,
+                reviewer_id=operator.id,
+                reviewer_name=operator.real_name or operator.username,
+                review_result=99,  # 占位=报告已提交待专家验收
+                review_comment=f"[结项报告] {final_report}",
+                review_time=datetime.now(),
+            ))
         db.commit()
         return ProjectSubmitResponse(
             project_id=obj.id,
             status=obj.status,
             status_name=PROJECT_STATUS_NAME.get(obj.status, ""),
-            message="结项验收报告已提交，项目已结题"
+            message="结项验收报告已提交，等待专家验收"
         )
 
     @staticmethod
@@ -757,7 +771,8 @@ class AchievementService:
         obj = ProjectCRUD.get_by_id(db, project_id)
         if not obj:
             raise ResourceNotFoundException(message="项目不存在")
-        # 简化：登录用户可查看项目下成果；严格场景应复用项目详情权限
+        # 权限校验：复用项目详情可见性规则（草稿仅本人/成员，教师限本院，专家限被分配）
+        ProjectService.get_detail(db, project_id, operator)
         items = AchievementCRUD.list_by_project(db, project_id)
         return [AchievementResponse.model_validate(i) for i in items]
 

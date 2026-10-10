@@ -229,6 +229,7 @@ class ExpenseService:
                 SysAttachment.id.in_(data.attachment_ids),
                 SysAttachment.biz_type == "expense",
                 SysAttachment.biz_id == 0,
+                SysAttachment.uploader_id == applicant_id,  # 仅可绑定本人上传的临时附件
                 SysAttachment.is_deleted == 0,
             ).update({SysAttachment.biz_id: exp.id}, synchronize_session=False)
             db.commit()

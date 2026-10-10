@@ -118,6 +118,74 @@ def _secure_filename(filename: str) -> str:
     return f"{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex}{ext}"
 
 
+def _resolve_biz_project(db: Session, biz_type: str, biz_id: int):
+    """把附件所属业务记录解析为对应的项目对象；无法解析时返回 None。
+
+    注意：不同业务表的 biz_id 语义不同（project 用项目ID，achievement 用成果ID，
+    expense 用报销ID，review 用审核记录ID），必须分别解析，不能统一当项目ID 处理。
+    """
+    if not biz_id or biz_id <= 0:
+        return None
+    if biz_type == "project":
+        return ProjectCRUD.get_by_id(db, biz_id)
+    if biz_type == "achievement":
+        from app.models import ProjAchievement
+        ach = db.query(ProjAchievement).filter(
+            ProjAchievement.id == biz_id, ProjAchievement.is_deleted == 0
+        ).first()
+        return ProjectCRUD.get_by_id(db, ach.project_id) if ach else None
+    if biz_type == "expense":
+        from app.models import ProjExpense
+        exp = db.query(ProjExpense).filter(
+            ProjExpense.id == biz_id, ProjExpense.is_deleted == 0
+        ).first()
+        return ProjectCRUD.get_by_id(db, exp.project_id) if exp else None
+    if biz_type == "review":
+        from app.models import ProjReview
+        rv = db.query(ProjReview).filter(
+            ProjReview.id == biz_id, ProjReview.is_deleted == 0
+        ).first()
+        return ProjectCRUD.get_by_id(db, rv.project_id) if rv else None
+    return None
+
+
+def _ensure_biz_access(db: Session, biz_type: str, biz_id: int, user: SysUser,
+                       allow_uploader_id: Optional[int] = None) -> None:
+    """统一校验用户对某业务记录附件的访问/上传权限。
+
+    放行条件：管理员；上传者本人(下载场景)；项目负责人/指导教师/团队成员；
+    报销场景下额外的报销申请人或本院教师、学院管理员。其余一律拒绝。
+    """
+    if user.role == RoleEnum.ADMIN:
+        return
+    if allow_uploader_id is not None and allow_uploader_id == user.id:
+        return
+    project = _resolve_biz_project(db, biz_type, biz_id)
+    if project is None:
+        raise PermissionDeniedException(message="无权访问该业务文件")
+    if project.leader_id == user.id or project.teacher_id == user.id:
+        return
+    if biz_type == "expense":
+        from app.models import ProjExpense
+        exp = db.query(ProjExpense).filter(
+            ProjExpense.id == biz_id, ProjExpense.is_deleted == 0
+        ).first()
+        if exp and exp.applicant_id == user.id:
+            return
+        # 本院教师/学院管理员可查看本院项目报销
+        if (user.college_id and project.college_id == user.college_id
+                and user.role in (RoleEnum.TEACHER, RoleEnum.ADMIN)):
+            return
+    from app.models import ProjTeamMember
+    is_member = db.query(ProjTeamMember).filter(
+        ProjTeamMember.project_id == project.id,
+        ProjTeamMember.student_id == user.id,
+    ).first() is not None
+    if is_member:
+        return
+    raise PermissionDeniedException(message="无权访问该业务文件")
+
+
 @router_upload.post("/upload", response_model=ResponseModel, summary="单文件上传")
 async def api_upload(
     biz_type: str = Form(..., pattern=r"^[a-z_]{1,64}$", description="业务类型: project/expense/achievement/review"),
@@ -135,21 +203,18 @@ async def api_upload(
 
     # 2. 扩展名 + 重命名
     new_name = _secure_filename(file.filename or "unknown")
+
+    # 3. 权限校验（先校验后写盘，避免越权请求在磁盘留下孤儿文件）
+    if biz_id > 0:
+        _ensure_biz_access(db, biz_type, biz_id, current_user)
+
+    # 4. 落盘
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     save_path = os.path.join(settings.UPLOAD_DIR, new_name)
     with open(save_path, "wb") as f:
         f.write(bytes_data)
 
-    # 3. 权限校验：仅当关联已有业务记录时才校验
-    if biz_id > 0 and current_user.role != RoleEnum.ADMIN and biz_type in ("project", "achievement"):
-        p = ProjectCRUD.get_by_id(db, biz_id)
-        if not p:
-            raise ResourceNotFoundException(message="业务记录不存在")
-        if p.leader_id != current_user.id and p.teacher_id != current_user.id:
-            if current_user.role == RoleEnum.STUDENT:
-                raise PermissionDeniedException(message="仅项目负责人/指导教师可上传")
-
-    # 4. 入库
+    # 5. 入库
     ext = os.path.splitext(file.filename or "")[1].lower()
     att = SysAttachment(
         biz_type=biz_type, biz_id=biz_id,
@@ -179,23 +244,9 @@ def api_download(
     att = db.query(SysAttachment).filter(SysAttachment.id == att_id, SysAttachment.is_deleted == 0).first()
     if not att:
         raise ResourceNotFoundException(message="文件不存在")
-    # 下载权限：管理员可下载；上传者；所属业务可读
-    if current_user.role != RoleEnum.ADMIN and att.uploader_id != current_user.id:
-        # 仅检查项目类：负责人/老师/成员可下载
-        if att.biz_type in ("project", "achievement", "review"):
-            p = ProjectCRUD.get_by_id(db, att.biz_id)
-            if p:
-                ok = (p.leader_id == current_user.id or
-                      p.teacher_id == current_user.id)
-                if not ok:
-                    # 检查是否团队成员
-                    from app.models import ProjTeamMember
-                    ok = db.query(ProjTeamMember).filter(
-                        ProjTeamMember.project_id == p.id,
-                        ProjTeamMember.student_id == current_user.id,
-                    ).first() is not None
-                if not ok:
-                    raise PermissionDeniedException(message="无权下载此文件")
+    # 下载权限：管理员/上传者/所属业务相关人（统一校验）
+    _ensure_biz_access(db, att.biz_type, att.biz_id or 0, current_user,
+                       allow_uploader_id=att.uploader_id)
     if not os.path.exists(att.file_path):
         raise ResourceNotFoundException(message="服务器上文件已丢失")
 
@@ -223,21 +274,9 @@ def api_preview(
     att = db.query(SysAttachment).filter(SysAttachment.id == att_id, SysAttachment.is_deleted == 0).first()
     if not att:
         raise ResourceNotFoundException(message="文件不存在")
-    # 预览权限：与下载权限一致
-    if current_user.role != RoleEnum.ADMIN and att.uploader_id != current_user.id:
-        if att.biz_type in ("project", "achievement", "review"):
-            p = ProjectCRUD.get_by_id(db, att.biz_id)
-            if p:
-                ok = (p.leader_id == current_user.id or
-                      p.teacher_id == current_user.id)
-                if not ok:
-                    from app.models import ProjTeamMember
-                    ok = db.query(ProjTeamMember).filter(
-                        ProjTeamMember.project_id == p.id,
-                        ProjTeamMember.student_id == current_user.id,
-                    ).first() is not None
-                if not ok:
-                    raise PermissionDeniedException(message="无权预览此文件")
+    # 预览权限：与下载权限一致（统一校验）
+    _ensure_biz_access(db, att.biz_type, att.biz_id or 0, current_user,
+                       allow_uploader_id=att.uploader_id)
     if not os.path.exists(att.file_path):
         raise ResourceNotFoundException(message="服务器上文件已丢失")
 
@@ -252,11 +291,17 @@ def api_attachment_list(
     db: Session = Depends(get_db),
     current_user: SysUser = require_login,
 ):
-    items = db.query(SysAttachment).filter(
+    # 权限校验：已有业务记录按归属校验；临时附件(biz_id=0)仅本人可见
+    q = db.query(SysAttachment).filter(
         SysAttachment.biz_type == biz_type,
         SysAttachment.biz_id == biz_id,
         SysAttachment.is_deleted == 0,
-    ).order_by(SysAttachment.created_at.desc()).all()
+    )
+    if biz_id > 0:
+        _ensure_biz_access(db, biz_type, biz_id, current_user)
+    elif current_user.role != RoleEnum.ADMIN:
+        q = q.filter(SysAttachment.uploader_id == current_user.id)
+    items = q.order_by(SysAttachment.created_at.desc()).all()
     data = [{
         "id": a.id, "file_name": a.file_name, "file_size": a.file_size,
         "file_type": a.file_type, "uploader_name": a.uploader_name,
@@ -366,8 +411,11 @@ def api_search_projects(
     page_size: int = Query(default=20, ge=1, le=50, description="每页条数(最大50)"),
     college_id: Optional[int] = None,
     status: Optional[int] = None,
+    current_user: SysUser = require_login,
 ):
-    """Whoosh+Jieba 全文检索，返回含相关性得分与HTML高亮片段"""
+    """Whoosh+Jieba 全文检索，返回含相关性得分与HTML高亮片段（需登录，草稿不可检索）"""
+    if status == 0:
+        raise ParamValidateException(message="不支持按草稿状态检索")
     results, total = search_engine.search(
         keyword=keyword, page=page, page_size=page_size,
         filter_college_id=college_id, filter_status=status,

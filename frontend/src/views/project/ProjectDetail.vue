@@ -379,7 +379,7 @@ async function handleSubmitFinal() {
       final_report: finalForm.final_report,
       attachment_ids: finalAttachmentIds.value,
     })
-    ElMessage.success('结项验收报告已提交，项目已结题')
+    ElMessage.success('结项验收报告已提交，等待专家验收')
     showFinalDialog.value = false
     finalForm.final_report = ''
     finalAttachmentIds.value = []
