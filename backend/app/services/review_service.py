@@ -135,6 +135,9 @@ class ReviewService:
     # ---------- 学院/校级/结题 通用审核 ----------
     @staticmethod
     def do_review(db: Session, req: ReviewCreateRequest, operator: SysUser) -> ReviewRecordItem:
+        # 专家评审(阶段3)必须走专用打分接口，禁止经通用审核接口旁路立项
+        if req.review_stage == REVIEW_STAGE_EXPERT:
+            raise ParamValidateException(message="专家评审请使用专家评审接口 /api/reviews/expert")
         project = ProjectCRUD.get_by_id(db, req.project_id)
         if not project:
             raise ResourceNotFoundException(message="项目不存在")
@@ -158,7 +161,6 @@ class ReviewService:
             raise ParamValidateException(message="您已在该阶段审核过此项目，请勿重复提交")
 
         # 如果存在占位记录，先删除再写正式记录
-        from app.models import ProjReview
         placeholder = db.query(ProjReview).filter(
             ProjReview.project_id == project.id,
             ProjReview.review_stage == req.review_stage,

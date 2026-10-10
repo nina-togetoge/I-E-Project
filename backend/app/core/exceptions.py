@@ -20,6 +20,10 @@ class BizException(Exception):
     """业务逻辑异常基类，所有业务异常都应抛出此异常或其子类"""
 
     def __init__(self, code: int = 400, message: str = "业务异常", data: Any = None):
+        # 兼容 BizException("提示消息") 的位置参数写法：首参为字符串时视为 message，
+        # 避免 code 被赋成字符串导致响应模型校验失败。
+        if isinstance(code, str):
+            message, code = code, 400
         self.code = code
         self.message = message
         self.data = data
