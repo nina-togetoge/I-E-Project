@@ -27,7 +27,6 @@ if not _IN_CONTAINER and os.path.isdir(_PKGS) and _PKGS not in sys.path:
     sys.path.insert(0, _PKGS)
 
 from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
@@ -90,10 +89,11 @@ def create_app() -> FastAPI:
     # ---- 2. 注册全局异常处理器 ----
     register_exception_handlers(app)
 
-    # ---- 3. 静态资源（上传文件）----
+    # ---- 3. 上传/索引目录 ----
+    # 注意：不再挂载 /static 静态目录，避免上传文件被未鉴权直接访问；
+    # 所有附件统一通过 /api/files/download|preview 接口（带登录校验与归属校验）访问。
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     os.makedirs(settings.WHOOSH_INDEX_DIR, exist_ok=True)
-    app.mount("/static", StaticFiles(directory="static"), name="static")
 
     # ---- 4. 挂载业务路由 ----
     api_prefix = "/api"

@@ -94,14 +94,15 @@ class AnnouncementService:
         return items, total
 
     @staticmethod
-    def get_detail(db: Session, ann_id: int, increment_view: bool = False) -> Announcement:
-        """获取公告详情"""
+    def get_detail(db: Session, ann_id: int, increment_view: bool = False,
+                   only_published: bool = False) -> Announcement:
+        """获取公告详情；only_published=True 时非发布状态(草稿/已下线)视为不存在"""
         ann = (
             db.query(Announcement)
             .filter(Announcement.id == ann_id, Announcement.is_deleted == 0)
             .first()
         )
-        if not ann:
+        if not ann or (only_published and ann.status != 1):
             from app.core.exceptions import BizException
             raise BizException("公告不存在或已删除")
         AnnouncementService._fill_names(ann)

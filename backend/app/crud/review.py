@@ -155,6 +155,7 @@ class ChangeCRUD:
         db: Session, offset: int, limit: int,
         project_id: Optional[int] = None, change_type: Optional[int] = None,
         status: Optional[int] = None, applicant_id: Optional[int] = None,
+        project_ids: Optional[List[int]] = None,
     ) -> Tuple[List[ProjChangeRequest], int]:
         q = db.query(ProjChangeRequest).filter(ProjChangeRequest.is_deleted == 0)
         if project_id:
@@ -165,6 +166,11 @@ class ChangeCRUD:
             q = q.filter(ProjChangeRequest.status == status)
         if applicant_id:
             q = q.filter(ProjChangeRequest.applicant_id == applicant_id)
+        # 数据权限：按可见项目范围过滤（None=不限制；空列表=无可见项目）
+        if project_ids is not None:
+            if len(project_ids) == 0:
+                return [], 0
+            q = q.filter(ProjChangeRequest.project_id.in_(project_ids))
         total = q.with_entities(func.count(ProjChangeRequest.id)).scalar() or 0
         items = q.order_by(ProjChangeRequest.created_at.desc()).offset(offset).limit(limit).all()
         return items, total

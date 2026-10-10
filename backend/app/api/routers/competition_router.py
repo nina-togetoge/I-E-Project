@@ -50,7 +50,9 @@ def api_competition_detail(
     db: Session = Depends(get_db),
     current_user: SysUser = require_login,
 ):
-    comp = CompetitionService.get_detail(db, comp_id, increment_view=True)
+    comp = CompetitionService.get_detail(
+        db, comp_id, increment_view=True, only_published=current_user.role != 4
+    )
     return success(data=comp)
 
 

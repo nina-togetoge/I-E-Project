@@ -171,10 +171,16 @@ class UserService:
             raise ResourceNotFoundException(message="用户不存在")
         # 行级权限：管理员看全部；本院角色看本院；学生只看自己
         if operator.role != RoleEnum.ADMIN:
-            if operator.role == RoleEnum.STUDENT and operator.id != user_id:
-                raise PermissionDeniedException(message="无权查看其他用户信息")
-            if operator.college_id and user.college_id and operator.college_id != user.college_id:
-                raise PermissionDeniedException(message="无权查看其他学院用户信息")
+            # 非管理员一律不得查看系统管理员账号资料，避免越权获取超管信息
+            if user.role == RoleEnum.ADMIN:
+                raise PermissionDeniedException(message="无权查看系统管理员信息")
+            if operator.id != user_id:
+                if operator.role == RoleEnum.STUDENT:
+                    raise PermissionDeniedException(message="无权查看其他用户信息")
+                # 教师/专家：仅可查看同院用户（学院为空一律拒绝，避免跨院/超管资料泄露）
+                if (not operator.college_id or not user.college_id
+                        or operator.college_id != user.college_id):
+                    raise PermissionDeniedException(message="无权查看其他学院用户信息")
         return AuthService._build_user_info(user)
 
     @staticmethod
@@ -306,13 +312,18 @@ class UserService:
             # 真超级管理员：可修改任意用户任意字段
             pass
         elif is_college_admin(operator):
-            # 学院管理员：仅能修改本院用户、且不能将 role 改为 ADMIN
-            if operator.college_id and user.college_id and user.college_id != operator.college_id:
+            # 学院管理员：仅能修改本院非管理员用户，且不得改角色/密码/学院
+            # （严格要求双方学院均存在且一致，避免目标为超管(college_id=NULL)时短路放行）
+            if (not operator.college_id or not user.college_id
+                    or user.college_id != operator.college_id):
                 raise PermissionDeniedException(message="仅可修改本院用户")
-            if req.role == RoleEnum.ADMIN:
-                raise PermissionDeniedException(message="无权限设置系统管理员角色")
-            # 不允许把本院用户的 college_id 改为外学院
-            if req.college_id and operator.college_id and req.college_id != operator.college_id:
+            if user.role == RoleEnum.ADMIN:
+                raise PermissionDeniedException(message="无权限修改系统管理员账号")
+            if req.role is not None:
+                raise PermissionDeniedException(message="无权限修改用户角色")
+            if req.password is not None:
+                raise PermissionDeniedException(message="无权限直接重置用户密码，请联系用户通过个人资料入口修改")
+            if req.college_id is not None and req.college_id != operator.college_id:
                 raise PermissionDeniedException(message="仅可分配本院学院")
         elif operator.id == user_id:
             # 本人修改：禁止改 role/status/college_id，且不得直接重置密码（改密须走 update_profile 校验原密码）

@@ -8,7 +8,7 @@ from datetime import datetime
 from sqlalchemy import or_, func
 from sqlalchemy.orm import Session
 
-from app.models import ProjExpense, ProjProject, SysAttachment
+from app.models import ProjExpense, ProjProject, ProjBudget, SysAttachment
 from app.schemas.project import (
     ExpenseCreate, ExpenseListItem, ExpenseSummary,
     EXPENSE_STATUS_DRAFT,
@@ -260,6 +260,15 @@ class ExpenseService:
             exp.reject_reason = None
             if next_status == EXPENSE_STATUS_COMPLETED:
                 exp.approval_time = datetime.now()
+                # 终审完成：回写已使用金额（项目总额 + 对应预算科目），避免预算占用统计失真
+                amt = Decimal(exp.expense_amount or 0)
+                project = db.query(ProjProject).filter(ProjProject.id == exp.project_id).first()
+                if project:
+                    project.used_amount = Decimal(project.used_amount or 0) + amt
+                if exp.budget_item_id:
+                    budget = db.query(ProjBudget).filter(ProjBudget.id == exp.budget_item_id).first()
+                    if budget:
+                        budget.used_amount = Decimal(budget.used_amount or 0) + amt
 
         db.commit()
         db.refresh(exp)

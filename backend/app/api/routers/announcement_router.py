@@ -49,7 +49,9 @@ def api_announcement_detail(
     db: Session = Depends(get_db),
     current_user: SysUser = require_login,
 ):
-    ann = AnnouncementService.get_detail(db, ann_id, increment_view=True)
+    ann = AnnouncementService.get_detail(
+        db, ann_id, increment_view=True, only_published=current_user.role != 4
+    )
     return success(data=ann)
 
 

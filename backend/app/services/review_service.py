@@ -523,6 +523,9 @@ class MidtermService:
         project = ProjectCRUD.get_by_id(db, project_id)
         if not project:
             raise ResourceNotFoundException(message="项目不存在")
+        # 归属校验：复用项目详情可见性规则（草稿仅本人/成员，教师限本院，专家限被分配）
+        from app.services.project_service import ProjectService
+        ProjectService.get_detail(db, project_id, operator)
         obj = MidtermCRUD.get_by_project(db, project_id)
         if not obj:
             return None
@@ -627,10 +630,38 @@ class ChangeService:
     def paginate(db: Session, pager: PaginationParams, project_id=None, change_type=None,
                  status=None, operator: SysUser = None):
         applicant_id = None
-        if operator and operator.role == RoleEnum.STUDENT:
-            applicant_id = operator.id
+        project_ids = None
+        if operator is not None:
+            if operator.role == RoleEnum.STUDENT:
+                # 学生：仅本人发起的申请
+                applicant_id = operator.id
+            elif is_super_admin(operator):
+                # 超级管理员：全校可查
+                pass
+            elif is_college_admin(operator):
+                # 学院管理员：仅本院项目
+                project_ids = [pid for (pid,) in db.query(ProjProject.id).filter(
+                    ProjProject.is_deleted == 0,
+                    ProjProject.college_id == operator.college_id,
+                ).all()] if operator.college_id else []
+            elif operator.role == RoleEnum.TEACHER:
+                # 教师：仅本人指导的项目
+                project_ids = [pid for (pid,) in db.query(ProjProject.id).filter(
+                    ProjProject.is_deleted == 0,
+                    ProjProject.teacher_id == operator.id,
+                ).all()]
+            elif operator.role == RoleEnum.EXPERT:
+                # 专家：仅被分配评审的项目
+                project_ids = [pid for (pid,) in db.query(ProjReview.project_id).filter(
+                    ProjReview.reviewer_id == operator.id,
+                    ProjReview.review_stage == REVIEW_STAGE_EXPERT,
+                    ProjReview.is_deleted == 0,
+                ).distinct().all()]
+            else:
+                project_ids = []
         items, total = ChangeCRUD.paginate(
-            db, pager.offset, pager.limit, project_id, change_type, status, applicant_id
+            db, pager.offset, pager.limit, project_id, change_type, status, applicant_id,
+            project_ids=project_ids,
         )
         return [ChangeService._to_item(i) for i in items], total
 

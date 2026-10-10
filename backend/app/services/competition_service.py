@@ -73,14 +73,15 @@ class CompetitionService:
         return items, total
 
     @staticmethod
-    def get_detail(db: Session, comp_id: int, increment_view: bool = False) -> Competition:
-        """获取大赛详情"""
+    def get_detail(db: Session, comp_id: int, increment_view: bool = False,
+                   only_published: bool = False) -> Competition:
+        """获取大赛详情；only_published=True 时未发布(草稿/已取消)视为不存在"""
         comp = (
             db.query(Competition)
             .filter(Competition.id == comp_id, Competition.is_deleted == 0)
             .first()
         )
-        if not comp:
+        if not comp or (only_published and comp.status not in (1, 2, 3)):
             from app.core.exceptions import BizException
             raise BizException("比赛不存在或已删除")
         CompetitionService._fill_names(comp)

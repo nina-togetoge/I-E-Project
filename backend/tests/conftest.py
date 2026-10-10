@@ -168,12 +168,37 @@ class Seeder:
             project_id=project_id, achievement_type=1, title=title,
         ))
 
-    def expense(self, project_id, applicant_id, amount, status=6, applicant_name="申请人"):
+    def expense(self, project_id, applicant_id, amount, status=6, applicant_name="申请人",
+                budget_item_id=None):
         return self._add(M.ProjExpense(
             expense_no=self._name("EXP"), project_id=project_id,
             applicant_id=applicant_id, applicant_name=applicant_name,
             expense_amount=Decimal(amount), expense_desc="费用说明",
-            status=status, submit_time=datetime.now(),
+            status=status, submit_time=datetime.now(), budget_item_id=budget_item_id,
+        ))
+
+    def budget(self, project_id, item="设备费", amount="10000.00", used="0.00"):
+        return self._add(M.ProjBudget(
+            project_id=project_id, budget_item=item,
+            budget_amount=Decimal(amount), used_amount=Decimal(used),
+        ))
+
+    def change(self, project_id, applicant_id, change_type=1, status=0, reason="延期申请"):
+        return self._add(M.ProjChangeRequest(
+            project_id=project_id, change_type=change_type, change_reason=reason,
+            applicant_id=applicant_id, status=status, submit_time=datetime.now(),
+        ))
+
+    def announcement(self, title="测试公告", status=1, created_by=None):
+        return self._add(M.Announcement(
+            title=title, content="公告正文", announcement_type=1, status=status,
+            priority=1, created_by=created_by,
+        ))
+
+    def competition(self, title="测试比赛", status=1, created_by=None):
+        return self._add(M.Competition(
+            title=title, competition_type=1, level=1, status=status,
+            organizer="主办方", created_by=created_by,
         ))
 
     def attachment(self, biz_type, biz_id, uploader_id, file_path=None, file_name="a.pdf"):

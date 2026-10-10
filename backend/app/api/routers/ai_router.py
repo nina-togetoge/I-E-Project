@@ -18,12 +18,12 @@ router_ai = APIRouter(prefix="/ai", tags=["AI助手"])
 
 
 class ChatMessage(BaseModel):
-    role: str = Field(..., description="角色: system / user / assistant")
-    content: str = Field(..., description="消息内容")
+    role: str = Field(..., pattern="^(user|assistant)$", description="角色: user / assistant")
+    content: str = Field(..., min_length=1, max_length=4000, description="消息内容")
 
 
 class ChatRequest(BaseModel):
-    messages: List[ChatMessage] = Field(..., description="对话历史")
+    messages: List[ChatMessage] = Field(..., min_length=1, max_length=50, description="对话历史")
     temperature: Optional[float] = Field(default=0.7, ge=0, le=2)
 
 

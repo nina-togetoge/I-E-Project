@@ -220,6 +220,9 @@ class ProjectService:
         obj = ProjectCRUD.get_by_id(db, project_id)
         if not obj:
             raise ResourceNotFoundException(message="项目不存在")
+        # 草稿项目(0)仅学生（负责人/团队成员）可见，其他角色（管理员/教师/专家）一律不可见
+        if obj.status == PROJECT_STATUS_DRAFT and operator.role != RoleEnum.STUDENT:
+            raise PermissionDeniedException(message="草稿项目仅项目负责人可见")
         # 数据权限
         scope = DataScope.__new__(DataScope)
         scope.user = operator
@@ -334,13 +337,15 @@ class ProjectService:
                     "review_time": datetime.now(),
                 })
 
-        # 4. 关联临时附件（biz_id=0 的附件）到新项目
+        # 4. 关联临时附件（biz_id=0 的附件）到新项目（仅限本人上传的临时附件）
         if req.attachment_ids:
             from app.models.user import SysAttachment
             db.query(SysAttachment).filter(
                 SysAttachment.id.in_(req.attachment_ids),
                 SysAttachment.biz_type == "project",
                 SysAttachment.biz_id == 0,
+                SysAttachment.uploader_id == operator.id,
+                SysAttachment.is_deleted == 0,
             ).update({SysAttachment.biz_id: obj.id}, synchronize_session=False)
 
         db.commit()
@@ -362,13 +367,15 @@ class ProjectService:
         # attachment_ids 不直接写入项目表，单独处理附件关联
         attachment_ids = data.pop("attachment_ids", None)
         obj = ProjectCRUD.update(db, obj, data)
-        # 关联临时附件（biz_id=0）到项目
+        # 关联临时附件（biz_id=0）到项目（仅限本人上传的临时附件）
         if attachment_ids:
             from app.models.user import SysAttachment
             db.query(SysAttachment).filter(
                 SysAttachment.id.in_(attachment_ids),
                 SysAttachment.biz_type == "project",
                 SysAttachment.biz_id == 0,
+                SysAttachment.uploader_id == operator.id,
+                SysAttachment.is_deleted == 0,
             ).update({SysAttachment.biz_id: obj.id}, synchronize_session=False)
         db.commit()
         db.refresh(obj)
@@ -483,10 +490,13 @@ class ProjectService:
         # 结项三条件校验：中期已批 + 成果≥1 + 报销已结清
         ProjectService._ensure_final_conditions(db, obj)
 
-        # 关联结项附件
+        # 关联结项附件（仅限本人上传的 project 临时附件，防止劫持他人/其他业务附件）
         if attachment_ids:
             db.query(SysAttachment).filter(
                 SysAttachment.id.in_(attachment_ids),
+                SysAttachment.biz_type == "project",
+                SysAttachment.biz_id == 0,
+                SysAttachment.uploader_id == operator.id,
                 SysAttachment.is_deleted == 0,
             ).update({SysAttachment.biz_type: "project", SysAttachment.biz_id: obj.id},
                      synchronize_session=False)
@@ -677,10 +687,32 @@ class ProjectService:
         )
 
     @staticmethod
+    def _apply_scope_to_query(db: Session, query, data_scope: DataScope):
+        """把数据权限范围应用到查询；无任何数据范围时返回空结果集（避免默认放行全校）"""
+        from app.models import ProjProject, ProjReview
+        scope = data_scope.scope
+        if scope.get("all"):
+            return query
+        if scope.get("college_ids"):
+            return query.filter(ProjProject.college_id.in_(scope["college_ids"]))
+        if scope.get("is_student"):
+            return query.filter(ProjProject.leader_id == data_scope.user_id)
+        if scope.get("teacher_user_ids"):
+            return query.filter(ProjProject.teacher_id.in_(scope["teacher_user_ids"]))
+        if scope.get("expert_user_id"):
+            expert_assigned = db.query(ProjReview.project_id).filter(
+                ProjReview.reviewer_id == data_scope.user_id,
+                ProjReview.review_stage == 3,
+                ProjReview.is_deleted == 0,
+            ).distinct()
+            return query.filter(ProjProject.id.in_(expert_assigned))
+        return query.filter(ProjProject.id == -1)
+
+    @staticmethod
     def trend_by_month(db: Session, start_year: int, end_year: int,
                        data_scope: DataScope) -> List[StatisticsTrendItem]:
         """按月统计申报/立项趋势（ECharts适配）"""
-        from app.models import ProjProject
+        from app.models import ProjProject, ProjReview
         q = db.query(
             extract("year", ProjProject.created_at).label("y"),
             extract("month", ProjProject.created_at).label("m"),
@@ -690,11 +722,9 @@ class ProjectService:
             ProjProject.is_deleted == 0,
             extract("year", ProjProject.created_at).between(start_year, end_year),
         )
+        # 按数据权限范围过滤（学生/教师/专家不得看到全校趋势）
         if not data_scope.scope.get("all"):
-            if data_scope.scope.get("college_ids"):
-                q = q.filter(ProjProject.college_id.in_(data_scope.scope["college_ids"]))
-            elif data_scope.scope.get("is_student"):
-                q = q.filter(ProjProject.leader_id == data_scope.user_id)
+            q = ProjectService._apply_scope_to_query(db, q, data_scope)
         q = q.group_by("y", "m").order_by("y", "m")
         rows = q.all()
         return [
@@ -711,11 +741,18 @@ class ProjectService:
         """各学院统计数据（雷达图/热力图/学院立项率柱状图）"""
         from app.models import SysCollege, ProjReview
 
-        # 学院列表（按数据权限过滤）
+        # 学院列表（按数据权限过滤）：超管全校；学院管理员限本院；学生/教师/专家仅本人所属学院
         colleges = CollegeCRUD.list_all(db)
-        college_ids_scope = data_scope.scope.get("college_ids")
-        if college_ids_scope:
-            colleges = [c for c in colleges if c.id in college_ids_scope]
+        scope = data_scope.scope
+        if not scope.get("all"):
+            if scope.get("college_ids"):
+                allowed = set(scope["college_ids"])
+                colleges = [c for c in colleges if c.id in allowed]
+            elif data_scope.college_id:
+                colleges = [c for c in colleges if c.id == data_scope.college_id]
+            else:
+                # 无学院归属的受限角色 → 不展示任何学院统计
+                colleges = []
 
         result: List[CollegeStatisticsItem] = []
         for col in colleges:
@@ -783,8 +820,16 @@ class AchievementService:
             raise ResourceNotFoundException(message="所属项目不存在")
         if obj.status not in (6, 7, 8, 9):
             raise ParamValidateException(message="仅已立项及之后阶段可登记成果")
-        if operator.role not in (RoleEnum.ADMIN, RoleEnum.TEACHER) and obj.leader_id != operator.id:
-            raise PermissionDeniedException(message="仅负责人、指导教师或管理员可登记成果")
+        # 权限分级：超管全校；学院管理员限本院项目；项目负责人/该项目指导教师本人
+        if is_super_admin(operator):
+            pass
+        elif is_college_admin(operator):
+            if not operator.college_id or obj.college_id != operator.college_id:
+                raise PermissionDeniedException(message="学院管理员仅可为本院项目登记成果")
+        elif obj.leader_id == operator.id or (operator.role == RoleEnum.TEACHER and obj.teacher_id == operator.id):
+            pass
+        else:
+            raise PermissionDeniedException(message="仅项目负责人、指导教师或管理员可登记成果")
         ach = AchievementCRUD.create(db, req.model_dump())
         db.commit()
         db.refresh(ach)

@@ -263,7 +263,7 @@ EXPENSE_STATUS_REJECTED = 7            # 已驳回
 class ExpenseCreate(BaseModel):
     """创建报销申请"""
     project_id: int
-    expense_amount: Decimal
+    expense_amount: Decimal = Field(gt=0, max_digits=12, decimal_places=2, description="报销金额(必须大于0)")
     expense_desc: str = Field(min_length=1, max_length=500)
     invoice_no: Optional[str] = Field(default=None, max_length=128)
     budget_item_id: Optional[int] = None
