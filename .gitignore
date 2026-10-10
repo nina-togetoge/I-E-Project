@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -71,3 +71,6 @@ frontend/.env.test.local
 
 # 临时脚本/沙箱文件
 _tmp_*.*
+
+# 本地 SQLite 数据库文件
+*.db
