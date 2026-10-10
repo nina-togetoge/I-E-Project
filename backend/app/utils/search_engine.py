@@ -257,22 +257,29 @@ class ProjectSearchEngine:
         page_size: int = 20,
         filter_college_id: Optional[int] = None,
         filter_status: Optional[int] = None,
+        filter_project_ids: Optional[List[int]] = None,
     ) -> Tuple[List[Dict[str, Any]], int]:
         """
         全文检索，返回：(结果列表, 总数)
         结果项包含：project_id, project_name, ..., highlights{字段: 高亮片段}
+
+        filter_project_ids: 调用者数据权限可见的项目ID集合；None 表示不限制（超管）。
+                            非 None 时仅返回集合内的项目，避免检索接口绕过行级数据权限。
         """
         if not keyword or not keyword.strip():
             return [], 0
 
         # ====== Whoosh 可用 → 真正全文检索 ======
         if HAS_SEARCH and self.index is not None:
-            return self._search_by_whoosh(keyword, page, page_size, filter_college_id, filter_status)
+            return self._search_by_whoosh(keyword, page, page_size,
+                                          filter_college_id, filter_status, filter_project_ids)
 
         # ====== 降级：ORM LIKE 查询 ======
-        return self._search_by_sql(keyword, page, page_size, filter_college_id, filter_status)
+        return self._search_by_sql(keyword, page, page_size,
+                                   filter_college_id, filter_status, filter_project_ids)
 
-    def _search_by_whoosh(self, keyword, page, page_size, college_id, status) -> Tuple[List[Dict], int]:
+    def _search_by_whoosh(self, keyword, page, page_size, college_id, status,
+                          filter_project_ids=None) -> Tuple[List[Dict], int]:
         from whoosh import qparser
         search_fields = ["project_name", "project_summary", "innovation_points",
                          "expected_results", "team_names", "college_name", "achievement_titles"]
@@ -283,13 +290,16 @@ class ProjectSearchEngine:
             query_text = " OR ".join(terms) if terms else keyword
             query = mp.parse(query_text)
 
-            # 过滤条件
-            mask = None
-            if college_id or status is not None:
-                # 由于学院ID/状态未入索引为整数，这里用二次过滤的方式实现
-                pass
+            # ---- 行级数据权限：仅检索调用者可见的项目（预过滤，保证分页/总数准确）----
+            id_filter = None
+            if filter_project_ids is not None:
+                if not filter_project_ids:
+                    return [], 0
+                from whoosh.query import Term, Or
+                id_filter = Or([Term("project_id", int(pid)) for pid in filter_project_ids])
 
-            hits = searcher.search_page(query, pagenum=page, pagelen=page_size, terms=True)
+            hits = searcher.search_page(query, pagenum=page, pagelen=page_size,
+                                        filter=id_filter, terms=True)
             total = len(hits)
 
             # 高亮配置：在 results 对象上设置 fragmenter / formatter
@@ -336,7 +346,8 @@ class ProjectSearchEngine:
                 results.append(data)
             return results, total
 
-    def _search_by_sql(self, keyword, page, page_size, college_id, status) -> Tuple[List[Dict], int]:
+    def _search_by_sql(self, keyword, page, page_size, college_id, status,
+                       filter_project_ids=None) -> Tuple[List[Dict], int]:
         """降级：SQL LIKE 模糊查询 + 简单排序"""
         from sqlalchemy import or_, func
         db = SessionLocal()
@@ -355,6 +366,11 @@ class ProjectSearchEngine:
                     SysCollege.college_name.like(kw),
                 )
             )
+            # 行级数据权限：仅返回调用者可见的项目（None=超管不限制）
+            if filter_project_ids is not None:
+                if not filter_project_ids:
+                    return [], 0
+                q = q.filter(ProjProject.id.in_(filter_project_ids))
             if college_id:
                 q = q.filter(ProjProject.college_id == college_id)
             if status is not None:

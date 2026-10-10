@@ -534,8 +534,17 @@ class ProjectService:
         obj = ProjectCRUD.get_by_id(db, project_id)
         if not obj:
             raise ResourceNotFoundException(message="项目不存在")
-        if operator.role == RoleEnum.STUDENT and obj.leader_id != operator.id:
-            raise PermissionDeniedException(message="仅负责人可撤回")
+        # 撤回权限分级：超管全校 / 学院管理员仅本院 / 学生仅本人负责
+        if is_super_admin(operator):
+            pass
+        elif is_college_admin(operator):
+            if not operator.college_id or obj.college_id != operator.college_id:
+                raise PermissionDeniedException(message="学院管理员仅可撤回本院项目")
+        elif operator.role == RoleEnum.STUDENT:
+            if obj.leader_id != operator.id:
+                raise PermissionDeniedException(message="仅负责人可撤回")
+        else:
+            raise PermissionDeniedException(message="无权限撤回该项目")
         if obj.status not in (PROJECT_STATUS_PENDING_TEACHER, PROJECT_STATUS_PENDING_COLLEGE, 2, 3):
             raise ParamValidateException(message="仅待审核/学院通过状态可撤回")
         # 清除该项目已产生的审核记录，使重新提交后可再次审核

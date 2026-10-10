@@ -214,6 +214,12 @@ class UserService:
                 "is_student_whitelist": True,
                 "role_whitelist": [params.role],
             }
+        elif data_scope.role == RoleEnum.EXPERT:
+            # 专家无查询用户全量名单的合法场景，直接拒绝，避免拉取全校用户PII
+            raise PermissionDeniedException(message="专家无权限查询用户列表")
+        elif data_scope.role == RoleEnum.TEACHER and not data_scope.college_id:
+            # 未绑定学院的教师数据范围为空白，若放行会退化为"全校无过滤"，禁止
+            raise PermissionDeniedException(message="未绑定学院的教师无权限查询用户列表")
         else:
             effective_scope = data_scope
 
@@ -410,8 +416,9 @@ class CollegeService:
 
     @staticmethod
     def create(db: Session, req: CollegeCreate, operator: SysUser) -> CollegeResponse:
-        if operator.role != RoleEnum.ADMIN:
-            raise PermissionDeniedException(message="仅管理员可新增学院")
+        # 仅真超级管理员可新增学院（学院管理员不得跨院管理组织架构）
+        if not is_super_admin(operator):
+            raise PermissionDeniedException(message="仅超级管理员可新增学院")
         if CollegeCRUD.get_by_code(db, req.college_code):
             raise DataConflictException(message="学院编码已存在")
         college = CollegeCRUD.create(db, req.model_dump())
@@ -421,8 +428,9 @@ class CollegeService:
 
     @staticmethod
     def update(db: Session, college_id: int, req: CollegeUpdate, operator: SysUser) -> CollegeResponse:
-        if operator.role != RoleEnum.ADMIN:
-            raise PermissionDeniedException(message="仅管理员可修改学院")
+        # 仅真超级管理员可修改学院；学院管理员不得修改本院/他院组织架构
+        if not is_super_admin(operator):
+            raise PermissionDeniedException(message="仅超级管理员可修改学院")
         obj = CollegeCRUD.get_by_id(db, college_id)
         if not obj:
             raise ResourceNotFoundException(message="学院不存在")

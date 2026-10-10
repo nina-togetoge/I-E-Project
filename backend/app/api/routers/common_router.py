@@ -411,14 +411,23 @@ def api_search_projects(
     page_size: int = Query(default=20, ge=1, le=50, description="每页条数(最大50)"),
     college_id: Optional[int] = None,
     status: Optional[int] = None,
+    db: Session = Depends(get_db),
+    data_scope: DataScope = Depends(),
     current_user: SysUser = require_login,
 ):
-    """Whoosh+Jieba 全文检索，返回含相关性得分与HTML高亮片段（需登录，草稿不可检索）"""
+    """Whoosh+Jieba 全文检索，返回含相关性得分与HTML高亮片段（需登录，草稿不可检索）
+    结果严格按调用者行级数据权限过滤，避免通过检索绕过项目列表的范围限制。"""
     if status == 0:
         raise ParamValidateException(message="不支持按草稿状态检索")
+    # 计算调用者可见的项目ID集合；超管(scope.all)不限制
+    filter_project_ids = None
+    if not data_scope.scope.get("all"):
+        allowed = ProjectService._apply_scope_to_query(db, db.query(ProjProject.id), data_scope).all()
+        filter_project_ids = [row[0] for row in allowed]
     results, total = search_engine.search(
         keyword=keyword, page=page, page_size=page_size,
         filter_college_id=college_id, filter_status=status,
+        filter_project_ids=filter_project_ids,
     )
     return success(data=PageResult.create(results, total, page, page_size))
 
