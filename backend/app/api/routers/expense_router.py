@@ -77,7 +77,7 @@ def api_expense_create(
     ctx: OperationContext = Depends(),
 ):
     with ctx:
-        exp = ExpenseService.create(db, data, current_user.id, current_user.real_name or current_user.username)
+        exp = ExpenseService.create(db, data, current_user)
         ctx.set_desc(f"提交报销申请#{exp.expense_no}，金额{exp.expense_amount}元")
         item = ExpenseService.to_list_item(db, exp)
         return success(data=item, message="报销申请已提交")

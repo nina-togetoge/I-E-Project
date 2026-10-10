@@ -6,7 +6,7 @@ from datetime import datetime, date
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, extract
+from sqlalchemy import func, extract, case
 
 from app.core.security import RoleEnum, ROLE_NAME_MAP, is_super_admin, is_college_admin
 from app.core.exceptions import (
@@ -16,10 +16,10 @@ from app.core.exceptions import (
 from app.core.deps import PaginationParams, DataScope
 from app.crud.user import CollegeCRUD, UserCRUD
 from app.crud.project import ProjectCRUD, AchievementCRUD
-from app.crud.review import ReviewCRUD
+from app.crud.review import ReviewCRUD, MidtermCRUD
 from app.schemas.review import REVIEW_STAGE_COLLEGE, REVIEW_STAGE_TEACHER
 from app.models import (
-    ProjProject, SysUser, ProjAchievement, ProjBudget, ProjReview,
+    ProjProject, SysUser, ProjAchievement, ProjBudget, ProjReview, ProjExpense,
 )
 from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectQueryParams,
@@ -28,6 +28,7 @@ from app.schemas.project import (
     StatisticsTrendItem, CollegeStatisticsItem, PROJECT_STATUS_DRAFT, PROJECT_STATUS_PENDING_COLLEGE,
     PROJECT_STATUS_PENDING_TEACHER,
     PROJECT_STATUS_NAME,
+    EXPENSE_STATUS_COMPLETED, EXPENSE_STATUS_REJECTED,
 )
 
 
@@ -183,8 +184,9 @@ class ProjectService:
     def paginate_announcement(db: Session, pager: PaginationParams,
                               params: ProjectQueryParams) -> Tuple[List[ProjectListItem], int]:
         """立项结果公示：已立项及之后阶段的项目，不做数据权限过滤，全校可见"""
-        # 已立项(6)、中期检查(7)、待结题(8)、已结题(9)、结项验收通过(12)
-        approved_statuses = [6, 7, 8, 9, 12]
+        # 仅已立项(6)及之后：中期检查中(7)、待结题(8)、已结题(9)
+        # 注意：12=待指导教师确认，绝不能纳入公示（否则未审核项目会被公开）
+        approved_statuses = [6, 7, 8, 9]
         items, total = ProjectCRUD.paginate(
             db,
             offset=pager.offset,
@@ -430,6 +432,35 @@ class ProjectService:
         )
 
     @staticmethod
+    def _ensure_final_conditions(db: Session, project: ProjProject) -> None:
+        """结项三条件校验（统一入口，供结项提交复用）：
+        1) 中期检查报告已审核通过
+        2) 至少登记 1 项项目成果
+        3) 经费报销已全部结清（无处于审批中间态的报销单）
+        """
+        # 1) 中期检查必须已通过（status=2）
+        midterm = MidtermCRUD.get_by_project(db, project.id)
+        if not midterm or midterm.status != 2:
+            raise ParamValidateException(message="结项前需先完成中期检查并通过审核")
+
+        # 2) 至少 1 项成果已登记
+        ach_count = db.query(func.count(ProjAchievement.id)).filter(
+            ProjAchievement.project_id == project.id,
+            ProjAchievement.is_deleted == 0,
+        ).scalar() or 0
+        if ach_count < 1:
+            raise ParamValidateException(message="结项前需至少登记 1 项项目成果")
+
+        # 3) 无未结清报销单：已完成(COMPLETED)或已驳回(REJECTED)视为结清
+        pending_expense = db.query(func.count(ProjExpense.id)).filter(
+            ProjExpense.project_id == project.id,
+            ProjExpense.is_deleted == 0,
+            ProjExpense.status.notin_([EXPENSE_STATUS_COMPLETED, EXPENSE_STATUS_REJECTED]),
+        ).scalar() or 0
+        if pending_expense > 0:
+            raise ParamValidateException(message="结项前需先完成全部经费报销的审批")
+
+    @staticmethod
     def submit_final(db: Session, project_id: int, final_report: str,
                      attachment_ids: list, operator: SysUser) -> ProjectSubmitResponse:
         """提交结项验收报告（状态8待结题 -> 9已结题）"""
@@ -443,6 +474,9 @@ class ProjectService:
             raise ParamValidateException(message="仅待结题状态可提交结项验收报告")
         if not final_report or not final_report.strip():
             raise ParamValidateException(message="请填写结项验收报告")
+
+        # 结项三条件校验：中期已批 + 成果≥1 + 报销已结清
+        ProjectService._ensure_final_conditions(db, obj)
 
         obj.status = PROJECT_STATUS_FINISHED
         # 关联结项附件
@@ -490,15 +524,26 @@ class ProjectService:
 
     @staticmethod
     def delete(db: Session, project_id: int, operator: SysUser) -> None:
-        """软删除项目（仅草稿或管理员）"""
+        """软删除项目：
+        - 真超级管理员：全校任意项目
+        - 学院管理员：仅本院项目
+        - 学生：仅本人负责的草稿项目
+        """
         obj = ProjectCRUD.get_by_id(db, project_id)
         if not obj:
             raise ResourceNotFoundException(message="项目不存在")
-        if operator.role != RoleEnum.ADMIN:
+        if is_super_admin(operator):
+            pass
+        elif is_college_admin(operator):
+            if not operator.college_id or obj.college_id != operator.college_id:
+                raise PermissionDeniedException(message="学院管理员仅可删除本院项目")
+        elif operator.role == RoleEnum.STUDENT:
             if obj.status != PROJECT_STATUS_DRAFT:
                 raise PermissionDeniedException(message="仅草稿状态可删除，其他状态请联系管理员")
             if obj.leader_id != operator.id:
                 raise PermissionDeniedException(message="仅负责人可删除草稿")
+        else:
+            raise PermissionDeniedException(message="无权限删除该项目")
         obj.is_deleted = 1
         db.commit()
 
@@ -626,7 +671,7 @@ class ProjectService:
             extract("year", ProjProject.created_at).label("y"),
             extract("month", ProjProject.created_at).label("m"),
             func.count(ProjProject.id).label("apply_count"),
-            func.sum(func.IF(ProjProject.status.in_([6, 7, 8, 9]), 1, 0)).label("approved_count"),
+            func.sum(case((ProjProject.status.in_([6, 7, 8, 9]), 1), else_=0)).label("approved_count"),
         ).filter(
             ProjProject.is_deleted == 0,
             extract("year", ProjProject.created_at).between(start_year, end_year),
@@ -721,7 +766,7 @@ class AchievementService:
         obj = ProjectCRUD.get_by_id(db, req.project_id)
         if not obj:
             raise ResourceNotFoundException(message="所属项目不存在")
-        if obj.status < 6:
+        if obj.status not in (6, 7, 8, 9):
             raise ParamValidateException(message="仅已立项及之后阶段可登记成果")
         if operator.role not in (RoleEnum.ADMIN, RoleEnum.TEACHER) and obj.leader_id != operator.id:
             raise PermissionDeniedException(message="仅负责人、指导教师或管理员可登记成果")
@@ -736,9 +781,12 @@ class AchievementService:
         ach = db.query(ProjAchievement).filter(ProjAchievement.id == pk).first()
         if not ach:
             raise ResourceNotFoundException(message="成果不存在")
-        if operator.role != RoleEnum.ADMIN:
+        if not is_super_admin(operator):
             obj = ProjectCRUD.get_by_id(db, ach.project_id)
-            if obj and obj.leader_id != operator.id:
+            if is_college_admin(operator):
+                if not obj or not operator.college_id or obj.college_id != operator.college_id:
+                    raise PermissionDeniedException(message="学院管理员仅可删除本院成果")
+            elif not obj or obj.leader_id != operator.id:
                 raise PermissionDeniedException(message="仅负责人或管理员可删除成果")
         ach.is_deleted = 1
         db.commit()

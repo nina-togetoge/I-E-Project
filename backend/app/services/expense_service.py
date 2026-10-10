@@ -20,7 +20,8 @@ from app.schemas.project import (
     EXPENSE_STATUS_COMPLETED,
     EXPENSE_STATUS_REJECTED,
 )
-from app.core.exceptions import BizException
+from app.core.exceptions import BizException, PermissionDeniedException
+from app.core.security import is_super_admin
 
 # 审批状态 → 中文显示文本
 EXPENSE_STATUS_MAP = {
@@ -181,12 +182,31 @@ class ExpenseService:
         )
 
     @staticmethod
-    def create(db: Session, data: ExpenseCreate, applicant_id: int, applicant_name: str) -> ProjExpense:
+    def create(db: Session, data: ExpenseCreate, operator) -> ProjExpense:
+        applicant_id = operator.id
+        applicant_name = operator.real_name or operator.username
         project = db.query(ProjProject).filter(
             ProjProject.id == data.project_id, ProjProject.is_deleted == 0
         ).first()
         if not project:
             raise BizException("项目不存在")
+        # [权限] 仅项目负责人（超级管理员可代操作）可提交该项目的报销申请
+        if not is_super_admin(operator) and project.leader_id != operator.id:
+            raise PermissionDeniedException(message="仅项目负责人可提交该项目的报销申请")
+        # [预算] 报销金额不得超过项目剩余预算；
+        # 已提交/审批中的费用视为已占用，已驳回的释放额度
+        budget = Decimal(project.budget_amount or 0)
+        occupied = db.query(
+            func.coalesce(func.sum(ProjExpense.expense_amount), 0)
+        ).filter(
+            ProjExpense.project_id == project.id,
+            ProjExpense.is_deleted == 0,
+            ProjExpense.status != EXPENSE_STATUS_REJECTED,
+        ).scalar() or Decimal("0")
+        amount = Decimal(data.expense_amount or 0)
+        remaining = budget - Decimal(occupied)
+        if amount > remaining:
+            raise BizException(f"报销金额超出剩余预算（剩余 {remaining} 元）")
         expense_no = f"EXP{datetime.now().strftime('%Y%m%d%H%M%S')}{applicant_id % 100:02d}"
         exp = ProjExpense(
             expense_no=expense_no,

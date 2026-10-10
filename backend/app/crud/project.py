@@ -13,6 +13,7 @@ from app.models import (
     SysUser, SysCollege,
 )
 from app.core.deps import DataScope
+from app.schemas.project import PROJECT_STATUS_NAME
 
 
 class ProjectCRUD:
@@ -20,11 +21,8 @@ class ProjectCRUD:
 
     PROJECT_TYPE_NAME = {1: "创新训练", 2: "创业训练", 3: "创业实践"}
     PROJECT_LEVEL_NAME = {1: "校级", 2: "省级", 3: "国家级"}
-    STATUS_NAME = {
-        0: "草稿", 1: "待学院初审", 2: "学院初审通过", 3: "待校级复审",
-        4: "校级复审通过", 5: "待专家评审", 6: "已立项", 7: "中期检查",
-        8: "待结题", 9: "已结题", 10: "已驳回", 11: "已撤销",
-    }
+    # 状态名称统一引用 schemas 中的定义，避免多处漂移（含状态 12 待指导教师确认）
+    STATUS_NAME = PROJECT_STATUS_NAME
 
     # ========== 查询 ==========
     @staticmethod

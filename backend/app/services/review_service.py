@@ -90,13 +90,14 @@ class ReviewService:
                 raise PermissionDeniedException(message="仅该项目的指导教师可进行确认")
             return
         if stage == REVIEW_STAGE_COLLEGE:
-            # 超级管理员 / 本院学院管理员 / 本院教师 均可执行学院初审
+            # 学院初审：真超级管理员 / 本院学院管理员 / 本院教师
             if is_super_admin(operator):
                 return
-            if operator.college_id and operator.college_id != project.college_id:
-                raise PermissionDeniedException(message="仅本院教师/学院管理员可执行学院初审")
-            # 本院教师(role=2) 或 本院学院管理员(role=4+college_id) 放行
+            # 教师与学院管理员都必须绑定且匹配项目所属学院；
+            # 未绑定学院(college_id 为空)的教师不得跨院审核
             if operator.role in (RoleEnum.TEACHER, RoleEnum.ADMIN):
+                if not operator.college_id or operator.college_id != project.college_id:
+                    raise PermissionDeniedException(message="仅本院教师/学院管理员可执行学院初审")
                 return
             raise PermissionDeniedException(message="当前用户无权进行学院初审")
         if stage == REVIEW_STAGE_UNIVERSITY:
@@ -117,9 +118,17 @@ class ReviewService:
                     raise PermissionDeniedException(message="您未被分配到该项目的专家评审任务")
             return
         if stage == REVIEW_STAGE_FINAL:
-            # 结题验收：专家 + 真超级管理员（学院管理员不允许结题，避免学院干预校级终审）
-            if operator.role != RoleEnum.EXPERT and not is_super_admin(operator):
-                raise PermissionDeniedException(message="仅系统管理员或专家可进行结题验收")
+            # 结题验收：仅"被分配到该项目的专家" + 真超级管理员
+            # （学院管理员不允许结题，避免学院干预校级终审）
+            if is_super_admin(operator):
+                return
+            if operator.role != RoleEnum.EXPERT:
+                raise PermissionDeniedException(message="仅系统管理员或被分配的专家可进行结题验收")
+            assigned = ReviewCRUD.exist_by_project_stage_reviewer(
+                Session.object_session(project), project.id, REVIEW_STAGE_EXPERT, operator.id
+            )
+            if not assigned:
+                raise PermissionDeniedException(message="您未被分配到该项目的专家评审任务，无法进行结题验收")
             return
         raise PermissionDeniedException(message="无法识别的审核阶段")
 
@@ -163,11 +172,8 @@ class ReviewService:
             project.status = ReviewService._next_status_after_pass(project.status, req.review_stage)
             if project.status == 6:
                 project.approval_time = datetime.now()
-            if req.review_stage == REVIEW_STAGE_COLLEGE:
-                # 还需先写中间状态2(学院初审通过)，然后流程可配置是否自动到3
-                project.status = 2
-                # 保存后下一步：直接自动进入待校级复审 (可按实际业务开关)
-                project.status = 3
+            # 说明：学院初审通过(2)、校级复审通过(4)为瞬时中间态，不落库；
+            # 目标持久态已由 _next_status_after_pass 直接给出（3 / 5）
         elif req.review_result == REVIEW_RESULT_REJECT:
             project.status = 10
             project.reject_reason = (req.review_comment or "")[:500]
@@ -222,22 +228,30 @@ class ReviewService:
                 "review_time": datetime.now(),
             })
 
-        # 简单的自动立项判定：专家评审均分>=60且至少1位专家已评审通过，则进入已立项
-        # 真实场景：等所有专家完成后再判定，这里做演示逻辑
+        # 自动立项判定：必须等"所有已分配专家"都完成评审后才判定，
+        # 否则某位专家一通过就置为已立项(6)，其余已分配专家会因 status != 5 无法再提交打分。
         from app.models import ProjReview
-        reviews = db.query(ProjReview).filter(
+        pending_assigned = db.query(func.count(ProjReview.id)).filter(
             ProjReview.project_id == project.id,
             ProjReview.review_stage == REVIEW_STAGE_EXPERT,
+            ProjReview.review_result == 99,  # 占位记录：已分配但尚未评审
             ProjReview.is_deleted == 0,
-            ProjReview.review_result.isnot(None),
-        ).all()
-        if reviews:
-            pass_count = sum(1 for r in reviews if r.review_result == REVIEW_RESULT_PASS)
-            total = len(reviews)
-            # 简单：多数通过则立项（可根据实际业务调整规则）
-            if pass_count * 2 >= total:
-                project.status = 6
-                project.approval_time = datetime.now()
+        ).scalar() or 0
+        if pending_assigned == 0:
+            reviews = db.query(ProjReview).filter(
+                ProjReview.project_id == project.id,
+                ProjReview.review_stage == REVIEW_STAGE_EXPERT,
+                ProjReview.is_deleted == 0,
+                ProjReview.review_result.isnot(None),
+                ProjReview.review_result != 99,
+            ).all()
+            if reviews:
+                pass_count = sum(1 for r in reviews if r.review_result == REVIEW_RESULT_PASS)
+                total = len(reviews)
+                # 多数通过（含平票）则立项
+                if pass_count * 2 >= total:
+                    project.status = 6
+                    project.approval_time = datetime.now()
         db.commit()
         db.refresh(record)
         return ReviewService._record_to_item(record)
@@ -289,9 +303,8 @@ class ReviewService:
                     "review_comment": None,
                     "review_time": datetime.now(),
                 })
-        # 分配专家后，如果项目还在4（校级通过），自动进入阶段5（待专家评审）
-        if project.status == 4:
-            project.status = 5
+        # 说明：校级复审通过(4)为瞬时态、不落库，分配专家时项目应已处于 5(待专家评审)；
+        # 若项目尚未进入该阶段（如仍为 3 待校级复审）则仅登记分配，不改变主状态。
         db.commit()
         return {"assigned_count": len(new_ids), "project_id": project.id}
 
@@ -600,11 +613,23 @@ class ChangeService:
 
     @staticmethod
     def approve(db: Session, change_id: int, approve: bool, comment: str, operator: SysUser):
-        if operator.role not in (RoleEnum.TEACHER, RoleEnum.ADMIN):
-            raise PermissionDeniedException(message="仅教师/管理员可审批变更")
         obj = ChangeCRUD.get_by_id(db, change_id)
         if not obj:
             raise ResourceNotFoundException(message="申请不存在")
+        # 归属校验：超管全校；学院管理员仅本院项目；教师仅本人指导的项目
+        project = ProjectCRUD.get_by_id(db, obj.project_id)
+        if not project:
+            raise ResourceNotFoundException(message="关联项目不存在")
+        if is_super_admin(operator):
+            pass
+        elif is_college_admin(operator):
+            if not operator.college_id or project.college_id != operator.college_id:
+                raise PermissionDeniedException(message="学院管理员仅可审批本院项目的变更申请")
+        elif operator.role == RoleEnum.TEACHER:
+            if project.teacher_id != operator.id:
+                raise PermissionDeniedException(message="教师仅可审批本人指导项目的变更申请")
+        else:
+            raise PermissionDeniedException(message="仅教师/管理员可审批变更")
         if obj.status in (3, 4):
             raise ParamValidateException(message="该申请已完成审批，不可重复")
         # 简单流程：一级审批即完成（可扩展多级）
