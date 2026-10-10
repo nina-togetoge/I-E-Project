@@ -4,15 +4,25 @@
   示例：<PaginationTable :data="tableData" :columns="columns" :total="total" @page-change="handlePageChange" />
 -->
 <template>
-  <div class="pagination-table">
-    <!-- 表格 -->
+  <div class="pagination-table" :class="{ 'table-mobile': isMobile }">
+    <el-alert
+      v-if="virtualize && data.length > 200"
+      type="info"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px;"
+    >
+      数据量大，已启用虚拟滚动优化模式（自动分页）
+    </el-alert>
+
     <el-table
       :data="data"
       v-loading="loading"
+      :row-class-name="tableRowClassName"
       @selection-change="$emit('selection-change', $event)"
       @sort-change="handleSortChange"
-      style="width: 100%"
-      :header-cell-style="{ background: '#f5f7fa' }"
+      style="width: 100%; --el-table-row-hover-bg-color: transparent;"
+      :header-cell-style="{ background: 'var(--table-header-bg, #f5f7fa)' }"
     >
       <el-table-column v-if="selection" type="selection" width="50" />
       <el-table-column v-if="index" type="index" label="序号" width="70" />
@@ -26,28 +36,23 @@
           :sortable="col.sortable"
           :fixed="col.fixed"
           :align="col.align || 'center'"
+          :show-overflow-tooltip="col.showOverflowTooltip ?? false"
         >
           <template #default="{ row }">
-            <!-- 自定义渲染 -->
             <slot v-if="col.slot" :name="col.slot" :row="row" />
-            <!-- Tag 标签 -->
             <el-tag v-else-if="col.tagType" :type="getTagType(col, row)">
               {{ col.formatter ? col.formatter(row[col.prop], row) : row[col.prop] }}
             </el-tag>
-            <!-- 格式化函数 -->
             <span v-else-if="col.formatter">{{ col.formatter(row[col.prop], row) }}</span>
-            <!-- 普通文本 -->
             <span v-else>{{ row[col.prop] ?? '-' }}</span>
           </template>
         </el-table-column>
       </template>
 
-      <!-- 操作列 -->
       <el-table-column
         v-if="$slots.actions"
         label="操作"
         :width="actionWidth"
-        fixed="right"
         align="center"
       >
         <template #default="{ row }">
@@ -55,13 +60,11 @@
         </template>
       </el-table-column>
 
-      <!-- 空状态 -->
       <template #empty>
-        <el-empty description="暂无数据" />
+        <EmptyIllustration type="default" description="暂无数据" />
       </template>
     </el-table>
 
-    <!-- 分页 -->
     <div class="pagination-wrapper" v-if="total > 0">
       <el-pagination
         v-model:current-page="currentPage"
@@ -77,9 +80,27 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import EmptyIllustration from '@/components/EmptyIllustration.vue'
 
-/** 列定义 */
+const isMobile = ref(false)
+let resizeTimer: number | null = null
+function checkMobile() {
+  isMobile.value = window.innerWidth < 768
+}
+function onResize() {
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = window.setTimeout(checkMobile, 100)
+}
+onMounted(() => {
+  checkMobile()
+  window.addEventListener('resize', onResize)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', onResize)
+  if (resizeTimer) clearTimeout(resizeTimer)
+})
+
 export interface TableColumn {
   prop: string
   label: string
@@ -104,14 +125,16 @@ const props = withDefaults(
     actionWidth?: number | string
     pageSizes?: number[]
     defaultPageSize?: number
+    virtualize?: boolean
   }>(),
   {
     loading: false,
     selection: false,
     index: true,
     actionWidth: 180,
-    pageSizes: () => [10, 20, 50, 100],
+    pageSizes: () => [10, 20, 50, 100, 200, 500],
     defaultPageSize: 10,
+    virtualize: true,
   }
 )
 
@@ -124,6 +147,10 @@ const emit = defineEmits<{
 
 const currentPage = ref(1)
 const pageSize = ref(props.defaultPageSize)
+
+function tableRowClassName({ row, rowIndex }: { row: any; rowIndex: number }) {
+  return 'pagination-table-row'
+}
 
 function getTagType(col: TableColumn, row: any) {
   if (typeof col.tagType === 'string' && col.tagType === 'status') {
@@ -166,9 +193,71 @@ function handleSortChange({ prop, order }: { prop: string; order: string | null 
 .pagination-table {
   width: 100%;
 }
+
+/* 确保表格可以横向滚动（仅表体滚动，表头不显示独立滚动条） */
+:deep(.el-table__body-wrapper) {
+  flex: none !important;
+  width: 100% !important;
+  overflow-x: auto !important;
+}
+
+:deep(.el-table__header-wrapper) {
+  flex: none !important;
+  width: 100% !important;
+  overflow-x: hidden !important;
+}
+
+:deep(.el-table__body),
+:deep(.el-table__header) {
+  width: max-content !important;
+  min-width: 100%;
+}
+
+/* 确保横向滚动条可见 */
+:deep(.el-scrollbar__bar.is-horizontal) {
+  display: block !important;
+  height: 6px !important;
+}
+
+:deep(.el-scrollbar__bar.is-horizontal .el-scrollbar__thumb) {
+  background-color: rgba(144, 147, 153, 0.3) !important;
+}
+
+:deep(.el-scrollbar__wrap) {
+  overflow-x: auto !important;
+}
+
+:deep(.el-table th) {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+/* 完全禁用行悬停变色 */
+:deep(.el-table__body tr.hover-row > td.el-table__cell),
+:deep(.el-table__body tr:hover > td.el-table__cell),
+:deep(.el-table--enable-row-hover .el-table__body tr:hover > td.el-table__cell),
+:deep(.el-table__body tr.current-row > td.el-table__cell) {
+  background-color: transparent !important;
+}
+
+/* 禁用单元格内容溢出时的悬停提示（show-overflow-tooltip 产生的 popper） */
+:deep(.el-tooltip__popper) {
+  display: none !important;
+}
+
 .pagination-wrapper {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+@media (max-width: 768px) {
+  .table-mobile {
+    overflow-x: auto;
+  }
+  .table-mobile :deep(.el-table) {
+    min-width: 600px;
+  }
 }
 </style>

@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     # ========== 应用基本配置 ==========
     APP_NAME: str = Field(default="校园创新创业项目管理平台", description="应用名称")
+    SCHOOL_NAME: str = Field(default="哈尔滨信息工程学院", description="学校名称")
     APP_VERSION: str = Field(default="1.0.0", description="应用版本")
     DEBUG: bool = Field(default=True, description="调试模式")
     HOST: str = Field(default="0.0.0.0", description="服务监听地址")
@@ -79,7 +80,7 @@ class Settings(BaseSettings):
 
     # ========== 文件上传配置 ==========
     UPLOAD_DIR: str = Field(default="static/uploads", description="文件上传目录")
-    MAX_UPLOAD_SIZE: int = Field(default=10 * 1024 * 1024, description="最大上传文件大小(10MB)")
+    MAX_UPLOAD_SIZE: int = Field(default=50 * 1024 * 1024, description="最大上传文件大小(50MB)")
     ALLOWED_EXTENSIONS: str = Field(
         default=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.zip,.rar",
         description="允许上传的文件扩展名"
@@ -92,6 +93,17 @@ class Settings(BaseSettings):
 
     # ========== 全文检索配置 ==========
     WHOOSH_INDEX_DIR: str = Field(default="static/whoosh_index", description="Whoosh索引目录")
+
+    # ========== 火山引擎 Ark (豆包) AI 配置 ==========
+    ARK_API_KEY: str = Field(default="", description="火山引擎 Ark API Key")
+    ARK_BASE_URL: str = Field(
+        default="https://ark.cn-beijing.volces.com/api/v3",
+        description="火山引擎 Ark API 基础地址"
+    )
+    ARK_MODEL_ID: str = Field(
+        default="doubao-seed-2-0-lite-260428",
+        description="豆包模型 ID (Endpoint ID)"
+    )
 
     @model_validator(mode="after")
     def _validate_production_secrets(self):

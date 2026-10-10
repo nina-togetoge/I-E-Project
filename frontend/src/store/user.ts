@@ -17,6 +17,7 @@ export interface UserInfo {
   role_name: string
   college_id: number | null
   college_name: string | null
+  school_name: string
   avatar: string | null
   status: number
   force_change_pwd: number  // 首次登录强制改密: 0-否 1-是
@@ -34,7 +35,29 @@ export const useUserStore = defineStore('user', () => {
   const isLoggedIn = computed(() => !!accessToken.value)
   const role = computed(() => userInfo.value?.role || 0)
   const roleName = computed(() => userInfo.value?.role_name || '')
+  const collegeId = computed(() => userInfo.value?.college_id ?? null)
+  const schoolName = computed(() => userInfo.value?.school_name || '')
+  /** 学院/学校显示名：有学院显示学院名，否则显示学校名 */
+  const displayCollegeName = computed(() => userInfo.value?.college_name || schoolName.value)
   const isAdmin = computed(() => role.value === 4)
+
+  /** 真·超级管理员（对应后端 is_super_admin）：role=4 且 未绑定学院（college_id=null/0） */
+  const isSuperAdmin = computed(() => (
+    role.value === 4 && (collegeId.value === null || collegeId.value === 0 || collegeId.value === undefined)
+  ))
+
+  /** 学院管理员（对应后端 is_college_admin）：role=4 且 已绑定具体 college_id */
+  const isCollegeAdmin = computed(() => (
+    role.value === 4 && collegeId.value !== null && collegeId.value !== 0 && collegeId.value !== undefined
+  ))
+
+  /** 角色展示名：学院管理员单独显示「学院管理员」，避免和 super_admin 混淆 */
+  const roleNameDisplay = computed(() => {
+    if (isCollegeAdmin.value) return '学院管理员'
+    if (isSuperAdmin.value) return '系统管理员'
+    return roleName.value
+  })
+
   const isStudent = computed(() => role.value === 1)
   const isTeacher = computed(() => role.value === 2)
   const isExpert = computed(() => role.value === 3)
@@ -149,7 +172,13 @@ export const useUserStore = defineStore('user', () => {
     isLoggedIn,
     role,
     roleName,
+    roleNameDisplay,
+    collegeId,
+    schoolName,
+    displayCollegeName,
     isAdmin,
+    isSuperAdmin,
+    isCollegeAdmin,
     isStudent,
     isTeacher,
     isExpert,

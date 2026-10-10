@@ -17,7 +17,7 @@ from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectQueryParams, ProjectListItem,
     ProjectDetailResponse, ProjectSubmitResponse,
     AchievementCreate, AchievementResponse, ProjectStatisticsResponse,
-    StatisticsTrendItem,
+    StatisticsTrendItem, CollegeStatisticsItem, FinalSubmitRequest,
 )
 from app.services.project_service import ProjectService, AchievementService
 
@@ -39,6 +39,28 @@ def api_project_list(
     current_user: SysUser = require_login,
 ):
     items, total = ProjectService.paginate(db, pager, params, data_scope)
+    return success(data=PageResult.create(items, total, pager.page, pager.page_size))
+
+
+@router_project.get("/announcement/list", response_model=ResponseModel[PageResult[ProjectListItem]],
+                    summary="立项结果公示列表(公开)")
+def api_announcement_list(
+    keyword: Optional[str] = Query(default=None, max_length=128),
+    college_id: Optional[int] = Query(default=None),
+    start_year: Optional[int] = Query(default=None),
+    end_year: Optional[int] = Query(default=None),
+    pager: PaginationParams = Depends(),
+    db: Session = Depends(get_db),
+    current_user: SysUser = require_login,
+):
+    """立项结果公示：展示所有已立项及之后阶段的项目（不做数据权限过滤，全校可见）"""
+    params = ProjectQueryParams(
+        keyword=keyword,
+        college_id=college_id,
+        start_year=start_year,
+        end_year=end_year,
+    )
+    items, total = ProjectService.paginate_announcement(db, pager, params)
     return success(data=PageResult.create(items, total, pager.page, pager.page_size))
 
 
@@ -117,6 +139,21 @@ def api_project_withdraw(
         ctx.set_desc(f"撤回项目#{project_id}")
         ProjectService.withdraw(db, project_id, current_user)
     return success(message="撤回成功，项目已退回草稿状态")
+
+
+@router_project.post("/{project_id}/submit-final", response_model=ResponseModel[ProjectSubmitResponse],
+                     summary="提交结项验收报告")
+def api_project_submit_final(
+    project_id: int,
+    data: FinalSubmitRequest,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(RequireRole(RoleEnum.STUDENT, RoleEnum.ADMIN)),
+    ctx: OperationContext = Depends(),
+):
+    with ctx:
+        ctx.set_desc(f"提交项目#{project_id}结项验收报告")
+        result = ProjectService.submit_final(db, project_id, data.final_report, data.attachment_ids, current_user)
+    return success(data=result, message="结项验收报告已提交")
 
 
 @router_project.delete("/{project_id}", response_model=ResponseModel, summary="删除项目(软删)")
@@ -204,3 +241,13 @@ def api_stats_trend(
     current_user: SysUser = require_login,
 ):
     return success(data=ProjectService.trend_by_month(db, start_year, end_year, data_scope))
+
+
+@router_stats.get("/college-breakdown", response_model=ResponseModel[list[CollegeStatisticsItem]],
+                  summary="各学院统计数据（雷达图/热力图/学院立项率）")
+def api_stats_college_breakdown(
+    db: Session = Depends(get_db),
+    data_scope: DataScope = Depends(),
+    current_user: SysUser = require_login,
+):
+    return success(data=ProjectService.college_breakdown(db, data_scope))

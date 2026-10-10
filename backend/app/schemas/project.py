@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, ConfigDict, model_validator
 # 项目状态常量（与数据库 status 字段一致）
 # ====================================================================
 PROJECT_STATUS_DRAFT = 0          # 草稿
+PROJECT_STATUS_PENDING_TEACHER = 12  # 待指导教师确认
 PROJECT_STATUS_PENDING_COLLEGE = 1  # 待学院初审
 PROJECT_STATUS_COLLEGE_PASSED = 2   # 学院初审通过
 PROJECT_STATUS_PENDING_UNIVERSITY = 3  # 待校级复审
@@ -24,7 +25,7 @@ PROJECT_STATUS_REJECTED = 10            # 已驳回
 PROJECT_STATUS_CANCELLED = 11           # 已撤销
 
 PROJECT_STATUS_NAME = {
-    0: "草稿", 1: "待学院初审", 2: "学院初审通过", 3: "待校级复审",
+    0: "草稿", 12: "待指导教师确认", 1: "待学院初审", 2: "学院初审通过", 3: "待校级复审",
     4: "校级复审通过", 5: "待专家评审", 6: "已立项", 7: "中期检查中",
     8: "待结题", 9: "已结题", 10: "已驳回", 11: "已撤销",
 }
@@ -82,7 +83,9 @@ class ProjectCreate(BaseModel):
     project_type: int = Field(..., ge=1, le=3)
     project_level: int = Field(..., ge=1, le=3)
     college_id: int
+    leader_id: Optional[int] = Field(default=None, description="负责人ID（管理员创建时必填）")
     teacher_id: Optional[int] = None
+    competition_id: Optional[int] = Field(default=None, description="参赛比赛ID")
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     project_summary: Optional[str] = None
@@ -105,6 +108,7 @@ class ProjectUpdate(BaseModel):
     project_type: Optional[int] = Field(default=None, ge=1, le=3)
     project_level: Optional[int] = Field(default=None, ge=1, le=3)
     teacher_id: Optional[int] = None
+    competition_id: Optional[int] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     project_summary: Optional[str] = None
@@ -112,6 +116,7 @@ class ProjectUpdate(BaseModel):
     expected_results: Optional[str] = None
     team_members: Optional[List[TeamMemberCreate]] = None
     budgets: Optional[List[BudgetItemCreate]] = None
+    attachment_ids: Optional[List[int]] = Field(default=None, description="上传时 biz_id=0 的临时附件IDs，更新后关联到项目")
 
 
 class ProjectQueryParams(BaseModel):
@@ -143,12 +148,15 @@ class ProjectListItem(BaseModel):
     leader_name: str = ""
     teacher_id: Optional[int]
     teacher_name: Optional[str] = None
+    competition_id: Optional[int] = None
+    competition_name: Optional[str] = None
     start_date: Optional[date]
     end_date: Optional[date]
     budget_amount: Decimal
     used_amount: Decimal
     status: int
     status_name: str = ""
+    assigned_expert_count: int = Field(default=0, description="已分配专家数量")
     submit_time: Optional[datetime]
     created_at: datetime
 
@@ -161,6 +169,7 @@ class ProjectDetailResponse(ProjectListItem):
     approval_time: Optional[datetime] = None
     team_members: List[TeamMemberResponse] = Field(default_factory=list)
     budgets: List[BudgetItemResponse] = Field(default_factory=list)
+    attachments: List[dict] = Field(default_factory=list, description="项目附件列表")
 
 
 class ProjectSubmitResponse(BaseModel):
@@ -169,6 +178,12 @@ class ProjectSubmitResponse(BaseModel):
     status: int
     status_name: str
     message: str
+
+
+class FinalSubmitRequest(BaseModel):
+    """提交结项验收报告"""
+    final_report: str = Field(min_length=1, max_length=2000, description="结项验收报告")
+    attachment_ids: List[int] = Field(default_factory=list, description="结项验收报告附件IDs")
 
 
 # ====================================================================
@@ -212,6 +227,24 @@ class ProjectStatisticsResponse(BaseModel):
     total_budget: Decimal
     total_used: Decimal
     approval_rate: float = Field(default=0, description="整体立项率%")
+    # —— 数据看板补充字段（真实数据）——
+    category_dist: List[dict] = Field(default_factory=list, description="项目类别分布[{name,value}]")
+    status_dist: List[dict] = Field(default_factory=list, description="项目状态分布[{name,value}]")
+    budget_by_category: List[dict] = Field(default_factory=list, description="经费科目使用分布[{name,amount}]")
+
+
+class CollegeStatisticsItem(BaseModel):
+    """单学院统计数据（雷达图/热力图/学院立项率柱状图）"""
+    college_id: int
+    college_name: str
+    total_projects: int = 0
+    approved_projects: int = 0
+    finished_projects: int = 0
+    total_budget: Decimal = Decimal("0.00")
+    total_used: Decimal = Decimal("0.00")
+    approval_rate: float = 0.0
+    achievements: int = 0
+    avg_score: float = 0.0
 
 
 # ====================================================================
@@ -232,8 +265,9 @@ class ExpenseCreate(BaseModel):
     project_id: int
     expense_amount: Decimal
     expense_desc: str = Field(min_length=1, max_length=500)
-    invoice_no: Optional[str] = None
+    invoice_no: Optional[str] = Field(default=None, max_length=128)
     budget_item_id: Optional[int] = None
+    attachment_ids: List[int] = Field(default_factory=list, description="上传时 biz_id=0 的临时附件IDs，创建后关联到报销单")
 
 
 class ExpenseListItem(BaseModel):
@@ -246,12 +280,14 @@ class ExpenseListItem(BaseModel):
     applicant_name: str
     expense_amount: Decimal
     expense_desc: str
+    invoice_no: Optional[str] = None
     status: int
     status_text: str = ""
     reject_reason: Optional[str] = None
     submit_time: Optional[datetime] = None
     approval_time: Optional[datetime] = None
     created_at: Optional[datetime] = None
+    attachments: List[dict] = Field(default_factory=list, description="报销票据附件")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -259,7 +295,7 @@ class ExpenseListItem(BaseModel):
 class ExpenseReviewRequest(BaseModel):
     """审批请求：approved=True通过(推进下一阶段)，False驳回"""
     approved: bool = Field(..., description="True=通过 False=驳回")
-    opinion: Optional[str] = None
+    opinion: Optional[str] = Field(default=None, max_length=500, description="审批意见")
 
 
 class ExpenseQueryRequest(BaseModel):

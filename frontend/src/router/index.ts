@@ -12,19 +12,25 @@ const publicRoutes: RouteRecordRaw[] = [
   {
     path: '/login',
     name: 'Login',
-    component: () => import('@/views/Login.vue'),
+    component: () => import(/* @vite-ignore */ /* webpackChunkName: "core" */ '@/views/Login.vue'),
     meta: { title: '登录' },
+  },
+  {
+    path: '/register',
+    name: 'Register',
+    component: () => import(/* webpackChunkName: "core" */ '@/views/Register.vue'),
+    meta: { title: '学生注册' },
   },
   {
     path: '/403',
     name: 'Forbidden',
-    component: () => import('@/views/error/403.vue'),
+    component: () => import(/* webpackChunkName: "misc" */ '@/views/error/403.vue'),
     meta: { title: '无权限' },
   },
   {
     path: '/404',
     name: 'NotFound',
-    component: () => import('@/views/error/404.vue'),
+    component: () => import(/* webpackChunkName: "misc" */ '@/views/error/404.vue'),
     meta: { title: '页面不存在' },
   },
 ]
@@ -33,60 +39,72 @@ const publicRoutes: RouteRecordRaw[] = [
 const layoutRoutes: RouteRecordRaw[] = [
   {
     path: '/',
-    component: () => import('@/layout/index.vue'),
+    component: () => import(/* webpackChunkName: "core" */ '@/layout/index.vue'),
     redirect: '/dashboard',
     children: [
-      // ==================== 通用页面 ====================
+      // ==================== 工作台 ====================
       {
         path: 'dashboard',
         name: 'Dashboard',
-        component: () => import('@/views/dashboard/index.vue'),
-        meta: { title: '首页', icon: 'HomeFilled' },
+        component: () => import(/* @vite-ignore */ /* webpackChunkName: "core" */ '@/views/dashboard/index.vue'),
+        meta: { title: '首页', icon: 'HomeFilled', group: 'workbench' },
       },
       {
         path: 'profile',
         name: 'Profile',
-        component: () => import('@/views/profile/index.vue'),
-        meta: { title: '个人中心', icon: 'User' },
+        component: () => import(/* @vite-ignore */ /* webpackChunkName: "core" */ '@/views/profile/index.vue'),
+        meta: { title: '个人中心', icon: 'User', group: 'workbench' },
       },
 
-      // ==================== 学生端 ====================
+      // ==================== 项目管理 ====================
       {
         path: 'projects',
         name: 'MyProjects',
-        component: () => import('@/views/project/MyProjects.vue'),
-        meta: { title: '我的项目', icon: 'Folder', roles: [1, 2, 4] },
+        component: () => import(/* webpackChunkName: "project" */ '@/views/project/MyProjects.vue'),
+        meta: { title: '我的项目', icon: 'Folder', roles: [1, 2, 4], group: 'project' },
       },
       {
         path: 'projects/create',
         name: 'ProjectCreate',
-        component: () => import('@/views/project/ProjectCreate.vue'),
-        meta: { title: '项目申报', icon: 'EditPen', roles: [1] },
+        component: () => import(/* webpackChunkName: "project" */ '@/views/project/ProjectCreate.vue'),
+        meta: { title: '项目申报', hidden: true, roles: [1, 2, 3, 4] },
       },
       {
         path: 'projects/:id',
         name: 'ProjectDetail',
-        component: () => import('@/views/project/ProjectDetail.vue'),
+        component: () => import(/* webpackChunkName: "project" */ '@/views/project/ProjectDetail.vue'),
         meta: { title: '项目详情', hidden: true },
+      },
+      {
+        path: 'projects/:id/midterm',
+        name: 'ProjectMidterm',
+        component: () => import(/* webpackChunkName: "project" */ '@/views/project/MidtermCheck.vue'),
+        meta: { title: '中期检查', hidden: true },
+      },
+      {
+        path: 'projects/:id/achievements',
+        name: 'ProjectAchievements',
+        component: () => import(/* webpackChunkName: "project" */ '@/views/project/ProjectAchievements.vue'),
+        meta: { title: '项目成果', hidden: true },
       },
       {
         path: 'expenses',
         name: 'MyExpenses',
-        component: () => import('@/views/expense/MyExpenses.vue'),
-        meta: { title: '报销申请', icon: 'Money', roles: [1] },
+        component: () => import(/* webpackChunkName: "expense" */ '@/views/expense/MyExpenses.vue'),
+        meta: { title: '报销申请', icon: 'Money', roles: [1], group: 'project' },
       },
 
-      // ==================== 教师端 ====================
+      // ==================== 审核中心 ====================
       {
         path: 'review/pending',
         name: 'ReviewPending',
-        component: () => import('@/views/review/ReviewPending.vue'),
-        meta: { title: '待审核列表', icon: 'Bell', roles: [2, 4] },
+        component: () => import(/* webpackChunkName: "review" */ '@/views/review/ReviewPending.vue'),
+        meta: { title: '待审核列表', icon: 'Bell', roles: [2, 4], group: 'review' },
       },
       {
         path: 'review/:id',
         name: 'ReviewDetail',
-        component: () => import('@/views/review/ReviewDetail.vue'),
+        component: () => import(/* webpackChunkName: "review" */ '@/views/review/ReviewDetail.vue'),
         meta: { title: '审核详情', hidden: true, roles: [2, 3, 4] },
       },
 
@@ -94,52 +112,78 @@ const layoutRoutes: RouteRecordRaw[] = [
       {
         path: 'expert/pending',
         name: 'ExpertPending',
-        component: () => import('@/views/expert/ExpertPending.vue'),
-        meta: { title: '待评审项目', icon: 'Document', roles: [3] },
+        component: () => import(/* webpackChunkName: "expert" */ '@/views/expert/ExpertPending.vue'),
+        meta: { title: '待评审项目', icon: 'Document', roles: [3], group: 'review' },
       },
 
-      // ==================== 管理员端 ====================
+      // ==================== 系统管理 ====================
       {
         path: 'admin/users',
         name: 'UserManage',
-        component: () => import('@/views/admin/UserManage.vue'),
-        meta: { title: '用户管理', icon: 'UserFilled', roles: [4] },
+        component: () => import(/* webpackChunkName: "admin" */ '@/views/admin/UserManage.vue'),
+        meta: { title: '用户管理', icon: 'UserFilled', roles: [4], group: 'system' },
       },
       {
         path: 'admin/projects',
         name: 'AdminProjects',
-        component: () => import('@/views/admin/AdminProjects.vue'),
-        meta: { title: '项目管理', icon: 'Files', roles: [4] },
+        component: () => import(/* webpackChunkName: "admin" */ '@/views/admin/AdminProjects.vue'),
+        meta: { title: '项目管理', icon: 'Files', roles: [4], group: 'system' },
       },
       {
         path: 'admin/expenses',
         name: 'AdminExpenses',
-        component: () => import('@/views/admin/AdminExpenses.vue'),
-        meta: { title: '经费管理', icon: 'Wallet', roles: [4] },
+        component: () => import(/* webpackChunkName: "admin" */ '@/views/admin/AdminExpenses.vue'),
+        meta: { title: '经费管理', icon: 'Wallet', roles: [2, 4], group: 'system' },
       },
       {
         path: 'admin/statistics',
         name: 'Statistics',
-        component: () => import('@/views/admin/Statistics.vue'),
-        meta: { title: '数据看板', icon: 'DataAnalysis', roles: [4] },
+        component: () => import(/* webpackChunkName: "admin" */ '@/views/admin/Statistics.vue'),
+        meta: { title: '数据看板', icon: 'DataAnalysis', roles: [4], group: 'system' },
       },
       {
         path: 'admin/logs',
         name: 'OperationLogs',
-        component: () => import('@/views/admin/OperationLogs.vue'),
-        meta: { title: '操作日志', icon: 'List', roles: [4] },
+        component: () => import(/* webpackChunkName: "admin" */ '@/views/admin/OperationLogs.vue'),
+        meta: { title: '操作日志', icon: 'List', roles: [4], group: 'system' },
+      },
+
+      // ==================== 资源中心 ====================
+      {
+        path: 'competitions',
+        name: 'CompetitionList',
+        component: () => import(/* webpackChunkName: "competition" */ '@/views/competition/CompetitionList.vue'),
+        meta: { title: '创新创业大赛', icon: 'Trophy', roles: [1, 2, 3, 4], group: 'resource' },
+      },
+      {
+        path: 'admin/competitions',
+        name: 'CompetitionManage',
+        component: () => import(/* webpackChunkName: "competition" */ '@/views/competition/CompetitionManage.vue'),
+        meta: { title: '大赛管理', icon: 'Trophy', roles: [4], group: 'system' },
+      },
+      {
+        path: 'admin/announcements',
+        name: 'AnnouncementManage',
+        component: () => import(/* webpackChunkName: "misc" */ '@/views/announcement/AnnouncementManage.vue'),
+        meta: { title: '公告管理', icon: 'Bell', roles: [4], group: 'system' },
+      },
+      {
+        path: 'announcement/approval',
+        name: 'ApprovalAnnouncement',
+        component: () => import(/* webpackChunkName: "misc" */ '@/views/announcement/ApprovalList.vue'),
+        meta: { title: '立项结果公示', icon: 'Bell', roles: [1, 2, 3, 4], group: 'resource' },
       },
       {
         path: 'admin/archive',
         name: 'ProjectArchive',
-        component: () => import('@/views/archive/ArchiveList.vue'),
-        meta: { title: '归档项目库', icon: 'Box', roles: [1, 2, 3, 4] },
+        component: () => import(/* webpackChunkName: "misc" */ '@/views/archive/ArchiveList.vue'),
+        meta: { title: '归档项目库', icon: 'Box', roles: [1, 2, 3, 4], group: 'resource' },
       },
       {
         path: 'admin/search',
         name: 'FullSearch',
-        component: () => import('@/views/search/FullSearch.vue'),
-        meta: { title: '全文检索', icon: 'Search', roles: [1, 2, 3, 4] },
+        component: () => import(/* webpackChunkName: "misc" */ '@/views/search/FullSearch.vue'),
+        meta: { title: '全文检索', icon: 'Search', roles: [1, 2, 3, 4], group: 'resource' },
       },
     ],
   },
@@ -157,7 +201,7 @@ const router = createRouter({
 })
 
 // ==================== 路由守卫 ====================
-const whiteList = ['/login', '/403', '/404']
+const whiteList = ['/login', '/register', '/403', '/404']
 
 router.beforeEach(async (to, _from, next) => {
   // 设置页面标题
@@ -169,6 +213,13 @@ router.beforeEach(async (to, _from, next) => {
     // 已登录，如果还没有 userInfo 则获取
     if (!userStore.userInfo) {
       await userStore.fetchUserInfo()
+    }
+
+    // fetchUserInfo 期间 token 可能因过期被清除（refresh token 也失效）
+    // 此时应跳转到登录页，避免白屏
+    if (!userStore.accessToken) {
+      next(`/login?redirect=${encodeURIComponent(to.fullPath)}`)
+      return
     }
 
     // [P0-2] 首次登录强制改密：仅允许访问 /profile?tab=password，其余路由全部拦截
@@ -206,6 +257,31 @@ router.beforeEach(async (to, _from, next) => {
     } else {
       next(`/login?redirect=${encodeURIComponent(to.fullPath)}`)
     }
+  }
+})
+
+import { useTagsStore } from '@/store/tags'
+
+router.afterEach((to) => {
+  if (to.path === '/login' || to.path === '/403' || to.path === '/404') return
+  try {
+    const tagsStore = useTagsStore()
+    tagsStore.addView(to)
+  } catch {}
+})
+
+router.isReady().then(() => {
+  const prefetch = () => {
+    try {
+      import(/* @vite-ignore */ /* webpackPrefetch: true */ '@/views/dashboard/index.vue')
+      import(/* webpackPrefetch: true */ '@/views/project/MyProjects.vue')
+      import(/* webpackPrefetch: true */ '@/views/profile/index.vue')
+    } catch {}
+  }
+  if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+    (window as any).requestIdleCallback(prefetch, { timeout: 3000 })
+  } else {
+    setTimeout(prefetch, 1000)
   }
 })
 

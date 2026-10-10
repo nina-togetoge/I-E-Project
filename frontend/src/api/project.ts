@@ -19,6 +19,8 @@ export interface ProjectListItem {
   leader_name: string
   teacher_id: number | null
   teacher_name: string | null
+  competition_id: number | null
+  competition_name: string | null
   start_date: string | null
   end_date: string | null
   budget_amount: number
@@ -35,6 +37,8 @@ export interface ProjectDetail extends ProjectListItem {
   innovation_points: string | null
   expected_results: string | null
   reject_reason: string | null
+  team_members?: any[]
+  budgets?: any[]
 }
 
 /** 项目统计 */
@@ -46,6 +50,9 @@ export interface StatisticsData {
   total_budget: number
   total_used: number
   approval_rate: number
+  category_dist?: { name: string; value: number }[]
+  status_dist?: { name: string; value: number; status: number }[]
+  budget_by_category?: { name: string; amount: number }[]
 }
 
 /** 项目列表 */
@@ -61,6 +68,18 @@ export function getProjectList(params: {
   teacher_id?: number
 }) {
   return get<PageResult<ProjectListItem>>('/api/projects', params)
+}
+
+/** 立项结果公示列表（公开，全校可见） */
+export function getAnnouncementList(params: {
+  page: number
+  page_size: number
+  keyword?: string
+  college_id?: number
+  start_year?: number
+  end_year?: number
+}) {
+  return get<PageResult<ProjectListItem>>('/api/projects/announcement/list', params)
 }
 
 /** 项目详情 */
@@ -93,6 +112,11 @@ export function withdrawProject(id: number) {
   return post(`/api/projects/${id}/withdraw`)
 }
 
+/** 提交结项验收报告 */
+export function submitFinal(id: number, data: { final_report: string; attachment_ids: number[] }) {
+  return post(`/api/projects/${id}/submit-final`, data)
+}
+
 /** 删除项目 */
 export function deleteProject(id: number) {
   return del(`/api/projects/${id}`)
@@ -114,6 +138,11 @@ export function getTrend(params: {
   end_year?: number
 } = {}) {
   return get('/api/statistics/trend', params)
+}
+
+/** 各学院统计数据（雷达图/热力图/学院立项率） */
+export function getCollegeBreakdown() {
+  return get('/api/statistics/college-breakdown')
 }
 
 /** 导出项目列表 */

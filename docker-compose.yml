@@ -59,10 +59,13 @@ services:
       #   env_file 会从 backend/.env 注入：DB_PASSWORD / REDIS_PASSWORD / JWT_SECRET_KEY
       # ---- 文件上传 ----
       UPLOAD_DIR: "static/uploads"
-      MAX_UPLOAD_SIZE: "10485760"
+      MAX_UPLOAD_SIZE: "52428800"
       ALLOWED_EXTENSIONS: ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.zip,.rar"
       # ---- 全文检索 ----
       WHOOSH_INDEX_DIR: "static/whoosh_index"
+      # ---- 火山引擎 Ark (豆包) AI ----
+      # ARK_API_KEY 不在此硬编码，统一从 backend/.env 注入（避免密钥进入版本库）
+      ARK_MODEL_ID: "doubao-seed-2-0-lite-260428"
     # 从 backend/.env 读取敏感配置（DB_PASSWORD / REDIS_PASSWORD / JWT_SECRET_KEY 等）
     env_file:
       - ./backend/.env
@@ -123,6 +126,9 @@ services:
     environment:
       TZ: Asia/Shanghai
       DOCKER_RUNNING: "1"
+      # Docker on Windows 下强制 chokidar 轮询，确保热重载生效
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "300"
       # 告诉 Vite dev server /api 代理 → compose 后端服务名
       VITE_PROXY_TARGET: "http://app:8000"
     ports:

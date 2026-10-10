@@ -24,6 +24,7 @@ class ProjProject(BaseModel):
     college_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_college.id"), nullable=False, comment="申报学院ID")
     leader_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_user.id"), nullable=False, comment="项目负责人ID")
     teacher_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("sys_user.id"), nullable=True, comment="指导教师ID")
+    competition_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("biz_competition.id"), nullable=True, comment="参赛比赛ID")
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, comment="立项开始日期")
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, comment="计划结束日期")
     budget_amount: Mapped[Decimal] = mapped_column(
@@ -105,6 +106,11 @@ class ProjProject(BaseModel):
         foreign_keys=[college_id],
         viewonly=True,
     )
+    competition: Mapped[Optional["Competition"]] = relationship(
+        "Competition",
+        foreign_keys=[competition_id],
+        viewonly=True,
+    )
 
     __table_args__ = (
         Index("uk_project_no", "project_no", unique=True),
@@ -113,6 +119,7 @@ class ProjProject(BaseModel):
         Index("idx_teacher", "teacher_id"),
         Index("idx_status", "status"),
         Index("idx_type_level", "project_type", "project_level"),
+        Index("idx_competition", "competition_id"),
     )
 
 

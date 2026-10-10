@@ -26,6 +26,7 @@ export function register(data: {
   password: string
   real_name: string
   email: string
+  phone?: string
   college_id?: number
 }) {
   return post<UserInfo>('/api/auth/register', data)

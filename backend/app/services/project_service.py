@@ -8,7 +8,7 @@ from decimal import Decimal
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract
 
-from app.core.security import RoleEnum, ROLE_NAME_MAP
+from app.core.security import RoleEnum, ROLE_NAME_MAP, is_super_admin, is_college_admin
 from app.core.exceptions import (
     PermissionDeniedException, ResourceNotFoundException, ParamValidateException,
     DataConflictException,
@@ -17,15 +17,16 @@ from app.core.deps import PaginationParams, DataScope
 from app.crud.user import CollegeCRUD, UserCRUD
 from app.crud.project import ProjectCRUD, AchievementCRUD
 from app.crud.review import ReviewCRUD
-from app.schemas.review import REVIEW_STAGE_COLLEGE
+from app.schemas.review import REVIEW_STAGE_COLLEGE, REVIEW_STAGE_TEACHER
 from app.models import (
-    ProjProject, SysUser, ProjAchievement,
+    ProjProject, SysUser, ProjAchievement, ProjBudget, ProjReview,
 )
 from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectQueryParams,
     ProjectListItem, ProjectDetailResponse, ProjectSubmitResponse,
     AchievementCreate, AchievementResponse, ProjectStatisticsResponse,
-    StatisticsTrendItem, PROJECT_STATUS_DRAFT, PROJECT_STATUS_PENDING_COLLEGE,
+    StatisticsTrendItem, CollegeStatisticsItem, PROJECT_STATUS_DRAFT, PROJECT_STATUS_PENDING_COLLEGE,
+    PROJECT_STATUS_PENDING_TEACHER,
     PROJECT_STATUS_NAME,
 )
 
@@ -44,6 +45,8 @@ class ProjectService:
             item.leader_name = obj.leader.real_name
         if obj.teacher:
             item.teacher_name = obj.teacher.real_name
+        if obj.competition_id and obj.competition:
+            item.competition_name = obj.competition.title
         if obj.college_id:
             college = CollegeCRUD.get_by_id(obj._sa_instance_state.session, obj.college_id) \
                 if hasattr(obj, "_sa_instance_state") and obj._sa_instance_state.session else None
@@ -62,22 +65,58 @@ class ProjectService:
             item.leader_name = obj.leader.real_name
         if obj.teacher:
             item.teacher_name = obj.teacher.real_name
+        if obj.competition_id and obj.competition:
+            item.competition_name = obj.competition.title
         college = CollegeCRUD.get_by_id(db, obj.college_id)
         if college:
             item.college_name = college.college_name
+        # 加载项目附件
+        from app.models.user import SysAttachment
+        atts = db.query(SysAttachment).filter(
+            SysAttachment.biz_type == "project",
+            SysAttachment.biz_id == obj.id,
+            SysAttachment.is_deleted == 0,
+        ).order_by(SysAttachment.created_at.desc()).all()
+        item.attachments = [{
+            "id": a.id, "file_name": a.file_name, "file_size": a.file_size,
+            "file_type": a.file_type, "uploader_name": a.uploader_name,
+            "download_count": a.download_count, "created_at": a.created_at,
+            "download_url": f"/api/files/download/{a.id}",
+            "preview_url": f"/api/files/preview/{a.id}",
+        } for a in atts]
         return item
 
     @staticmethod
     def _check_edit_permission(project: ProjProject, operator: SysUser) -> None:
-        """编辑权限：草稿状态下，负责人/指导教师可编辑；管理员可编辑"""
-        if operator.role == RoleEnum.ADMIN:
+        """编辑权限：
+        - 草稿状态(0)：仅项目负责人(学生)可编辑
+        - 已驳回状态(10)：项目负责人或指导教师可编辑
+        - 真超级管理员可编辑全校项目；学院管理员仅可编辑本院已驳回项目"""
+        # 分级判断
+        if is_super_admin(operator):
+            # 超级管理员也不允许编辑草稿（草稿仅学生可见可编辑）
+            if project.status == PROJECT_STATUS_DRAFT:
+                raise PermissionDeniedException(message="草稿项目仅项目负责人可编辑")
             return
-        if project.status not in (PROJECT_STATUS_DRAFT, 10):  # 草稿或已驳回可修改
+        if is_college_admin(operator):
+            # 学院管理员：仅本院已驳回项目可编辑
+            if project.status == PROJECT_STATUS_DRAFT:
+                raise PermissionDeniedException(message="草稿项目仅项目负责人可编辑")
+            if operator.college_id and project.college_id and operator.college_id != project.college_id:
+                raise PermissionDeniedException(message="学院管理员仅可编辑本院项目")
+            if project.status != 10:
+                raise PermissionDeniedException(message="当前状态不可修改，如有需要请先撤回")
+            return
+        # 普通教师 / 学生
+        if project.status not in (PROJECT_STATUS_DRAFT, 10):
             raise PermissionDeniedException(message="当前状态不可修改，如有需要请先撤回")
         if operator.role == RoleEnum.STUDENT:
             if project.leader_id != operator.id:
                 raise PermissionDeniedException(message="仅项目负责人可编辑本项目")
         elif operator.role == RoleEnum.TEACHER:
+            # 教师仅可编辑已驳回项目，不可编辑草稿
+            if project.status == PROJECT_STATUS_DRAFT:
+                raise PermissionDeniedException(message="草稿项目仅项目负责人可编辑")
             if project.teacher_id != operator.id and project.leader_id != operator.id:
                 raise PermissionDeniedException(message="仅指导教师或负责人可编辑")
 
@@ -103,6 +142,63 @@ class ProjectService:
             order_dir=pager.order_dir,
         )
         # 批量查学院名称（避免N+1）
+        college_ids = list({i.college_id for i in items if i.college_id})
+        college_map = {}
+        if college_ids:
+            from app.models import SysCollege
+            colleges = db.query(SysCollege).filter(SysCollege.id.in_(college_ids)).all()
+            college_map = {c.id: c.college_name for c in colleges}
+        # 批量查比赛名称（避免N+1）
+        competition_ids = list({i.competition_id for i in items if i.competition_id})
+        competition_map = {}
+        if competition_ids:
+            from app.models import Competition
+            competitions = db.query(Competition).filter(Competition.id.in_(competition_ids)).all()
+            competition_map = {c.id: c.title for c in competitions}
+        result = []
+        for obj in items:
+            it = ProjectService._to_list_item(obj)
+            if it.college_id and college_map.get(it.college_id):
+                it.college_name = college_map[it.college_id]
+            if it.competition_id and competition_map.get(it.competition_id):
+                it.competition_name = competition_map[it.competition_id]
+            result.append(it)
+        # 批量查已分配专家数（review_stage=3 专家评审阶段）
+        if items:
+            project_ids = [p.id for p in items]
+            counts = db.query(
+                ProjReview.project_id,
+                func.count(ProjReview.id).label("cnt")
+            ).filter(
+                ProjReview.project_id.in_(project_ids),
+                ProjReview.review_stage == 3,
+                ProjReview.is_deleted == 0,
+            ).group_by(ProjReview.project_id).all()
+            cnt_map = {c.project_id: c.cnt for c in counts}
+            for it in result:
+                it.assigned_expert_count = cnt_map.get(it.id, 0)
+        return result, total
+
+    @staticmethod
+    def paginate_announcement(db: Session, pager: PaginationParams,
+                              params: ProjectQueryParams) -> Tuple[List[ProjectListItem], int]:
+        """立项结果公示：已立项及之后阶段的项目，不做数据权限过滤，全校可见"""
+        # 已立项(6)、中期检查(7)、待结题(8)、已结题(9)、结项验收通过(12)
+        approved_statuses = [6, 7, 8, 9, 12]
+        items, total = ProjectCRUD.paginate(
+            db,
+            offset=pager.offset,
+            limit=pager.limit,
+            keyword=params.keyword,
+            college_id=params.college_id,
+            status_in=approved_statuses,
+            start_year=params.start_year,
+            end_year=params.end_year,
+            data_scope=None,
+            order_by="submit_time",
+            order_dir="desc",
+        )
+        # 批量查学院名称
         college_ids = list({i.college_id for i in items if i.college_id})
         college_map = {}
         if college_ids:
@@ -162,10 +258,20 @@ class ProjectService:
     @staticmethod
     def create(db: Session, req: ProjectCreate, operator: SysUser,
                as_draft: bool = True) -> ProjectDetailResponse:
-        """创建项目：负责人=当前学生；草稿保存 or 直接提交"""
+        """创建项目：
+        - 学生：负责人=自己
+        - 真超级管理员：可指定任意学院、任意负责人（演示代录用）
+        - 学院管理员：仅能创建本院项目（college_id 自动锁定）
+        """
         if operator.role == RoleEnum.STUDENT:
             pass  # OK
-        elif operator.role not in (RoleEnum.ADMIN,):
+        elif is_college_admin(operator):
+            # 学院管理员：college_id 强制为本院，禁止越学院建项目
+            if operator.college_id:
+                if req.college_id and req.college_id != operator.college_id:
+                    raise PermissionDeniedException(message="学院管理员仅可创建本院项目")
+                req.college_id = operator.college_id
+        elif not is_super_admin(operator):
             raise PermissionDeniedException(message="学生身份方可创建申报项目")
 
         # 校验学院存在
@@ -201,7 +307,7 @@ class ProjectService:
             if missing:
                 raise ParamValidateException(message="提交前请完善以下必填项：" + "、".join(missing))
 
-        data["status"] = PROJECT_STATUS_DRAFT if as_draft else PROJECT_STATUS_PENDING_COLLEGE
+        data["status"] = PROJECT_STATUS_DRAFT if as_draft else PROJECT_STATUS_PENDING_TEACHER
         if not as_draft:
             data["submit_time"] = datetime.now()
 
@@ -211,6 +317,20 @@ class ProjectService:
             year = date.today().year
             obj.project_no = ProjectCRUD.generate_project_no(db, year)
             db.flush()
+            # 创建指导教师确认占位审核记录
+            if obj.teacher_id and not ReviewCRUD.exist_by_project_stage_reviewer(
+                db, obj.id, REVIEW_STAGE_TEACHER, obj.teacher_id
+            ):
+                teacher = UserCRUD.get_by_id(db, obj.teacher_id)
+                ReviewCRUD.create(db, {
+                    "project_id": obj.id,
+                    "review_stage": REVIEW_STAGE_TEACHER,
+                    "reviewer_id": obj.teacher_id,
+                    "reviewer_name": teacher.real_name if teacher else "",
+                    "review_result": 99,
+                    "review_comment": None,
+                    "review_time": datetime.now(),
+                })
 
         # 4. 关联临时附件（biz_id=0 的附件）到新项目
         if req.attachment_ids:
@@ -237,7 +357,17 @@ class ProjectService:
             t = UserCRUD.get_by_id(db, req.teacher_id)
             if not t or t.role not in (RoleEnum.TEACHER, RoleEnum.ADMIN):
                 raise ParamValidateException(message="指导教师无效")
+        # attachment_ids 不直接写入项目表，单独处理附件关联
+        attachment_ids = data.pop("attachment_ids", None)
         obj = ProjectCRUD.update(db, obj, data)
+        # 关联临时附件（biz_id=0）到项目
+        if attachment_ids:
+            from app.models.user import SysAttachment
+            db.query(SysAttachment).filter(
+                SysAttachment.id.in_(attachment_ids),
+                SysAttachment.biz_type == "project",
+                SysAttachment.biz_id == 0,
+            ).update({SysAttachment.biz_id: obj.id}, synchronize_session=False)
         db.commit()
         db.refresh(obj)
         return ProjectService._to_detail(db, obj)
@@ -264,21 +394,26 @@ class ProjectService:
         if missing:
             raise ParamValidateException(message="提交前请完善以下必填项：" + "、".join(missing))
 
-        obj.status = PROJECT_STATUS_PENDING_COLLEGE
+        obj.status = PROJECT_STATUS_PENDING_TEACHER
         obj.submit_time = datetime.now()
         if not obj.project_no:
             year = date.today().year
             obj.project_no = ProjectCRUD.generate_project_no(db, year)
+        # 清除上一轮审核记录（含退回修改后重提），使各环节可重新审核
+        db.query(ProjReview).filter(
+            ProjReview.project_id == obj.id,
+            ProjReview.is_deleted == 0,
+        ).update({ProjReview.is_deleted: 1}, synchronize_session=False)
         db.flush()
 
-        # 创建学院初审占位审核记录，使指导教师在待审核列表中看到该项目
+        # 创建指导教师确认占位审核记录，使指导教师在待审核列表中看到该项目
         if obj.teacher_id and not ReviewCRUD.exist_by_project_stage_reviewer(
-            db, obj.id, REVIEW_STAGE_COLLEGE, obj.teacher_id
+            db, obj.id, REVIEW_STAGE_TEACHER, obj.teacher_id
         ):
             teacher = UserCRUD.get_by_id(db, obj.teacher_id)
             ReviewCRUD.create(db, {
                 "project_id": obj.id,
-                "review_stage": REVIEW_STAGE_COLLEGE,
+                "review_stage": REVIEW_STAGE_TEACHER,
                 "reviewer_id": obj.teacher_id,
                 "reviewer_name": teacher.real_name if teacher else "",
                 "review_result": 99,  # 占位=待评审
@@ -291,7 +426,48 @@ class ProjectService:
             project_id=obj.id,
             status=obj.status,
             status_name=PROJECT_STATUS_NAME.get(obj.status, ""),
-            message=f"已提交学院初审，项目编号：{obj.project_no}"
+            message=f"已提交，等待指导教师确认，项目编号：{obj.project_no}"
+        )
+
+    @staticmethod
+    def submit_final(db: Session, project_id: int, final_report: str,
+                     attachment_ids: list, operator: SysUser) -> ProjectSubmitResponse:
+        """提交结项验收报告（状态8待结题 -> 9已结题）"""
+        from app.models import SysAttachment, ProjReview
+        obj = ProjectCRUD.get_by_id(db, project_id)
+        if not obj:
+            raise ResourceNotFoundException(message="项目不存在")
+        if operator.role == RoleEnum.STUDENT and obj.leader_id != operator.id:
+            raise PermissionDeniedException(message="仅项目负责人可提交结项报告")
+        if obj.status != 8:
+            raise ParamValidateException(message="仅待结题状态可提交结项验收报告")
+        if not final_report or not final_report.strip():
+            raise ParamValidateException(message="请填写结项验收报告")
+
+        obj.status = PROJECT_STATUS_FINISHED
+        # 关联结项附件
+        if attachment_ids:
+            db.query(SysAttachment).filter(
+                SysAttachment.id.in_(attachment_ids),
+                SysAttachment.is_deleted == 0,
+            ).update({SysAttachment.biz_type: "project", SysAttachment.biz_id: obj.id},
+                     synchronize_session=False)
+        # 记录结题验收审核记录
+        db.add(ProjReview(
+            project_id=obj.id,
+            review_stage=4,  # 结题验收
+            reviewer_id=operator.id,
+            reviewer_name=operator.real_name or operator.username,
+            review_result=1,  # 通过
+            review_comment=f"[结项报告] {final_report}",
+            review_time=datetime.now(),
+        ))
+        db.commit()
+        return ProjectSubmitResponse(
+            project_id=obj.id,
+            status=obj.status,
+            status_name=PROJECT_STATUS_NAME.get(obj.status, ""),
+            message="结项验收报告已提交，项目已结题"
         )
 
     @staticmethod
@@ -302,8 +478,13 @@ class ProjectService:
             raise ResourceNotFoundException(message="项目不存在")
         if operator.role == RoleEnum.STUDENT and obj.leader_id != operator.id:
             raise PermissionDeniedException(message="仅负责人可撤回")
-        if obj.status not in (PROJECT_STATUS_PENDING_COLLEGE, 2, 3):
+        if obj.status not in (PROJECT_STATUS_PENDING_TEACHER, PROJECT_STATUS_PENDING_COLLEGE, 2, 3):
             raise ParamValidateException(message="仅待审核/学院通过状态可撤回")
+        # 清除该项目已产生的审核记录，使重新提交后可再次审核
+        db.query(ProjReview).filter(
+            ProjReview.project_id == obj.id,
+            ProjReview.is_deleted == 0,
+        ).update({ProjReview.is_deleted: 1}, synchronize_session=False)
         obj.status = PROJECT_STATUS_DRAFT
         db.commit()
 
@@ -330,9 +511,25 @@ class ProjectService:
                             end_year: Optional[int] = None,
                             ) -> ProjectStatisticsResponse:
         """项目概览统计（支持按学院/类型/立项年份过滤）"""
-        from app.models import ProjProject
+        from app.models import ProjProject, ProjReview
         q = db.query(func.count(ProjProject.id)).filter(ProjProject.is_deleted == 0)
-        q_pending = q.filter(ProjProject.status.in_([1, 2, 3, 4, 5]))
+        # 待审核数按角色区分：仅统计需要当前用户处理的项目
+        scope = data_scope.scope
+        if scope.get("is_student"):
+            q_pending = q.filter(ProjProject.status == 10, ProjProject.leader_id == data_scope.user_id)
+        elif scope.get("teacher_user_ids"):
+            q_pending = q.filter(ProjProject.status == 12, ProjProject.teacher_id == data_scope.user_id)
+        elif scope.get("is_college_admin"):
+            q_pending = q.filter(ProjProject.status == 1, ProjProject.college_id == data_scope.college_id)
+        elif scope.get("expert_user_id"):
+            assigned_ids = db.query(ProjReview.project_id).filter(
+                ProjReview.reviewer_id == data_scope.user_id,
+                ProjReview.review_stage == 3,
+                ProjReview.is_deleted == 0,
+            ).distinct()
+            q_pending = q.filter(ProjProject.status == 5, ProjProject.id.in_(assigned_ids))
+        else:
+            q_pending = q.filter(ProjProject.status == 3)
         q_approved = q.filter(ProjProject.status.in_([6, 7, 8, 9]))
         q_finished = q.filter(ProjProject.status == 9)
 
@@ -346,6 +543,7 @@ class ProjectService:
                 # created_at 年份 >= start_year
                 query = query.filter(extract("year", ProjProject.created_at) >= start_year)
             if end_year is not None:
+                # created_at 年份 <= end_year
                 query = query.filter(extract("year", ProjProject.created_at) <= end_year)
             # 2) 角色数据权限范围
             if data_scope.scope.get("all"):
@@ -356,6 +554,13 @@ class ProjectService:
                 return query.filter(ProjProject.leader_id == data_scope.user_id)
             if data_scope.scope.get("teacher_user_ids"):
                 return query.filter(ProjProject.teacher_id.in_(data_scope.scope["teacher_user_ids"]))
+            if data_scope.scope.get("expert_user_id"):
+                expert_assigned = db.query(ProjReview.project_id).filter(
+                    ProjReview.reviewer_id == data_scope.user_id,
+                    ProjReview.review_stage == 3,
+                    ProjReview.is_deleted == 0,
+                ).distinct()
+                return query.filter(ProjProject.id.in_(expert_assigned))
             return query
 
         total = apply_filters_and_scope(q.with_entities(func.count(ProjProject.id))).scalar() or 0
@@ -371,6 +576,34 @@ class ProjectService:
                                          .filter(ProjProject.status == 10)).scalar() or 0
         rate = round((approved / (approved + denied) * 100.0), 2) if (approved + denied) > 0 else 0.0
 
+        # ===== 项目类别分布（真实数据）=====
+        type_rows = apply_filters_and_scope(db.query(
+            ProjProject.project_type, func.count(ProjProject.id)
+        ).group_by(ProjProject.project_type)).all()
+        category_dist = [
+            {"name": ProjectCRUD.PROJECT_TYPE_NAME.get(int(r[0]), "其他"), "value": int(r[1] or 0)}
+            for r in type_rows
+        ]
+
+        # ===== 项目状态分布（真实数据，用于状态饼图 + 桑基图）=====
+        status_rows = apply_filters_and_scope(db.query(
+            ProjProject.status, func.count(ProjProject.id)
+        ).group_by(ProjProject.status)).all()
+        status_dist = [
+            {"name": PROJECT_STATUS_NAME.get(int(r[0]), f"状态{r[0]}"), "value": int(r[1] or 0), "status": int(r[0])}
+            for r in status_rows
+        ]
+
+        # ===== 经费科目使用分布（真实数据，从 proj_budget 汇总 used_amount）=====
+        budget_rows = apply_filters_and_scope(db.query(
+            ProjBudget.budget_item,
+            func.coalesce(func.sum(ProjBudget.used_amount), 0).label("used")
+        ).join(ProjProject, ProjBudget.project_id == ProjProject.id)).group_by(ProjBudget.budget_item).all()
+        budget_by_category = [
+            {"name": str(r[0]), "amount": float(r[1] or 0)}
+            for r in budget_rows
+        ]
+
         return ProjectStatisticsResponse(
             total_projects=total,
             pending_review=pending,
@@ -379,6 +612,9 @@ class ProjectService:
             total_budget=Decimal(str(total_budget)),
             total_used=Decimal(str(total_used)),
             approval_rate=rate,
+            category_dist=category_dist,
+            status_dist=status_dist,
+            budget_by_category=budget_by_category,
         )
 
     @staticmethod
@@ -411,6 +647,62 @@ class ProjectService:
             for r in rows
         ]
 
+    @staticmethod
+    def college_breakdown(db: Session, data_scope: DataScope) -> List[CollegeStatisticsItem]:
+        """各学院统计数据（雷达图/热力图/学院立项率柱状图）"""
+        from app.models import SysCollege, ProjReview
+
+        # 学院列表（按数据权限过滤）
+        colleges = CollegeCRUD.list_all(db)
+        college_ids_scope = data_scope.scope.get("college_ids")
+        if college_ids_scope:
+            colleges = [c for c in colleges if c.id in college_ids_scope]
+
+        result: List[CollegeStatisticsItem] = []
+        for col in colleges:
+            q = db.query(ProjProject).filter(ProjProject.is_deleted == 0, ProjProject.college_id == col.id)
+
+            total = q.count()
+            approved = q.filter(ProjProject.status.in_([6, 7, 8, 9])).count()
+            finished = q.filter(ProjProject.status == 9).count()
+            denied = q.filter(ProjProject.status == 10).count()
+            budget = db.query(func.coalesce(func.sum(ProjProject.budget_amount), 0)).filter(
+                ProjProject.is_deleted == 0, ProjProject.college_id == col.id).scalar() or 0
+            used = db.query(func.coalesce(func.sum(ProjProject.used_amount), 0)).filter(
+                ProjProject.is_deleted == 0, ProjProject.college_id == col.id).scalar() or 0
+
+            # 成果数
+            achievements = db.query(func.count(ProjAchievement.id)).join(
+                ProjProject, ProjAchievement.project_id == ProjProject.id
+            ).filter(ProjProject.college_id == col.id, ProjProject.is_deleted == 0).scalar() or 0
+
+            # 专家评审平均分
+            avg_score_row = db.query(func.avg(ProjReview.score)).join(
+                ProjProject, ProjReview.project_id == ProjProject.id
+            ).filter(
+                ProjProject.college_id == col.id,
+                ProjProject.is_deleted == 0,
+                ProjReview.score.isnot(None),
+            ).scalar()
+            avg_score = round(float(avg_score_row or 0), 2)
+
+            rate = round((approved / (approved + denied) * 100.0), 2) if (approved + denied) > 0 else 0.0
+
+            result.append(CollegeStatisticsItem(
+                college_id=col.id,
+                college_name=col.college_name,
+                total_projects=total,
+                approved_projects=approved,
+                finished_projects=finished,
+                total_budget=Decimal(str(budget)),
+                total_used=Decimal(str(used)),
+                approval_rate=rate,
+                achievements=int(achievements),
+                avg_score=avg_score,
+            ))
+
+        return result
+
 
 class AchievementService:
     """项目成果业务服务"""
@@ -429,6 +721,8 @@ class AchievementService:
         obj = ProjectCRUD.get_by_id(db, req.project_id)
         if not obj:
             raise ResourceNotFoundException(message="所属项目不存在")
+        if obj.status < 6:
+            raise ParamValidateException(message="仅已立项及之后阶段可登记成果")
         if operator.role not in (RoleEnum.ADMIN, RoleEnum.TEACHER) and obj.leader_id != operator.id:
             raise PermissionDeniedException(message="仅负责人、指导教师或管理员可登记成果")
         ach = AchievementCRUD.create(db, req.model_dump())

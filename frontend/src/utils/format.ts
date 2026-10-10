@@ -45,3 +45,10 @@ export function formatDateTime(
   }
   return pattern.replace(/YYYY|MM|DD|HH|mm|ss/g, (k) => map[k])
 }
+
+/**
+ * 日期格式化（YYYY-MM-DD）
+ */
+export function formatDate(value: string | Date | null | undefined): string {
+  return formatDateTime(value, 'YYYY-MM-DD')
+}

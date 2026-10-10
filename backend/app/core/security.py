@@ -53,6 +53,32 @@ ROLE_NAME_MAP: Dict[int, str] = {
 
 
 # ====================================================================
+# 管理员权限分级辅助函数（修复"学院管理员实为系统管理员"Bug）
+#   - 真·超级管理员：role=4（ADMIN）且 college_id 为空 → 全校范围 all=True
+#   - 学院管理员：  role=4（ADMIN）且 college_id 非空 → 仅本院范围
+# 所有 ADMIN-only 独占权限（分配专家 / 校级复审 / 创建系统管理员账号等）
+# 必须通过 is_super_admin() 判断，不能用 operator.role == ADMIN 的简单判断，
+# 否则绑定学院的「学院管理员」会越权执行校级操作、查看全校数据。
+# ====================================================================
+def is_super_admin(user) -> bool:
+    """真·超级系统管理员（全校权限）：role=ADMIN 且 未绑定学院"""
+    if not user:
+        return False
+    role = getattr(user, "role", None)
+    college_id = getattr(user, "college_id", None)
+    return role == RoleEnum.ADMIN and not bool(college_id)
+
+
+def is_college_admin(user) -> bool:
+    """学院管理员（本院权限）：role=ADMIN 且 已绑定具体学院"""
+    if not user:
+        return False
+    role = getattr(user, "role", None)
+    college_id = getattr(user, "college_id", None)
+    return role == RoleEnum.ADMIN and bool(college_id)
+
+
+# ====================================================================
 # 密码哈希上下文 (bcrypt)
 # ====================================================================
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")

@@ -37,7 +37,7 @@ class SysUser(BaseModel):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False, comment="密码哈希")
     real_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="真实姓名")
     email: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment="邮箱")
-    phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, comment="手机号")
+    phone: Mapped[Optional[str]] = mapped_column(String(11), nullable=True, comment="手机号(严格11位中国格式)")
     # 角色: 1-学生 2-指导教师 3-评审专家 4-系统管理员
     role: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, comment="角色")
     college_id: Mapped[Optional[int]] = mapped_column(
@@ -46,7 +46,7 @@ class SysUser(BaseModel):
         nullable=True,
         comment="所属学院ID"
     )
-    avatar: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="头像URL")
+    avatar: Mapped[Optional[str]] = mapped_column(Text(length=2**32-1), nullable=True, comment="头像URL或base64")
     status: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, comment="状态: 0-禁用 1-启用")
     force_change_pwd: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, comment="首次登录强制改密:0-否 1-是")
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="最后登录时间")

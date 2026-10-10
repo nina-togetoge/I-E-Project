@@ -20,24 +20,51 @@ export default defineConfig({
       '@': path.resolve(__dirname, 'src'),
     },
   },
+  build: {
+    target: 'es2018',
+    minify: 'esbuild',
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vue-vendor': ['vue', 'vue-router', 'pinia'],
+          'element-plus': ['element-plus', '@element-plus/icons-vue'],
+          'echarts-vendor': ['echarts'],
+          'office-vendor': ['xlsx', 'file-saver'],
+          'util-vendor': ['dayjs'],
+        },
+        chunkFileNames: 'assets/js/[name]-[hash].js',
+        entryFileNames: 'assets/js/[name]-[hash].js',
+        assetFileNames: (assetInfo) => {
+          const name = assetInfo.name || ''
+          const ext = name.split('.').pop()?.toLowerCase() || ''
+          if (['css'].includes(ext)) {
+            return 'assets/css/[name]-[hash][extname]'
+          }
+          if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'].includes(ext)) {
+            return 'assets/img/[name]-[hash][extname]'
+          }
+          if (['woff', 'woff2', 'ttf', 'eot', 'otf'].includes(ext)) {
+            return 'assets/font/[name]-[hash][extname]'
+          }
+          return 'assets/[ext]/[name]-[hash][extname]'
+        },
+      },
+    },
+  },
   server: {
-    // Docker 内必须监听 0.0.0.0 才能对外暴露端口；本地 npm run dev 也无副作用
     host: '0.0.0.0',
     port: 5173,
     strictPort: true,
     cors: true,
-    // Windows + Docker bind mount 下 inotify 事件不可靠，用轮询保证热重载触发
     watch: process.env.DOCKER_RUNNING === '1'
       ? { usePolling: true, interval: 500 }
       : undefined,
     hmr: {
-      // HMR WebSocket 从浏览器(宿主机)连回时用 127.0.0.1:5173，避免容器内地址导致连不上
-      host: '127.0.0.1',
       clientPort: 5173,
     },
     proxy: {
       '/api': {
-        // 本地开发默认宿主机 127.0.0.1:8000；Docker 内通过环境变量改为 compose 服务名 http://app:8000
         target: process.env.VITE_PROXY_TARGET ?? 'http://127.0.0.1:8000',
         changeOrigin: true,
       },

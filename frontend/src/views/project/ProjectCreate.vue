@@ -5,7 +5,25 @@
 -->
 <template>
   <div class="page-container">
+    <ProjectTemplatePicker v-model="showTemplatePicker" @select="handleSelectTemplate" @skip="handleSkipTemplate" />
+
     <el-card shadow="never">
+      <!-- 草稿提示条 -->
+      <el-alert
+        v-if="(hasDraft || savedAt) && !templateApplied"
+        :title="alertTitle"
+        type="info"
+        :closable="false"
+        show-icon
+        class="draft-alert"
+      >
+        <template v-if="hasDraft && !isRestored" #default>
+          <span>检测到上次未提交的草稿</span>
+          <el-button size="small" type="primary" @click="restoreDraft">恢复草稿</el-button>
+          <el-button size="small" type="danger" plain @click="discardDraft">丢弃草稿</el-button>
+        </template>
+      </el-alert>
+
       <!-- 步骤条 -->
       <el-steps :active="currentStep" finish-status="success" align-center>
         <el-step title="基本信息" icon="Document" />
@@ -17,7 +35,7 @@
 
       <!-- Step 1: 基本信息 -->
       <div v-show="currentStep === 0" class="step-content">
-        <el-form ref="form1Ref" :model="formData" :rules="form1Rules" label-width="100px" style="max-width: 700px; margin: 0 auto;">
+        <el-form ref="form1Ref" :model="formData" :rules="form1Rules" label-width="100px" style="max-width: 1000px; margin: 0 auto;">
           <el-form-item label="项目名称" prop="project_name">
             <el-input v-model="formData.project_name" placeholder="请输入项目名称" maxlength="100" show-word-limit />
           </el-form-item>
@@ -40,6 +58,11 @@
               <el-option v-for="c in collegeOptions" :key="c.id" :label="c.college_name" :value="c.id" />
             </el-select>
           </el-form-item>
+          <el-form-item label="参赛比赛" prop="competition_id">
+            <el-select v-model="formData.competition_id" filterable placeholder="请选择参加的比赛（可选）" clearable style="width: 100%">
+              <el-option v-for="c in competitionOptions" :key="c.id" :label="c.title" :value="c.id" />
+            </el-select>
+          </el-form-item>
           <el-form-item label="摘要" prop="project_summary">
             <el-input v-model="formData.project_summary" type="textarea" :rows="3" placeholder="200字以内的项目摘要" maxlength="200" show-word-limit />
           </el-form-item>
@@ -51,6 +74,7 @@
               end-placeholder="结束日期"
               format="YYYY-MM-DD"
               value-format="YYYY-MM-DD"
+              :disabled-date="disabledDate"
               style="width: 100%"
             />
           </el-form-item>
@@ -63,7 +87,7 @@
           <p class="step-desc">添加团队成员，每位成员需填写学号、姓名和分工</p>
           <el-button type="primary" :icon="Plus" @click="addMember">添加成员</el-button>
         </div>
-        <el-table :data="formData.teamMembers" border style="width: 100%; max-width: 700px; margin: 0 auto;">
+        <el-table :data="formData.teamMembers" border style="width: 100%; max-width: 1000px; margin: 0 auto;">
           <el-table-column type="index" label="序号" width="70" align="center" />
           <el-table-column label="学号" width="150">
             <template #default="{ row, $index }">
@@ -92,7 +116,7 @@
           </el-table-column>
           <el-table-column label="任务分工">
             <template #default="{ row }">
-              <el-input v-model="row.task_desc" placeholder="具体任务描述" />
+              <el-input v-model="row.task_desc" placeholder="具体任务描述" maxlength="255" show-word-limit />
             </template>
           </el-table-column>
           <el-table-column label="操作" width="80" align="center">
@@ -105,7 +129,7 @@
 
       <!-- Step 3: 指导教师 -->
       <div v-show="currentStep === 2" class="step-content">
-        <el-form label-width="100px" style="max-width: 700px; margin: 0 auto;">
+        <el-form label-width="100px" style="max-width: 1000px; margin: 0 auto;">
           <el-form-item label="指导教师">
             <el-select
               v-model="formData.teacher_id"
@@ -132,12 +156,12 @@
 
       <!-- Step 4: 立项方案 -->
       <div v-show="currentStep === 3" class="step-content">
-        <el-form ref="form2Ref" :model="formData" :rules="form2Rules" label-width="100px" style="max-width: 700px; margin: 0 auto;">
+        <el-form ref="form2Ref" :model="formData" :rules="form2Rules" label-width="100px" style="max-width: 1000px; margin: 0 auto;">
           <el-form-item label="创新点" prop="innovation_points">
-            <el-input v-model="formData.innovation_points" type="textarea" :rows="4" placeholder="描述项目创新点" />
+            <RichEditor v-model="formData.innovation_points" min-height="300px" placeholder="请描述项目创新点" />
           </el-form-item>
           <el-form-item label="预期成果" prop="expected_results">
-            <el-input v-model="formData.expected_results" type="textarea" :rows="4" placeholder="预期产出成果" />
+            <RichEditor v-model="formData.expected_results" min-height="250px" placeholder="请描述预期产出成果" />
           </el-form-item>
         </el-form>
       </div>
@@ -148,7 +172,7 @@
           <p class="step-desc">编制项目预算，各科目金额合计为项目总预算</p>
           <el-button type="primary" :icon="Plus" @click="addBudget">添加科目</el-button>
         </div>
-        <el-table :data="formData.budgets" border show-summary :summary-method="getBudgetSummary" style="width: 100%; max-width: 700px; margin: 0 auto;">
+        <el-table :data="formData.budgets" border show-summary :summary-method="getBudgetSummary" style="width: 100%; max-width: 1000px; margin: 0 auto;">
           <el-table-column type="index" label="序号" width="70" align="center" />
           <el-table-column label="预算科目" width="200">
             <template #default="{ row }">
@@ -171,7 +195,7 @@
           </el-table-column>
           <el-table-column label="备注">
             <template #default="{ row }">
-              <el-input v-model="row.remark" placeholder="用途说明" />
+              <el-input v-model="row.remark" placeholder="用途说明" maxlength="255" show-word-limit />
             </template>
           </el-table-column>
           <el-table-column label="操作" width="80" align="center">
@@ -182,9 +206,17 @@
         </el-table>
 
         <!-- 附件上传 -->
-        <el-form label-width="100px" style="max-width: 700px; margin: 20px auto 0;">
-          <el-form-item label="申报材料">
-            <FileUpload drag :accept="['.pdf', '.doc', '.docx', '.zip', '.rar']" @success="handleFileUpload" />
+        <el-form label-width="100px" style="max-width: 1000px; margin: 20px auto 0;">
+          <el-form-item label="已有附件" v-if="isEditMode && formData.attachments.length > 0">
+            <ProjectAttachmentList :attachments="formData.attachments" />
+          </el-form-item>
+          <el-form-item label="新增材料">
+            <FileUpload
+              drag
+              :accept="['.pdf', '.doc', '.docx', '.zip', '.rar']"
+              :form-data="{ biz_type: 'project', biz_id: 0 }"
+              @success="handleFileUpload"
+            />
           </el-form-item>
         </el-form>
       </div>
@@ -201,17 +233,36 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { ref, reactive, onMounted, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import FileUpload from '@/components/FileUpload.vue'
-import { createProject, createAndSubmitProject } from '@/api/project'
+import ProjectAttachmentList from '@/components/ProjectAttachmentList.vue'
+import { createProject, createAndSubmitProject, updateProject, getProjectDetail } from '@/api/project'
 import { getUserList } from '@/api/user'
 import { getColleges } from '@/api/auth'
+import { getCompetitionList } from '@/api/competition'
+import { useAutoSaveDraft } from '@/composables/useAutoSaveDraft'
+import ProjectTemplatePicker from '@/components/ProjectTemplatePicker.vue'
+import RichEditor from '@/components/RichEditor.vue'
+import type { ProjectTemplate } from '@/data/projectTemplates'
+
+// 禁用今天之前的日期
+const disabledDate = (date: Date) => {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return date.getTime() < today.getTime()
+}
 
 const router = useRouter()
+const route = useRoute()
 const currentStep = ref(0)
+const isEditMode = computed(() => !!route.query.id)
+const editingId = computed(() => Number(route.query.id))
+const isRestored = ref(false)
+const showTemplatePicker = ref(false)
+const templateApplied = ref(false)
 
 // ==================== 表单数据 ====================
 const formData = reactive({
@@ -219,6 +270,7 @@ const formData = reactive({
   project_type: undefined as number | undefined,
   project_level: 1 as number,
   college_id: undefined as number | undefined,
+  competition_id: undefined as number | undefined,
   project_summary: '',
   innovation_points: '',
   expected_results: '',
@@ -236,6 +288,36 @@ const formData = reactive({
   budgets: [] as { budget_item: string; budget_amount: number; remark?: string }[],
   attachments: [] as any[],
 })
+
+// ==================== 自动保存草稿 ====================
+const draftKey = computed(() => (isEditMode.value ? `edit_${editingId.value}` : 'create'))
+const { savedAt, saveDraft, loadDraft, clearDraft, hasDraft } = useAutoSaveDraft(draftKey.value, formData, 30000)
+
+const alertTitle = computed(() => {
+  if (savedAt.value) {
+    const d = new Date(savedAt.value)
+    const hh = String(d.getHours()).padStart(2, '0')
+    const mm = String(d.getMinutes()).padStart(2, '0')
+    const ss = String(d.getSeconds()).padStart(2, '0')
+    return `草稿已自动保存于 ${hh}:${mm}:${ss}`
+  }
+  return ''
+})
+
+function restoreDraft() {
+  const draft = loadDraft()
+  if (draft) {
+    Object.assign(formData, draft)
+    isRestored.value = true
+    ElMessage.success('已恢复上次草稿')
+  }
+}
+
+function discardDraft() {
+  clearDraft()
+  isRestored.value = true
+  ElMessage.info('已丢弃草稿')
+}
 
 // ==================== Step 1 表单校验 ====================
 const form1Ref = ref<FormInstance>()
@@ -335,13 +417,77 @@ async function searchStudent(row: any, _index: number) {
 const teacherOptions = ref<any[]>([])
 const teacherLoading = ref(false)
 
-// 学院下拉选项（实际环境中从后端加载）
+function handleSelectTemplate(tpl: ProjectTemplate) {
+  formData.project_type = tpl.category
+  formData.project_level = tpl.level
+  formData.project_summary = tpl.summary
+  formData.innovation_points = tpl.innovation_points
+  formData.expected_results = tpl.expected_results
+  formData.budgets = tpl.budgets.map((b) => ({ ...b }))
+  templateApplied.value = true
+  ElMessage.success(`已应用模板：${tpl.name}`)
+}
+
+function handleSkipTemplate() {
+  templateApplied.value = true
+}
+
+// 学院下拉选项
 const collegeOptions = ref<any[]>([])
+// 比赛下拉选项
+const competitionOptions = ref<any[]>([])
 onMounted(async () => {
+  // 新建模式下立即弹出模板选择对话框，避免等待接口时页面空白
+  if (!isEditMode.value) {
+    showTemplatePicker.value = true
+  }
+
   try {
     const res = await getColleges()
     collegeOptions.value = res.data || []
   } catch (_) {}
+  // 加载可报名的比赛（状态为报名中/进行中）
+  try {
+    const compRes = await getCompetitionList({ page: 1, page_size: 100 })
+    competitionOptions.value = (compRes.data.items || []).filter((c: any) => [1, 2].includes(c.status))
+  } catch (_) {}
+
+  if (isEditMode.value) {
+    templateApplied.value = true
+    try {
+      const detail = await getProjectDetail(editingId.value)
+      const p = detail.data
+      formData.project_name = p.project_name || ''
+      formData.project_type = p.project_type
+      formData.project_level = p.project_level || 1
+      formData.college_id = p.college_id
+      formData.competition_id = p.competition_id ?? undefined
+      formData.project_summary = p.project_summary || ''
+      formData.innovation_points = p.innovation_points || ''
+      formData.expected_results = p.expected_results || ''
+      if (p.start_date && p.end_date) {
+        formData.dateRange = [p.start_date, p.end_date]
+      }
+      formData.teamMembers = (p.team_members || []).map((m: any) => ({
+        student_id: m.student_id || 0,
+        student_no: m.student_no || '',
+        student_name: m.student_name || '',
+        major: m.major || '',
+        grade: m.grade || '',
+        role_in_team: m.role_in_team || m.role || '',
+        task_desc: m.task_desc || '',
+      }))
+      formData.teacher_id = p.teacher_id ?? undefined
+      formData.budgets = (p.budgets || []).map((b: any) => ({
+        budget_item: b.budget_item || b.subject || '',
+        budget_amount: b.budget_amount || b.amount || 0,
+        remark: b.remark || '',
+      }))
+      formData.attachments = p.attachments || []
+    } catch (e) {
+      ElMessage.error('加载项目数据失败')
+    }
+  }
 })
 
 async function searchTeacher(query: string) {
@@ -375,7 +521,7 @@ function getBudgetSummary({ columns, data }: { columns: any[]; data: any[] }) {
     if (index === 0) {
       sums[index] = '合计'
     } else if (col.property === 'budget_amount' || index === 2) {
-      const total = data.reduce((sum, item) => sum + (item.budget_amount || 0), 0)
+      const total = data.reduce((sum, item) => sum + Number(item.budget_amount || 0), 0)
       sums[index] = `¥ ${total.toFixed(2)}`
     } else {
       sums[index] = ''
@@ -399,6 +545,7 @@ function buildPayload() {
     project_type: formData.project_type,
     project_level: formData.project_level,
     college_id: formData.college_id,
+    competition_id: formData.competition_id || null,
     project_summary: formData.project_summary,
     innovation_points: formData.innovation_points,
     expected_results: formData.expected_results,
@@ -407,13 +554,20 @@ function buildPayload() {
     team_members: formData.teamMembers,
     teacher_id: formData.teacher_id,
     budgets: formData.budgets,
+    attachment_ids: formData.attachments.map((a: any) => a.id),
   }
 }
 
 async function handleSaveDraft() {
   draftLoading.value = true
   try {
-    const res = await createProject(buildPayload())
+    if (isEditMode.value) {
+      await updateProject(editingId.value, buildPayload())
+    } else {
+      await createProject(buildPayload())
+    }
+    saveDraft()
+    clearDraft()
     ElMessage.success('草稿保存成功')
     router.push('/projects')
   } finally {
@@ -435,7 +589,6 @@ async function handleSubmit() {
     return
   }
 
-  // 检查团队成员是否都已通过学号搜索关联到学生
   const invalidMember = formData.teamMembers.find(m => !m.student_id)
   if (invalidMember) {
     ElMessage.warning(`团队成员 "${invalidMember.student_no || ''}" 未关联到有效学生，请检查学号`)
@@ -444,8 +597,14 @@ async function handleSubmit() {
 
   submitLoading.value = true
   try {
-    // 直接创建并提交（后端 POST /api/projects/submit-draft）
-    await createAndSubmitProject(buildPayload())
+    if (isEditMode.value) {
+      await updateProject(editingId.value, buildPayload())
+      const { submitProject } = await import('@/api/project')
+      await submitProject(editingId.value)
+    } else {
+      await createAndSubmitProject(buildPayload())
+    }
+    clearDraft()
     ElMessage.success('项目已提交，等待审核')
     router.push('/projects')
   } finally {
@@ -455,6 +614,16 @@ async function handleSubmit() {
 </script>
 
 <style scoped>
+.draft-alert {
+  margin-bottom: 20px;
+}
+
+.draft-alert :deep(.el-alert__description) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .step-content {
   padding: 30px 0;
   min-height: 300px;
@@ -464,7 +633,7 @@ async function handleSubmit() {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  max-width: 700px;
+  max-width: 1000px;
   margin: 0 auto 20px;
 }
 

@@ -2,10 +2,11 @@
 用户管理模块 API 路由层
 包含认证、用户CRUD、学院管理、操作日志查询、文件上传基础接口
 """
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
-from fastapi import APIRouter, Depends, Request, Query
+from fastapi import APIRouter, Depends, Request, Query, Response
 from sqlalchemy.orm import Session
+from urllib.parse import quote
 
 from app.core.deps import PaginationParams, DataScope, OperationContext
 from app.core.security import (
@@ -17,7 +18,7 @@ from app.database.session import get_db
 from app.models import SysUser
 from app.schemas.user import (
     LoginRequest, LoginResponse, RefreshTokenRequest, UserRegister, LogoutRequest,
-    UserCreate, UserUpdate, UserProfileUpdate, UserInfo, UserListItem,
+    UserCreate, UserUpdate, UserProfileUpdate, UserInfo, UserListItem, UserSafeListItem,
     UserQueryParams, UserBatchStatusRequest, UserBatchDeleteRequest,
     UserBatchCreateRequest, ImportResultResponse, CollegeCreate, CollegeUpdate, CollegeResponse,
     OperationLogQueryParams, OperationLogItem,
@@ -36,12 +37,19 @@ router_log = APIRouter(prefix="/logs", tags=["操作日志"])
 # ====================================================================
 
 @router_auth.post("/login", response_model=ResponseModel[LoginResponse], summary="用户登录")
-def api_login(req: LoginRequest, request: Request, db: Session = Depends(get_db)):
+def api_login(req: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     """账号密码登录，返回访问令牌+刷新令牌+用户信息"""
     # 获取真实客户端IP
     client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or \
                 (request.client.host if request.client else "")
     result = AuthService.login(db, req, client_ip)
+    # 登录成功后写入操作日志所需的响应头（此时用户已通过认证）
+    user_info = result.user_info
+    response.headers["X-Log-User-Id"] = str(user_info.id)
+    response.headers["X-Log-Username"] = user_info.username
+    response.headers["X-Log-RealName"] = quote(str(user_info.real_name))
+    response.headers["X-Log-Role"] = str(user_info.role)
+    response.headers["X-Log-Desc"] = quote(f"用户[{user_info.username}]登录")
     return success(data=result, message="登录成功")
 
 
@@ -89,7 +97,7 @@ def api_logout(
 # 用户管理接口
 # ====================================================================
 
-@router_user.get("", response_model=ResponseModel[PageResult[UserListItem]], summary="用户列表(分页)")
+@router_user.get("", response_model=ResponseModel[PageResult[Union[UserListItem, UserSafeListItem]]], summary="用户列表(分页)")
 def api_user_list(
     params: UserQueryParams = Depends(),
     pager: PaginationParams = Depends(),
@@ -203,8 +211,8 @@ def api_batch_import(
 def api_college_list(
     include_disabled: bool = Query(default=False, description="是否包含已停用学院"),
     db: Session = Depends(get_db),
-    current_user: SysUser = require_login,
 ):
+    """学院列表（公开接口，注册页等场景无需登录即可调用）"""
     return success(data=CollegeService.list_all(db, include_disabled=include_disabled))
 
 

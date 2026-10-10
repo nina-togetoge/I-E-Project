@@ -7,7 +7,7 @@ from urllib.parse import quote
 from fastapi import Request, Depends, Response
 from sqlalchemy.orm import Session
 
-from app.core.security import RoleEnum, get_current_user, ROLE_NAME_MAP
+from app.core.security import RoleEnum, get_current_user, ROLE_NAME_MAP, is_super_admin, is_college_admin
 from app.database.session import get_db
 from app.models import SysUser
 
@@ -81,12 +81,12 @@ class DataScope:
     """
     行级数据权限计算依赖
     返回：{ college_ids: [..], leader_user_ids: [..] } 供业务层拼接过滤条件
-    规则：
-      - 系统管理员(4)：所有数据
-      - 学院管理员/院领导（非学生/非专家的本院用户）：仅本院数据
-      - 指导教师(2)：仅自己指导的项目 + 本院数据
-      - 学生(1)：仅自己负责/参与的项目
-      - 评审专家(3)：仅分配给其评审的项目
+    规则（⚠️ ADMIN 分级：修复学院管理员越权看到全校数据的 Bug）：
+      - 真·超级管理员(role=4 且 college_id 为空)：所有数据  all=True
+      - 学院管理员(role=4 且 college_id 非空)：     仅本院数据
+      - 指导教师(2)：                               仅自己指导的项目 + 本院数据
+      - 学生(1)：                                   仅自己负责/参与的项目
+      - 评审专家(3)：                               仅分配给其评审的项目
     """
 
     def __init__(self, current_user: SysUser = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -100,9 +100,18 @@ class DataScope:
         self.scope: Dict[str, Any] = self._compute_scope()
 
     def _compute_scope(self) -> Dict[str, Any]:
+        # ---- ADMIN 分级判断（本次修复核心）----
         if self.role == RoleEnum.ADMIN:
-            # 全部数据
-            return {"all": True, "college_ids": None, "owner_user_ids": None}
+            if is_super_admin(self):
+                # 真超级管理员（role=4 + 无学院归属）→ 全校所有数据
+                return {"all": True, "college_ids": None, "owner_user_ids": None}
+            # 学院管理员（role=4 + 绑定具体college_id）→ 仅本院
+            return {
+                "all": False,
+                "college_ids": [self.college_id] if self.college_id else None,
+                "owner_user_ids": None,
+                "is_college_admin": True,  # 业务层按需使用（如不能创建ADMIN）
+            }
 
         if self.role == RoleEnum.STUDENT:
             # 仅自己是负责人或团队成员的数据

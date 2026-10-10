@@ -26,8 +26,21 @@
           </el-select>
         </el-form-item>
         <el-form-item label="学院">
-          <el-select v-model="searchForm.college_id" placeholder="全部学院" clearable style="width: 180px">
+          <el-select
+            v-model="searchForm.college_id"
+            :placeholder="userStore.isCollegeAdmin ? '本院' : '全部学院'"
+            :clearable="!userStore.isCollegeAdmin"
+            :disabled="userStore.isCollegeAdmin"
+            style="width: 180px"
+          >
             <el-option v-for="c in colleges" :key="c.id" :label="c.college_name" :value="c.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="类别">
+          <el-select v-model="searchForm.project_type" placeholder="全部类别" clearable style="width: 130px">
+            <el-option label="创新训练" :value="1" />
+            <el-option label="创业训练" :value="2" />
+            <el-option label="创业实践" :value="3" />
           </el-select>
         </el-form-item>
         <el-form-item>
@@ -48,15 +61,24 @@
         <StatusTag :status="row.status" />
       </template>
       <template #actions="{ row }">
-        <el-button link type="primary" size="small" @click="router.push(`/projects/${row.id}`)">详情</el-button>
-        <el-button v-if="row.status === 4 || row.status === 5" link type="warning" size="small" @click="openAssignDialog(row)">
-          分配专家
+        <el-button link type="primary" size="small" @click="projectDetailStore.open(row.id)">详情</el-button>
+        <el-button
+          v-if="userStore.isAdmin && (row.status === 4 || row.status === 5) && (userStore.isSuperAdmin || row.college_id === userStore.collegeId)"
+          link
+          :type="row.assigned_expert_count > 0 ? 'success' : 'warning'"
+          size="small"
+          @click="openAssignDialog(row)"
+        >
+          {{ row.assigned_expert_count > 0 ? `已分配(${row.assigned_expert_count})` : '分配专家' }}
         </el-button>
+      </template>
+      <template #empty>
+        <EmptyIllustration type="project" description="暂无项目数据" />
       </template>
     </PaginationTable>
 
     <!-- 专家分配弹窗 -->
-    <el-dialog v-model="assignDialogVisible" title="分配评审专家" width="500px">
+    <el-dialog center v-model="assignDialogVisible" title="分配评审专家" width="500px">
       <el-select v-model="selectedExperts" multiple filterable placeholder="选择专家" style="width: 100%">
         <el-option
           v-for="e in expertList"
@@ -75,24 +97,31 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Search, Download } from '@element-plus/icons-vue'
 import PaginationTable from '@/components/PaginationTable.vue'
 import StatusTag from '@/components/StatusTag.vue'
+import EmptyIllustration from '@/components/EmptyIllustration.vue'
 import type { TableColumn } from '@/components/PaginationTable.vue'
 import { getProjectList, exportProjects } from '@/api/project'
 import { getColleges } from '@/api/auth'
 import { getUserList } from '@/api/user'
-import { assignExperts } from '@/api/review'
+import { assignExperts, getReviewHistory } from '@/api/review'
 import { download } from '@/utils/request'
+import { useUserStore } from '@/store/user'
+import { useProjectDetailStore } from '@/store/projectDetail'
 
 const router = useRouter()
+const route = useRoute()
+const userStore = useUserStore()
+const projectDetailStore = useProjectDetailStore()
 
 const searchForm = reactive({
   keyword: '',
   status: undefined as number | undefined,
   college_id: undefined as number | undefined,
+  project_type: undefined as number | undefined,
 })
 
 const tableData = ref<any[]>([])
@@ -107,14 +136,13 @@ const selectedExperts = ref<number[]>([])
 const currentProject = ref<any>(null)
 
 const columns: TableColumn[] = [
-  { prop: 'project_no', label: '项目编号', minWidth: 140 },
   { prop: 'project_name', label: '项目名称', minWidth: 200 },
   { prop: 'project_type_name', label: '类别', width: 120 },
   { prop: 'leader_name', label: '负责人', width: 100 },
   { prop: 'teacher_name', label: '指导教师', width: 100 },
   { prop: 'college_name', label: '学院', width: 120 },
-  { prop: 'budget_amount', label: '预算(¥)', width: 100, formatter: (val: number) => val?.toFixed(2) || '0.00' },
-  { prop: 'status', label: '状态', slot: 'status', width: 100 },
+  { prop: 'budget_amount', label: '预算(¥)', width: 100, formatter: (val: number) => Number(val || 0).toFixed(2) },
+  { prop: 'status', label: '状态', slot: 'status', width: 150 },
 ]
 
 async function loadData() {
@@ -145,11 +173,24 @@ async function handleExport() {
 }
 
 async function openAssignDialog(row: any) {
+  if (!userStore.isAdmin) {
+    ElMessage.error('仅管理员可分配专家')
+    return
+  }
+  if (!userStore.isSuperAdmin && row.college_id !== userStore.collegeId) {
+    ElMessage.error('仅可分配本院项目的评审专家')
+    return
+  }
   currentProject.value = row
   selectedExperts.value = []
-  if (expertList.value.length === 0) {
-    const res = await getUserList({ page: 1, page_size: 100, role: 3 })
-    expertList.value = res.data.items
+  // 并行加载专家列表和已分配专家
+  const [expertRes, flowRes] = await Promise.all([
+    expertList.value.length > 0 ? Promise.resolve({ data: { items: expertList.value } }) : getUserList({ page: 1, page_size: 100, role: 3 }),
+    row.assigned_expert_count > 0 ? getReviewHistory(row.id) : Promise.resolve(null),
+  ])
+  expertList.value = expertRes.data.items
+  if (flowRes?.data?.assigned_expert_ids?.length) {
+    selectedExperts.value = flowRes.data.assigned_expert_ids
   }
   assignDialogVisible.value = true
 }
@@ -171,6 +212,15 @@ async function handleAssign() {
 onMounted(async () => {
   const res = await getColleges()
   colleges.value = res.data || []
+  if (userStore.isCollegeAdmin) {
+    searchForm.college_id = userStore.collegeId ?? undefined
+  }
+  if (route.query.status) {
+    searchForm.status = Number(route.query.status)
+  }
+  if (route.query.type) {
+    searchForm.project_type = Number(route.query.type)
+  }
   loadData()
 })
 </script>

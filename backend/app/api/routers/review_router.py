@@ -19,6 +19,7 @@ from app.schemas.review import (
     MidtermCheckCreate, MidtermCheckResponse, MidtermReviewRequest,
     ChangeRequestCreate, ChangeRequestResponse,
 )
+from app.schemas.project import ProjectListItem
 from app.services.review_service import ReviewService, MidtermService, ChangeService
 
 
@@ -31,20 +32,17 @@ router_change = APIRouter(prefix="/changes", tags=["变更/延期申请"])
 # 项目审核流程接口
 # ====================================================================
 
-@router_review.get("", response_model=ResponseModel[PageResult[ReviewRecordItem]],
-                   summary="审核记录列表(教师/管理员)")
+@router_review.get("", response_model=ResponseModel[PageResult[ProjectListItem]],
+                   summary="待我审核的项目列表(教师/学院管理员/超管)")
 def api_review_list(
     keyword: Optional[str] = Query(default=None, max_length=100),
-    # [P1-7] 阶段参数加合法值约束: 1学院 2校级 3专家 4结题
-    stage: Optional[int] = Query(default=None, ge=1, le=4, description="审核阶段 1-4"),
-    status: Optional[int] = Query(default=None, ge=0, le=2, description="审核结果 0-2"),
     pager: PaginationParams = Depends(),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(RequireRole(
         RoleEnum.TEACHER, RoleEnum.ADMIN
     )),
 ):
-    items, total = ReviewService.paginate(db, pager, stage, status, keyword)
+    items, total = ReviewService.pending_projects(db, current_user, pager, keyword)
     return success(data=PageResult.create(items, total, pager.page, pager.page_size))
 
 

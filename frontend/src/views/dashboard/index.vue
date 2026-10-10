@@ -13,7 +13,7 @@
         <div class="welcome-info">
           <h2>{{ greeting }}，{{ userStore.userInfo?.real_name }}</h2>
           <p>
-            {{ userStore.userInfo?.college_name || '暂无学院' }} ·
+            {{ userStore.displayCollegeName || '暂无学院' }} ·
             <el-tag size="small">{{ userStore.roleName }}</el-tag>
           </p>
         </div>
@@ -33,7 +33,7 @@
               <el-icon :size="28"><component :is="card.icon" /></el-icon>
             </div>
             <div class="stat-info">
-              <p class="stat-value">{{ card.value }}</p>
+              <p class="stat-value"><CountNumber :value="card.value" /></p>
               <p class="stat-label">{{ card.label }}</p>
             </div>
           </div>
@@ -77,14 +77,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, shallowRef, computed, onMounted, onBeforeUnmount } from 'vue'
+import * as echarts from 'echarts'
 import { useRouter } from 'vue-router'
 import {
-  Document, Files, Wallet, TrendCharts, EditPen, Bell, DataAnalysis, Box
+  Document, Files, Wallet, EditPen, Bell, DataAnalysis, Box, UserFilled
 } from '@element-plus/icons-vue'
 import { useUserStore } from '@/store/user'
 import { getStatistics, getTrend } from '@/api/project'
+import { post } from '@/utils/request'
 import EChart from '@/components/EChart.vue'
+import CountNumber from '@/components/CountNumber.vue'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -122,6 +125,7 @@ const stats = ref({
   finished_projects: 0,
   total_budget: 0,
   pending_review: 0,
+  expense_count: 0,
 })
 
 const statCards = computed(() => {
@@ -134,17 +138,24 @@ const statCards = computed(() => {
     ]
   } else if (userStore.isStudent) {
     return [
-      { label: '我的项目', value: '-', icon: Files, color: '#409EFF' },
-      { label: '已立项', value: '-', icon: Document, color: '#67C23A' },
-      { label: '报销申请', value: '-', icon: Wallet, color: '#E6A23C' },
-      { label: '待办事项', value: '-', icon: Bell, color: '#F56C6C' },
+      { label: '我的项目', value: stats.value.total_projects, icon: Files, color: '#409EFF' },
+      { label: '已立项', value: stats.value.approved_projects, icon: Document, color: '#67C23A' },
+      { label: '报销申请', value: stats.value.expense_count, icon: Wallet, color: '#E6A23C' },
+      { label: '待办事项', value: stats.value.pending_review, icon: Bell, color: '#F56C6C' },
+    ]
+  } else if (userStore.isExpert) {
+    return [
+      { label: '待处理', value: stats.value.pending_review, icon: Bell, color: '#409EFF' },
+      { label: '评审项目', value: stats.value.total_projects, icon: Files, color: '#67C23A' },
+      { label: '已立项', value: stats.value.approved_projects, icon: Document, color: '#E6A23C' },
+      { label: '报销申请', value: stats.value.expense_count, icon: Wallet, color: '#F56C6C' },
     ]
   } else {
     return [
-      { label: '待处理', value: '-', icon: Bell, color: '#409EFF' },
-      { label: '指导项目', value: '-', icon: Files, color: '#67C23A' },
-      { label: '已审核', value: '-', icon: Document, color: '#E6A23C' },
-      { label: '本月评审', value: '-', icon: TrendCharts, color: '#F56C6C' },
+      { label: '待处理', value: stats.value.pending_review, icon: Bell, color: '#409EFF' },
+      { label: '指导项目', value: stats.value.total_projects, icon: Files, color: '#67C23A' },
+      { label: '已立项', value: stats.value.approved_projects, icon: Document, color: '#E6A23C' },
+      { label: '报销申请', value: stats.value.expense_count, icon: Wallet, color: '#F56C6C' },
     ]
   }
 })
@@ -159,60 +170,71 @@ const quickEntries = computed(() => {
   if (userStore.isAdmin) {
     entries.push(
       { label: '数据看板', path: '/admin/statistics', icon: DataAnalysis, color: '#F56C6C' },
-      { label: '用户管理', path: '/admin/users', icon: 'UserFilled', color: '#9B59B6' },
+      { label: '用户管理', path: '/admin/users', icon: UserFilled, color: '#9B59B6' },
     )
   }
   return entries
 })
 
 // 图表配置
-const statusChartOption = ref<any>({})
-const trendChartOption = ref<any>({})
+const statusChartOption = shallowRef<echarts.EChartsOption>({} as echarts.EChartsOption)
+const trendChartOption = shallowRef<echarts.EChartsOption>({} as echarts.EChartsOption)
 
 async function loadStatistics() {
-  if (!userStore.isAdmin) return
   try {
-    const [statsRes, trendRes] = await Promise.all([
-      getStatistics(),
-      getTrend(),
-    ])
+    // 所有角色都加载项目统计（API 内部按数据权限过滤）
+    const statsRes = await getStatistics()
     stats.value = {
       total_projects: statsRes.data.total_projects || 0,
       approved_projects: statsRes.data.approved_projects || 0,
       finished_projects: statsRes.data.finished_projects || 0,
       total_budget: statsRes.data.total_budget || 0,
       pending_review: statsRes.data.pending_review || 0,
-    }
-
-    const trend = (trendRes.data || []) as any[]
-    statusChartOption.value = {
-      tooltip: { trigger: 'item' },
-      legend: { bottom: 0 },
-      series: [{
-        type: 'pie',
-        radius: ['40%', '70%'],
-        data: [
-          { name: '已立项', value: statsRes.data.approved_projects || 0 },
-          { name: '已结题', value: statsRes.data.finished_projects || 0 },
-          { name: '待审核', value: statsRes.data.pending_review || 0 },
-        ],
-        itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 2 },
-      }],
-    }
-
-    trendChartOption.value = {
-      tooltip: { trigger: 'axis' },
-      xAxis: { type: 'category', data: trend.map((d: any) => d.period) },
-      yAxis: { type: 'value' },
-      series: [{
-        type: 'line',
-        data: trend.map((d: any) => d.apply_count),
-        smooth: true,
-        areaStyle: { opacity: 0.3 },
-        itemStyle: { color: '#409EFF' },
-      }],
+      expense_count: stats.value.expense_count,
     }
   } catch {}
+
+  // 报销申请数量（学生和教师）
+  if (!userStore.isAdmin) {
+    try {
+      const res: any = await post('/api/expenses/list', {}, { params: { page: 1, page_size: 1 } })
+      stats.value.expense_count = res?.data?.total || 0
+    } catch {}
+  }
+
+  // 管理员额外加载趋势图表
+  if (userStore.isAdmin) {
+    try {
+      const trendRes = await getTrend()
+      const trend = (trendRes.data || []) as any[]
+      statusChartOption.value = {
+        tooltip: { trigger: 'item' },
+        legend: { bottom: 0 },
+        series: [{
+          type: 'pie',
+          radius: ['40%', '70%'],
+          data: [
+            { name: '已立项', value: stats.value.approved_projects },
+            { name: '已结题', value: stats.value.finished_projects },
+            { name: '待审核', value: stats.value.pending_review },
+          ],
+          itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 2 },
+        }],
+      }
+      trendChartOption.value = {
+        tooltip: { trigger: 'axis' },
+        xAxis: { type: 'category', data: trend.map((d: any) => d.period) },
+        yAxis: { type: 'value' },
+        series: [{
+          type: 'line',
+          data: trend.map((d: any) => d.apply_count),
+          smooth: true,
+          areaStyle: { opacity: 0.3 },
+          itemStyle: { color: '#409EFF' },
+        }],
+      }
+    } catch {}
+  }
 }
 
 onMounted(() => {

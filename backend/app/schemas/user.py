@@ -1,12 +1,24 @@
 """
 用户管理模块 Pydantic v2 数据校验模型
 分为请求模型（Create/Update/Query）和响应模型（Response/List）
+
+==== 全链路统一校验规则（毕设级严谨，前后端 regex 一字不差）====
+  密码  : r"^\\d{6}$"            —— 严格6位纯数字，不多不少不含字母/符号
+  手机号: r"^1[3-9]\\d{9}$"      —— 中国大陆11位手机号（首1、第二位3-9）
+  邮箱  : Pydantic EmailStr + max_length=128
 """
 from typing import Optional, List
 from datetime import datetime, date
 from pydantic import BaseModel, Field, EmailStr, ConfigDict, field_validator
 
 from app.core.security import RoleEnum
+
+
+# ====================================================================
+# 统一正则常量（便于字段引用和跨端对齐）
+# ====================================================================
+PASSWORD_PATTERN = r"^\d{6}$"
+PHONE_PATTERN = r"^1[3-9]\d{9}$"
 
 
 # ====================================================================
@@ -45,9 +57,9 @@ class CollegeResponse(CollegeBase):
 # 登录与认证相关模型
 # ====================================================================
 class LoginRequest(BaseModel):
-    """用户登录请求"""
-    username: str = Field(..., min_length=2, max_length=64, description="登录账号")
-    password: str = Field(..., min_length=4, max_length=128, description="登录密码")
+    """用户登录请求 — 登录不限制密码格式（兼容历史用户密码如 admin123），由认证逻辑校验正确性"""
+    username: str = Field(..., min_length=2, max_length=64, description="登录账号（用户名/学号/手机号/邮箱均可）")
+    password: str = Field(..., min_length=1, max_length=128, description="登录密码")
 
 
 class LoginResponse(BaseModel):
@@ -78,54 +90,58 @@ class UserBase(BaseModel):
     username: str = Field(..., min_length=2, max_length=64, description="登录账号/学号/工号")
     real_name: str = Field(..., min_length=1, max_length=64, description="真实姓名")
     email: Optional[EmailStr] = Field(default=None, max_length=128, description="邮箱")
-    phone: Optional[str] = Field(default=None, pattern=r"^1[3-9]\d{9}$", description="手机号")
+    phone: Optional[str] = Field(default=None, pattern=PHONE_PATTERN, min_length=11, max_length=11, description="手机号(11位)")
     role: int = Field(..., ge=1, le=4, description="角色: 1-学生 2-教师 3-专家 4-管理员")
     college_id: Optional[int] = Field(default=None, description="所属学院ID")
-    avatar: Optional[str] = Field(default=None, max_length=255, description="头像URL")
+    avatar: Optional[str] = Field(default=None, description="头像URL或base64")
     status: int = Field(default=1, ge=0, le=1, description="状态 0-禁用 1-启用")
 
 
 class UserCreate(UserBase):
-    """创建用户请求"""
-    password: str = Field(..., min_length=6, max_length=128, description="初始密码")
+    """创建用户请求 — 初始密码强制6位纯数字"""
+    password: str = Field(..., pattern=PASSWORD_PATTERN, min_length=6, max_length=6, description="初始密码（6位纯数字）")
 
 
 class UserRegister(BaseModel):
-    """学生自助注册请求"""
+    """学生自助注册请求 — 密码强制6位纯数字，手机号校验"""
     username: str = Field(..., min_length=2, max_length=64, description="学号")
-    password: str = Field(..., min_length=6, max_length=128)
+    password: str = Field(..., pattern=PASSWORD_PATTERN, min_length=6, max_length=6)
     real_name: str = Field(..., max_length=64)
-    email: Optional[EmailStr] = None
-    phone: Optional[str] = None
+    email: Optional[EmailStr] = Field(default=None, max_length=128)
+    phone: Optional[str] = Field(default=None, pattern=PHONE_PATTERN, min_length=11, max_length=11)
     college_id: int = Field(..., description="所属学院")
 
 
 class UserUpdate(BaseModel):
-    """管理员更新用户信息"""
+    """管理员更新用户信息
+    - password 非空则重置，必须6位纯数字
+    - phone 非空必须符合11位中国大陆格式"""
     real_name: Optional[str] = Field(default=None, max_length=64)
-    email: Optional[EmailStr] = None
-    phone: Optional[str] = None
+    email: Optional[EmailStr] = Field(default=None, max_length=128)
+    phone: Optional[str] = Field(default=None, pattern=PHONE_PATTERN, min_length=11, max_length=11)
     role: Optional[int] = Field(default=None, ge=1, le=4)
     college_id: Optional[int] = None
-    avatar: Optional[str] = None
+    avatar: Optional[str] = Field(default=None, description="头像URL或base64")
     status: Optional[int] = Field(default=None, ge=0, le=1)
-    password: Optional[str] = Field(default=None, min_length=6, max_length=128, description="非空则重置密码")
+    password: Optional[str] = Field(default=None, pattern=PASSWORD_PATTERN, min_length=6, max_length=6, description="非空则重置密码（6位纯数字）")
 
 
 class UserProfileUpdate(BaseModel):
-    """用户自助更新个人信息"""
+    """用户自助更新个人信息
+    - 修改密码：必须同时提供 old_password + new_password，new_password 6位纯数字
+    - 手机号、邮箱严格格式"""
     real_name: Optional[str] = Field(default=None, max_length=64)
-    email: Optional[EmailStr] = None
-    phone: Optional[str] = None
-    avatar: Optional[str] = None
-    old_password: Optional[str] = Field(default=None, min_length=4, description="修改密码时需提供原密码")
-    new_password: Optional[str] = Field(default=None, min_length=6, max_length=128, description="新密码")
+    email: Optional[EmailStr] = Field(default=None, max_length=128)
+    phone: Optional[str] = Field(default=None, pattern=PHONE_PATTERN, min_length=11, max_length=11)
+    avatar: Optional[str] = Field(default=None, description="头像URL或base64")
+    old_password: Optional[str] = Field(default=None, pattern=PASSWORD_PATTERN, min_length=6, max_length=6, description="修改密码时需提供原密码（6位纯数字）")
+    new_password: Optional[str] = Field(default=None, pattern=PASSWORD_PATTERN, min_length=6, max_length=6, description="新密码（6位纯数字）")
 
     @field_validator("new_password")
     @classmethod
     def _check_old_password(cls, v, values):
         if v and not values.data.get("old_password"):
-            raise ValueError("修改密码必须提供原密码(old_password)")
+            raise ValueError("修改密码必须同时提供原密码(old_password)")
         return v
 
 
@@ -142,6 +158,7 @@ class UserInfo(BaseModel):
     role_name: str = ""  # 由业务层赋值
     college_id: Optional[int]
     college_name: Optional[str] = None  # 关联查询后赋值
+    school_name: str = ""  # 学校名称（系统管理员无学院时显示）
     avatar: Optional[str]
     status: int
     force_change_pwd: int = 0  # 首次登录强制改密标志

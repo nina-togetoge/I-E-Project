@@ -376,7 +376,9 @@ def api_search_projects(
 
 
 @router_search.post("/rebuild-index", response_model=ResponseModel, summary="重建全文索引(管理员)")
-def api_rebuild_index(current_user: SysUser = require_admin):
-    total, ok = search_engine.rebuild_all()
-    return success(data={"total_projects": total, "indexed": ok},
-                   message=f"索引重建完成：共{total}条，成功{ok}条")
+def api_rebuild_index(current_user: SysUser = require_admin, ctx: OperationContext = Depends()):
+    with ctx:
+        ctx.set_desc("重建全文检索索引")
+        total, ok = search_engine.rebuild_all()
+        return success(data={"total_projects": total, "indexed": ok},
+                       message=f"索引重建完成：共{total}条，成功{ok}条")

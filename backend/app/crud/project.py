@@ -49,6 +49,7 @@ class ProjectCRUD:
         leader_id: Optional[int] = None,
         teacher_id: Optional[int] = None,
         status: Optional[int] = None,
+        status_in: Optional[List[int]] = None,
         start_year: Optional[int] = None,
         end_year: Optional[int] = None,
         data_scope: Optional[DataScope] = None,
@@ -97,6 +98,11 @@ class ProjectCRUD:
                 pids = [r.project_id for r in expert_pids]
                 q = q.filter(ProjProject.id.in_(pids) if pids else False)
 
+        # ---- 草稿项目仅学生可见 ----
+        # 非学生角色（管理员、教师、专家等）不可见草稿状态项目
+        if data_scope and data_scope.role != 1:
+            q = q.filter(ProjProject.status != 0)
+
         # ---- 筛选 ----
         if keyword:
             kw = f"%{keyword}%"
@@ -119,6 +125,8 @@ class ProjectCRUD:
             q = q.filter(ProjProject.teacher_id == teacher_id)
         if status is not None:
             q = q.filter(ProjProject.status == status)
+        if status_in:
+            q = q.filter(ProjProject.status.in_(status_in))
         if start_year:
             q = q.filter(extract("year", ProjProject.created_at) >= start_year)
         if end_year:

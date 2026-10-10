@@ -14,13 +14,13 @@
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover"><div class="stat-card">
-          <p class="stat-value">¥ {{ summary.total_expensed?.toFixed(2) || '0.00' }}</p>
+          <p class="stat-value">¥ {{ Number(summary.total_expensed || 0).toFixed(2) }}</p>
           <p class="stat-label">已使用</p>
         </div></el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover"><div class="stat-card">
-          <p class="stat-value">¥ {{ summary.total_remaining?.toFixed(2) || '0.00' }}</p>
+          <p class="stat-value">¥ {{ Number(summary.total_remaining || 0).toFixed(2) }}</p>
           <p class="stat-label">剩余</p>
         </div></el-card>
       </el-col>
@@ -65,10 +65,39 @@
         <el-tag :type="expenseStatusTagType(row.status)">{{ row.status_text || '未知' }}</el-tag>
       </template>
       <template #actions="{ row }">
+        <el-button link type="primary" size="small" @click="handleView(row)">查看</el-button>
         <el-button v-if="row.status >= 0 && row.status <= 5" link type="success" size="small" @click="handleApprove(row, true)">通过</el-button>
         <el-button v-if="row.status >= 0 && row.status <= 5" link type="danger" size="small" @click="handleApprove(row, false)">驳回</el-button>
       </template>
+      <template #empty>
+        <EmptyIllustration type="file" description="暂无报销数据" />
+      </template>
     </PaginationTable>
+
+    <!-- 报销详情弹窗 -->
+    <el-dialog center v-model="showDetail" title="报销单详情" width="640px">
+      <template v-if="currentExpense">
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="报销单号">{{ currentExpense.expense_no }}</el-descriptions-item>
+          <el-descriptions-item label="所属项目">{{ currentExpense.project_name }}</el-descriptions-item>
+          <el-descriptions-item label="申请人">{{ currentExpense.applicant_name }}</el-descriptions-item>
+          <el-descriptions-item label="金额">¥ {{ Number(currentExpense.expense_amount || 0).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag :type="expenseStatusTagType(currentExpense.status)">{{ currentExpense.status_text }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="申请时间">{{ currentExpense.created_at }}</el-descriptions-item>
+          <el-descriptions-item label="费用说明" :span="2">{{ currentExpense.expense_desc }}</el-descriptions-item>
+          <el-descriptions-item label="发票号" :span="2">{{ currentExpense.invoice_no || '-' }}</el-descriptions-item>
+          <el-descriptions-item v-if="currentExpense.reject_reason" label="驳回原因" :span="2">
+            <span style="color: var(--el-color-danger)">{{ currentExpense.reject_reason }}</span>
+          </el-descriptions-item>
+        </el-descriptions>
+        <div style="margin-top: 16px;">
+          <div style="font-weight: 600; margin-bottom: 8px;">票据附件</div>
+          <ProjectAttachmentList :attachments="currentExpense.attachments" />
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -77,7 +106,10 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import PaginationTable from '@/components/PaginationTable.vue'
+import EmptyIllustration from '@/components/EmptyIllustration.vue'
+import ProjectAttachmentList from '@/components/ProjectAttachmentList.vue'
 import type { TableColumn } from '@/components/PaginationTable.vue'
+import { formatDateTime } from '@/utils/format'
 import service, { post, patch } from '@/utils/request'
 
 const searchForm = reactive({ keyword: '', status: undefined as number | undefined })
@@ -87,14 +119,21 @@ const loading = ref(false)
 const page = ref(1)
 const pageSize = ref(10)
 const summary = ref<any>({})
+const showDetail = ref(false)
+const currentExpense = ref<any>(null)
+
+function handleView(row: any) {
+  currentExpense.value = row
+  showDetail.value = true
+}
 
 const columns: TableColumn[] = [
   { prop: 'expense_no', label: '报销单号', width: 160 },
   { prop: 'project_name', label: '项目', minWidth: 200 },
   { prop: 'expense_amount', label: '金额(¥)', width: 120, formatter: (v: number) => `¥ ${Number(v || 0).toFixed(2)}` },
   { prop: 'applicant_name', label: '申请人', width: 100 },
-  { prop: 'status', label: '状态', slot: 'status', width: 100 },
-  { prop: 'created_at', label: '申请时间', minWidth: 160 },
+  { prop: 'status', label: '状态', slot: 'status', width: 150 },
+  { prop: 'created_at', label: '申请时间', minWidth: 160, formatter: (val: string) => formatDateTime(val) },
 ]
 
 async function loadData() {

@@ -12,9 +12,10 @@ export interface QueryParams extends PaginationParams {
   [key: string]: any
 }
 
-/** 项目状态常量（与后端 project.py 严格一致：0~11） */
+/** 项目状态常量（与后端 project.py 严格一致：0~12） */
 export const PROJECT_STATUS = {
   DRAFT: 0,               // 草稿
+  PENDING_TEACHER: 12,    // 待指导教师确认
   PENDING_COLLEGE: 1,     // 待学院初审
   COLLEGE_PASSED: 2,      // 学院初审通过
   PENDING_UNIVERSITY: 3,  // 待校级复审
@@ -30,6 +31,7 @@ export const PROJECT_STATUS = {
 
 export const STATUS_LABELS: Record<number, string> = {
   0: '草稿',
+  12: '待指导教师确认',
   1: '待学院初审',
   2: '学院初审通过',
   3: '待校级复审',
@@ -45,6 +47,7 @@ export const STATUS_LABELS: Record<number, string> = {
 
 export const STATUS_TAG_TYPES: Record<number, string> = {
   0: 'info',
+  12: 'warning',
   1: 'warning',
   2: '',
   3: 'warning',

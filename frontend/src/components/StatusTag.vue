@@ -11,6 +11,7 @@ const props = defineProps<{
 
 const statusMap: Record<number, { text: string; type: string }> = {
   0: { text: '草稿', type: 'info' },
+  12: { text: '待指导教师确认', type: 'warning' },
   1: { text: '待学院初审', type: 'warning' },
   2: { text: '学院初审通过', type: 'success' },
   3: { text: '待校级复审', type: 'warning' },

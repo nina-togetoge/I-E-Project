@@ -15,12 +15,18 @@
     </el-card>
 
     <PaginationTable
-      :data="tableData"
+      :data="sortedTableData"
       :columns="columns"
       :total="total"
       :loading="loading"
       @page-change="handlePageChange"
     >
+      <template #leader_name="{ row }">
+        {{ displayLeaderName(row) }}
+      </template>
+      <template #college_name="{ row }">
+        {{ displayCollegeName(row) }}
+      </template>
       <template #status="{ row }">
         <el-tag :type="row.my_review_result == null ? 'warning' : 'success'">
           {{ row.my_review_result == null ? '待评审' : '已评审' }}
@@ -37,19 +43,28 @@
           评审
         </el-button>
       </template>
+      <template #empty>
+        <EmptyIllustration type="project" description="暂无待评审项目" />
+      </template>
     </PaginationTable>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import PaginationTable from '@/components/PaginationTable.vue'
+import EmptyIllustration from '@/components/EmptyIllustration.vue'
 import type { TableColumn } from '@/components/PaginationTable.vue'
 import { getExpertTasks } from '@/api/review'
+import { formatDateTime } from '@/utils/format'
+import { useAppearanceStore } from '@/store/appearance'
+import { useBlindReview } from '@/composables/useBlindReview'
 
 const router = useRouter()
+const appearanceStore = useAppearanceStore()
+const { maskName, maskCollege } = useBlindReview(() => appearanceStore.isBlindMode)
 const searchForm = reactive({ keyword: '' })
 const tableData = ref<any[]>([])
 const total = ref(0)
@@ -58,14 +73,24 @@ const page = ref(1)
 const pageSize = ref(10)
 
 const columns: TableColumn[] = [
-  { prop: 'project_no', label: '项目编号', minWidth: 140 },
   { prop: 'project_name', label: '项目名称', minWidth: 200 },
   { prop: 'project_type_name', label: '类别', width: 120 },
-  { prop: 'leader_name', label: '负责人', width: 100 },
-  { prop: 'college_name', label: '学院', width: 140 },
+  { prop: 'leader_name', label: '负责人', slot: 'leader_name', width: 100 },
+  { prop: 'college_name', label: '学院', slot: 'college_name', width: 140 },
   { prop: 'my_score', label: '我的评分', width: 100 },
-  { prop: 'submit_time', label: '分配时间', minWidth: 160 },
+  { prop: 'submit_time', label: '分配时间', minWidth: 160, formatter: (val: string) => formatDateTime(val) },
 ]
+
+const sortedTableData = computed(() => {
+  return [...tableData.value]
+})
+
+function displayLeaderName(row: any) {
+  return appearanceStore.isBlindMode ? maskName(row.leader_name) : row.leader_name
+}
+function displayCollegeName(row: any) {
+  return appearanceStore.isBlindMode ? maskCollege(row.college_name) : row.college_name
+}
 
 async function loadData() {
   loading.value = true

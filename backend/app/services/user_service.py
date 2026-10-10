@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.security import (
     verify_password, create_access_token, create_refresh_token,
     decode_token, extract_jti_exp, RoleEnum, ROLE_NAME_MAP, hash_password,
+    is_super_admin, is_college_admin,
 )
 from app.core.exceptions import (
     AuthException, ParamValidateException, ResourceNotFoundException,
@@ -123,7 +124,7 @@ class AuthService:
             raise ParamValidateException(message="所选学院不存在")
 
         data = req.model_dump()
-        data["role"] = RoleEnum.STUDENT
+        data["role"] = RoleEnum.STUDENT.value
         data["status"] = 1
         data["force_change_pwd"] = 1  # 自助注册后首次登录必须改密
         user = UserCRUD.create(db, data)
@@ -134,8 +135,10 @@ class AuthService:
     @staticmethod
     def _build_user_info(user: SysUser) -> UserInfo:
         """构建UserInfo响应，含角色名、学院名（通过关联对象）"""
+        from app.core.config import settings
         info = UserInfo.model_validate(user, from_attributes=True)
         info.role_name = ROLE_NAME_MAP.get(user.role, f"未知({user.role})")
+        info.school_name = settings.SCHOOL_NAME
         # 通过ORM关联对象取学院名
         if user.college:
             info.college_name = user.college.college_name
@@ -191,7 +194,7 @@ class UserService:
                 raise PermissionDeniedException(
                     message="学生端用户查询仅支持按角色筛选：学生(1)或指导教师(2)"
                 )
-            # 学生端强制只能看本院数据 + 脱敏返回
+            # 学生端：选人场景下允许跨学院搜索（组建跨学科团队），仍脱敏返回PII
             effective_scope = DataScope.__new__(DataScope)
             effective_scope.user = data_scope.user
             effective_scope.db = data_scope.db
@@ -199,8 +202,8 @@ class UserService:
             effective_scope.college_id = data_scope.college_id
             effective_scope.user_id = data_scope.user_id
             effective_scope.scope = {
-                "all": False,
-                "college_ids": [data_scope.college_id] if data_scope.college_id else None,
+                "all": True,
+                "college_ids": None,
                 "owner_user_ids": None,
                 "is_student_whitelist": True,
                 "role_whitelist": [params.role],
@@ -235,18 +238,28 @@ class UserService:
 
     @staticmethod
     def create(db: Session, req: UserCreate, operator: SysUser) -> UserInfo:
-        """创建用户：管理员/学院管理员"""
-        # 权限：普通教师/学生不能创建用户；非管理员只能创建本院且角色不能是管理员
-        if operator.role not in (RoleEnum.ADMIN,):
-            if operator.role != RoleEnum.TEACHER:
-                raise PermissionDeniedException(message="无权限创建用户")
-        if operator.role != RoleEnum.ADMIN:
+        """创建用户：真超级管理员(全校) / 学院管理员(仅本院非ADMIN) / 教师(本院非ADMIN)"""
+        # ---- 修复前 Bug：operator.role == ADMIN 就放行了，绑定学院的学院管理员能创建全校 ADMIN 账号 ----
+        # 修复策略：按权限从高到低分流
+        #   A. is_super_admin → 无限制（可创建所有角色、所有学院）
+        #   B. is_college_admin → 仅本院、不得创建 role=ADMIN
+        #   C. role=TEACHER   → 仅本院、不得创建 role=ADMIN
+        #   D. 其他角色(学生/专家) → 无权限
+        if is_super_admin(operator):
+            # 真超级管理员：直接进入后续基础字段校验
+            pass
+        elif is_college_admin(operator) or operator.role == RoleEnum.TEACHER:
+            # 学院管理员 / 普通教师：统一走本院限制
             if req.role == RoleEnum.ADMIN:
-                raise PermissionDeniedException(message="无权限创建管理员账号")
-            if req.college_id and operator.college_id and req.college_id != operator.college_id:
-                raise PermissionDeniedException(message="只能创建本院用户")
-            if not req.college_id:
-                req.college_id = operator.college_id
+                raise PermissionDeniedException(message="无权限创建系统管理员账号，请联系校级管理员")
+            if operator.college_id:
+                if req.college_id and req.college_id != operator.college_id:
+                    raise PermissionDeniedException(message="只能创建本院用户")
+                if not req.college_id:
+                    req.college_id = operator.college_id
+        else:
+            # 学生 / 专家：完全禁止创建用户
+            raise PermissionDeniedException(message="无权限创建用户")
 
         if UserCRUD.get_by_username(db, req.username):
             raise DataConflictException(message=f"账号 {req.username} 已存在")
@@ -288,13 +301,26 @@ class UserService:
         user = UserCRUD.get_by_id(db, user_id)
         if not user:
             raise ResourceNotFoundException(message="用户不存在")
-        # 权限校验
-        if operator.role != RoleEnum.ADMIN:
-            if operator.id != user_id:
-                raise PermissionDeniedException(message="只能修改本人信息，管理员除外")
-            # 本人修改禁止改role/status
-            if req.role is not None or req.status is not None:
-                raise PermissionDeniedException(message="无权修改角色或状态字段")
+        # ---- 权限校验（修复 ADMIN 分级 Bug）----
+        if is_super_admin(operator):
+            # 真超级管理员：可修改任意用户任意字段
+            pass
+        elif is_college_admin(operator):
+            # 学院管理员：仅能修改本院用户、且不能将 role 改为 ADMIN
+            if operator.college_id and user.college_id and user.college_id != operator.college_id:
+                raise PermissionDeniedException(message="仅可修改本院用户")
+            if req.role == RoleEnum.ADMIN:
+                raise PermissionDeniedException(message="无权限设置系统管理员角色")
+            # 不允许把本院用户的 college_id 改为外学院
+            if req.college_id and operator.college_id and req.college_id != operator.college_id:
+                raise PermissionDeniedException(message="仅可分配本院学院")
+        elif operator.id == user_id:
+            # 本人修改：禁止改 role/status/college_id
+            if req.role is not None or req.status is not None or req.college_id is not None:
+                raise PermissionDeniedException(message="无权修改角色、状态或学院字段")
+        else:
+            raise PermissionDeniedException(message="只能修改本人信息，管理员除外")
+
         update_data = req.model_dump(exclude_unset=True)
         user = UserCRUD.update(db, user, update_data)
         db.commit()
@@ -320,10 +346,23 @@ class UserService:
     @staticmethod
     def delete(db: Session, user_id: int, operator: SysUser) -> None:
         """软删除用户"""
-        if operator.role != RoleEnum.ADMIN:
-            raise PermissionDeniedException(message="仅管理员可删除用户")
         if operator.id == user_id:
             raise ParamValidateException(message="不能删除自己的账号")
+        # ---- 分级权限 ----
+        if is_super_admin(operator):
+            # 真超级管理员：除了不能删自己（上面），其他用户可随意删
+            pass
+        elif is_college_admin(operator):
+            # 学院管理员：仅可删除本院非ADMIN用户
+            target = UserCRUD.get_by_id(db, user_id)
+            if not target:
+                raise ResourceNotFoundException(message="用户不存在")
+            if target.role == RoleEnum.ADMIN:
+                raise PermissionDeniedException(message="无权限删除系统管理员账号")
+            if operator.college_id and target.college_id and target.college_id != operator.college_id:
+                raise PermissionDeniedException(message="仅可删除本院用户")
+        else:
+            raise PermissionDeniedException(message="仅管理员可删除用户")
         rows = UserCRUD.soft_delete(db, user_id)
         if rows == 0:
             raise ResourceNotFoundException(message="用户不存在")
@@ -331,7 +370,17 @@ class UserService:
 
     @staticmethod
     def batch_update_status(db: Session, user_ids: List[int], status: int, operator: SysUser) -> int:
-        if operator.role != RoleEnum.ADMIN:
+        if is_super_admin(operator):
+            pass  # 全校无限制
+        elif is_college_admin(operator):
+            # 学院管理员：仅允许批量修改本院用户的状态，且不能包含 role=ADMIN
+            targets = UserCRUD.list_by_ids(db, user_ids) or []
+            for t in targets:
+                if t.role == RoleEnum.ADMIN:
+                    raise PermissionDeniedException(message=f"用户 [{t.username}] 是系统管理员，学院管理员无权修改状态")
+                if operator.college_id and t.college_id and t.college_id != operator.college_id:
+                    raise PermissionDeniedException(message=f"用户 [{t.username}] 不属于本院，学院管理员无权修改状态")
+        else:
             raise PermissionDeniedException(message="仅管理员可批量修改用户状态")
         rows = UserCRUD.batch_update_status(db, user_ids, status)
         db.commit()

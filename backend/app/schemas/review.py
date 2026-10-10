@@ -11,13 +11,14 @@ from pydantic import BaseModel, Field, ConfigDict
 # ====================================================================
 # 审核阶段/结果枚举常量
 # ====================================================================
+REVIEW_STAGE_TEACHER = 0         # 指导教师确认
 REVIEW_STAGE_COLLEGE = 1       # 学院初审
 REVIEW_STAGE_UNIVERSITY = 2    # 校级复审
 REVIEW_STAGE_EXPERT = 3        # 专家评审
 REVIEW_STAGE_FINAL = 4         # 结题验收
 
 REVIEW_STAGE_NAME = {
-    1: "学院初审", 2: "校级复审", 3: "专家评审", 4: "结题验收",
+    0: "指导教师确认", 1: "学院初审", 2: "校级复审", 3: "专家评审", 4: "结题验收",
 }
 
 REVIEW_RESULT_PASS = 1         # 通过
@@ -35,7 +36,7 @@ REVIEW_RESULT_NAME = {
 class ReviewCreateRequest(BaseModel):
     """通用审核请求：学院/校级/结题验收 通用"""
     project_id: int = Field(..., description="项目ID")
-    review_stage: int = Field(..., ge=1, le=4, description="审核阶段:1学院2校级3专家4结题")
+    review_stage: int = Field(..., ge=0, le=4, description="审核阶段:0指导教师确认1学院2校级3专家4结题")
     review_result: int = Field(..., ge=1, le=3, description="结果:1通过2驳回3修改后重提")
     review_comment: Optional[str] = Field(default=None, max_length=1000, description="评审意见")
 
@@ -80,6 +81,7 @@ class ProjectReviewFlowResponse(BaseModel):
     current_status_name: str
     current_stage_name: str
     records: List[ReviewRecordItem] = Field(default_factory=list)
+    assigned_expert_ids: List[int] = Field(default_factory=list, description="已分配的专家ID列表(待评审)")
 
 
 class ExpertProjectItem(BaseModel):

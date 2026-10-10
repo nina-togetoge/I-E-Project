@@ -16,11 +16,17 @@ const props = withDefaults(
     option: echarts.EChartsOption
     height?: string
     theme?: string
+    clickable?: boolean
   }>(),
   {
     height: '350px',
+    clickable: false,
   }
 )
+
+const emit = defineEmits<{
+  click: [params: any]
+}>()
 
 const chartRef = ref<HTMLDivElement>()
 let chart: echarts.ECharts | null = null
@@ -29,6 +35,11 @@ function initChart() {
   if (!chartRef.value) return
   chart = echarts.init(chartRef.value, props.theme)
   chart.setOption(props.option)
+  if (props.clickable) {
+    chart.on('click', (params: any) => {
+      emit('click', params)
+    })
+  }
 }
 
 function resize() {
@@ -54,6 +65,19 @@ watch(
     chart?.setOption(newOption, true)
   },
   { deep: true }
+)
+
+watch(
+  () => props.clickable,
+  (clickable) => {
+    if (!chart) return
+    chart.off('click')
+    if (clickable) {
+      chart.on('click', (params: any) => {
+        emit('click', params)
+      })
+    }
+  }
 )
 
 defineExpose({ resize })

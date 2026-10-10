@@ -20,6 +20,8 @@ from app.models.project import (
     ProjMidtermCheck,
     ProjChangeRequest,
 )
+from app.models.competition import Competition
+from app.models.announcement import Announcement
 
 __all__ = [
     # Base
@@ -41,4 +43,8 @@ __all__ = [
     "ProjAchievement",
     "ProjMidtermCheck",
     "ProjChangeRequest",
+    # Competition
+    "Competition",
+    # Announcement
+    "Announcement",
 ]
