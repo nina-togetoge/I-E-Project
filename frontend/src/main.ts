@@ -97,14 +97,15 @@ app.use(createPinia())
 app.use(router)
 app.use(ElementPlus, { locale: zhCn })
 
-if (import.meta.env.PROD && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-  try {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker
-        .register('/sw.js')
-        .catch(() => {})
-    })
-  } catch {}
+// Service Worker 已移除（登录型管理系统无离线需求，且缓存策略导致发版后旧页面残留）。
+// 以下为存量浏览器的一次性自清理：注销历史 SW 并清空其缓存，之后可整体删除。
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then((regs) => {
+    regs.forEach((r) => r.unregister())
+  }).catch(() => {})
+  if ('caches' in window) {
+    caches.keys().then((keys) => keys.forEach((k) => caches.delete(k))).catch(() => {})
+  }
 }
 
 app.mount('#app')
