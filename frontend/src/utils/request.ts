@@ -38,7 +38,11 @@ const service: AxiosInstance = axios.create({
 })
 
 let isRefreshing = false
-let pendingRequests: Array<() => void> = []
+let pendingRequests: Array<{
+  resolve: (value: any) => void
+  reject: (reason?: any) => void
+  config: AxiosRequestConfig
+}> = []
 
 const pendingMap = new Map<string, number>()
 const PENDING_WINDOW_MS = 500 // 仅拦截极短时间内的用户双击提交
@@ -281,13 +285,9 @@ async function handleTokenExpired(config: AxiosRequestConfig): Promise<any> {
   }
 
   if (isRefreshing) {
-    return new Promise((resolve) => {
-      pendingRequests.push(() => {
-        if (config.headers) {
-          config.headers.Authorization = `Bearer ${userStore.accessToken}`
-        }
-        resolve(service(config))
-      })
+    // 刷新进行中：将当前请求排队，等刷新结束后统一重放（成功）或统一拒绝（失败）
+    return new Promise((resolve, reject) => {
+      pendingRequests.push({ resolve, reject, config })
     })
   }
 
@@ -297,10 +297,16 @@ async function handleTokenExpired(config: AxiosRequestConfig): Promise<any> {
     if (config.headers) {
       config.headers.Authorization = `Bearer ${userStore.accessToken}`
     }
-    pendingRequests.forEach((cb) => cb())
+    pendingRequests.forEach(({ resolve, config: cfg }) => {
+      if (cfg.headers) cfg.headers.Authorization = `Bearer ${userStore.accessToken}`
+      resolve(service(cfg))
+    })
     pendingRequests = []
     return service(config)
   } catch (refreshError) {
+    // 刷新失败：必须显式拒绝所有排队请求，否则它们的 Promise 永不 settle，页面 loading 会卡死
+    pendingRequests.forEach(({ reject }) => reject(refreshError))
+    pendingRequests = []
     userStore.clearAuth()
     // 延迟跳转，避免在导航守卫中调用 router.push 导致路由状态混乱
     setTimeout(() => router.push('/login'), 0)

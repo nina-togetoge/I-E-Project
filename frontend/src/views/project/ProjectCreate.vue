@@ -353,10 +353,17 @@ async function nextStep() {
     })
     return
   }
-  // 步骤 2 直接前进
+  // 步骤 2：团队成员至少 1 人
   if (currentStep.value === 1) {
     if (formData.teamMembers.length === 0) {
       ElMessage.warning('请至少添加一名团队成员')
+      return
+    }
+  }
+  // 步骤 3：必须选择指导教师
+  if (currentStep.value === 2) {
+    if (!formData.teacher_id) {
+      ElMessage.warning('请选择指导教师')
       return
     }
   }

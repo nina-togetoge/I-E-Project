@@ -80,6 +80,9 @@ class AuthService:
         user = UserCRUD.get_by_username(db, username)
         if not user or user.id != user_id or user.status != 1:
             raise AuthException(message="用户不存在或已失效")
+        # 令牌轮换：旧 Refresh Token 立即吊销，防止被重放（泄露后无法重复刷新）
+        old_jti, old_remaining = extract_jti_exp(payload)
+        TokenBlacklist.add("refresh", old_jti, old_remaining)
         access_token = create_access_token(user)
         refresh_token = create_refresh_token(user)
         return LoginResponse(
