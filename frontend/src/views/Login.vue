@@ -81,9 +81,6 @@
             登 录
           </el-button>
         </el-form-item>
-        <el-form-item>
-          <el-button link type="primary" @click="$router.push('/register')">学生注册</el-button>
-        </el-form-item>
       </el-form>
 
     </div>

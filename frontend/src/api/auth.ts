@@ -21,17 +21,6 @@ export function refreshToken(refresh_token: string) {
   }>('/api/auth/refresh', { refresh_token })
 }
 
-export function register(data: {
-  username: string
-  password: string
-  real_name: string
-  email: string
-  phone?: string
-  college_id?: number
-}) {
-  return post<UserInfo>('/api/auth/register', data)
-}
-
 export function getColleges() {
   return get('/api/colleges')
 }

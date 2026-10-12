@@ -17,7 +17,7 @@ from app.core.exceptions import BizException
 from app.database.session import get_db
 from app.models import SysUser
 from app.schemas.user import (
-    LoginRequest, LoginResponse, RefreshTokenRequest, UserRegister, LogoutRequest,
+    LoginRequest, LoginResponse, RefreshTokenRequest, LogoutRequest,
     UserCreate, UserUpdate, UserProfileUpdate, UserInfo, UserListItem, UserSafeListItem,
     UserQueryParams, UserBatchStatusRequest, UserBatchDeleteRequest,
     UserBatchCreateRequest, ImportResultResponse, CollegeCreate, CollegeUpdate, CollegeResponse,
@@ -58,13 +58,6 @@ def api_refresh(req: RefreshTokenRequest, db: Session = Depends(get_db)):
     """使用刷新令牌换取新的访问令牌"""
     result = AuthService.refresh_token(db, req)
     return success(data=result, message="令牌刷新成功")
-
-
-@router_auth.post("/register", response_model=ResponseModel[UserInfo], summary="学生自助注册")
-def api_register(req: UserRegister, db: Session = Depends(get_db)):
-    """学生自助注册账号，角色固定为学生"""
-    user = AuthService.register_student(db, req)
-    return success(data=user, message="注册成功")
 
 
 @router_auth.get("/me", response_model=ResponseModel[UserInfo], summary="获取当前登录用户信息")

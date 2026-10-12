@@ -22,7 +22,7 @@ from app.schemas.user import (
     LoginRequest, LoginResponse, UserCreate, UserUpdate, UserProfileUpdate,
     UserInfo, UserListItem, UserSafeListItem, UserQueryParams, CollegeCreate, CollegeUpdate,
     CollegeResponse, OperationLogQueryParams, RefreshTokenRequest,
-    UserRegister, ImportResultResponse,
+    ImportResultResponse,
 )
 from app.crud.user import UserCRUD, CollegeCRUD, OperationLogCRUD
 from app.models import SysUser, SysCollege
@@ -112,25 +112,6 @@ class AuthService:
                     TokenBlacklist.add("refresh", jti, remaining)
             except Exception:
                 pass
-
-    @staticmethod
-    def register_student(db: Session, req: UserRegister) -> UserInfo:
-        """学生自助注册：只允许学生角色，检查账号唯一性"""
-        # 账号唯一校验
-        if UserCRUD.get_by_username(db, req.username):
-            raise DataConflictException(message=f"账号 {req.username} 已存在")
-        # 学院存在性校验
-        if req.college_id and not CollegeCRUD.get_by_id(db, req.college_id):
-            raise ParamValidateException(message="所选学院不存在")
-
-        data = req.model_dump()
-        data["role"] = RoleEnum.STUDENT.value
-        data["status"] = 1
-        data["force_change_pwd"] = 1  # 自助注册后首次登录必须改密
-        user = UserCRUD.create(db, data)
-        db.commit()
-        db.refresh(user)
-        return AuthService._build_user_info(user)
 
     @staticmethod
     def _build_user_info(user: SysUser) -> UserInfo:

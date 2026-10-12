@@ -130,29 +130,14 @@ def test_self_update_password_forbidden(client, seed, auth_headers):
 
 
 # ====================================================================
-# 6. 邮箱校验：非法 422，合法通过
+# 6. 学生自助注册功能已移除：接口不再暴露，应返回 404
 # ====================================================================
-@pytest.mark.parametrize("bad_email", ["a@b", "x@y.z"])
-def test_register_invalid_email_422(client, seed, bad_email):
-    college = seed.college()
-    payload = {
+def test_register_endpoint_removed(client, seed):
+    r = client.post("/api/auth/register", json={
         "username": "reg_stu_01", "password": "123456", "real_name": "注册学生",
-        "email": bad_email, "college_id": college.id,
-    }
-    r = client.post("/api/auth/register", json=payload)
-    assert r.json()["code"] == 422
-
-
-def test_register_valid_email_ok(client, seed):
-    college = seed.college()
-    payload = {
-        "username": "reg_stu_ok", "password": "123456", "real_name": "注册学生",
-        "email": "stu_ok@example.com", "college_id": college.id,
-    }
-    r = client.post("/api/auth/register", json=payload)
-    body = r.json()
-    assert body["code"] == 200
-    assert body["data"]["email"] == "stu_ok@example.com"
+        "college_id": 1,
+    })
+    assert r.status_code == 404
 
 
 def test_profile_update_invalid_email_422(client, seed, auth_headers):

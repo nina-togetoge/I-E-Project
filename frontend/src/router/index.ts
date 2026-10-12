@@ -16,12 +16,6 @@ const publicRoutes: RouteRecordRaw[] = [
     meta: { title: '登录' },
   },
   {
-    path: '/register',
-    name: 'Register',
-    component: () => import(/* webpackChunkName: "core" */ '@/views/Register.vue'),
-    meta: { title: '学生注册' },
-  },
-  {
     path: '/403',
     name: 'Forbidden',
     component: () => import(/* webpackChunkName: "misc" */ '@/views/error/403.vue'),
@@ -201,7 +195,7 @@ const router = createRouter({
 })
 
 // ==================== 路由守卫 ====================
-const whiteList = ['/login', '/register', '/403', '/404']
+const whiteList = ['/login', '/403', '/404']
 
 router.beforeEach(async (to, _from, next) => {
   // 设置页面标题

@@ -104,16 +104,6 @@ class UserCreate(UserBase):
     password: str = Field(..., pattern=PASSWORD_PATTERN, min_length=6, max_length=6, description="初始密码（6位纯数字）")
 
 
-class UserRegister(BaseModel):
-    """学生自助注册请求 — 密码强制6位纯数字，手机号校验"""
-    username: str = Field(..., min_length=2, max_length=64, description="学号")
-    password: str = Field(..., pattern=PASSWORD_PATTERN, min_length=6, max_length=6)
-    real_name: str = Field(..., max_length=64)
-    email: Optional[str] = Field(default=None, max_length=128, pattern=EMAIL_PATTERN)
-    phone: Optional[str] = Field(default=None, pattern=PHONE_PATTERN, min_length=11, max_length=11)
-    college_id: int = Field(..., description="所属学院")
-
-
 class UserUpdate(BaseModel):
     """管理员更新用户信息
     - password 非空则重置，必须6位纯数字
