@@ -238,7 +238,8 @@ async function send() {
   loading.value = true
 
   const history = conv.messages
-    .filter(m => !m.loading)
+    // 排除加载占位消息与空的欢迎占位消息（后端要求 content 至少 1 个字符）
+    .filter(m => !m.loading && m.content && m.content.trim())
     .map(m => ({ role: m.role, content: m.content }))
 
   try {
