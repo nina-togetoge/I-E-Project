@@ -46,6 +46,26 @@
               <el-icon v-if="item.icon"><component :is="item.icon" /></el-icon>
               <span class="stage-item-inner">{{ item.label }}</span>
             </el-menu-item>
+            <!-- 已立项：中期检查 / 结项验收 -->
+            <el-sub-menu
+              v-if="group.key === 'project' && execStages.length"
+              index="stage-group-approved"
+            >
+              <template #title>
+                <el-icon><CircleCheck /></el-icon>
+                <span>已立项</span>
+              </template>
+              <el-menu-item
+                v-for="item in execStages"
+                :key="item.key"
+                :index="'stage-' + item.key"
+                class="stage-menu-item"
+                :class="{ 'is-active': item.isActive, 'is-done': item.isDone }"
+              >
+                <el-icon v-if="item.icon"><component :is="item.icon" /></el-icon>
+                <span class="stage-item-inner">{{ item.label }}</span>
+              </el-menu-item>
+            </el-sub-menu>
           </el-sub-menu>
         </template>
       </el-menu>
@@ -102,6 +122,26 @@
                 <el-icon v-if="item.icon"><component :is="item.icon" /></el-icon>
                 <span class="stage-item-inner">{{ item.label }}</span>
               </el-menu-item>
+              <!-- 已立项：中期检查 / 结项验收 -->
+              <el-sub-menu
+                v-if="group.key === 'project' && execStages.length"
+                index="m-stage-group-approved"
+              >
+                <template #title>
+                  <el-icon><CircleCheck /></el-icon>
+                  <span>已立项</span>
+                </template>
+                <el-menu-item
+                  v-for="item in execStages"
+                  :key="item.key"
+                  :index="'stage-' + item.key"
+                  class="stage-menu-item"
+                  :class="{ 'is-active': item.isActive, 'is-done': item.isDone }"
+                >
+                  <el-icon v-if="item.icon"><component :is="item.icon" /></el-icon>
+                  <span class="stage-item-inner">{{ item.label }}</span>
+                </el-menu-item>
+              </el-sub-menu>
             </el-sub-menu>
           </template>
         </el-menu>
@@ -223,10 +263,11 @@ const PROCESS_STAGES = [
   { key: 'finished', label: '已结题', status: 9, segment: 'exec', icon: 'CircleCheckFilled' },
 ]
 
-// 阶段按功能归入侧边栏分组：执行段归「项目管理」，审批段归「审核中心」。
-// 展示时机：项目申报仅对学生显示；其余流程阶段常驻侧边栏展示。
+// 阶段按功能归入侧边栏分组：审批段归「审核中心」；
+// 执行段在「项目管理」下以「已立项」父级菜单收拢（中期检查 / 结项验收）。
 const STAGE_GROUP_MAP: Record<string, string[]> = {
-  project: ['declare', 'midterm', 'achievement', 'final'],
+  project: ['declare'],
+  exec: ['midterm', 'final'],
   review: ['teacher', 'college', 'expert'],
 }
 
@@ -255,6 +296,9 @@ function stagesOfGroup(groupKey: string) {
       return { ...s!, idx: idx + 1, isActive: full?.isActive || false, isDone: full?.isDone || false }
     })
 }
+
+// 「已立项」父级菜单下的子导航：中期检查 / 结项验收
+const execStages = computed(() => stagesOfGroup('exec'))
 
 const processStages = computed(() => {
   const cur = processStore.projectStatus
