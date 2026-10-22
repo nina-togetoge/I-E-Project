@@ -52,6 +52,7 @@ from app.api.routers.common_router import (
 from app.api.routers.expense_router import router_expense
 from app.api.routers.competition_router import router_competition
 from app.api.routers.announcement_router import router_announcement
+from app.api.routers.notification_router import router_notification
 from app.api.routers.ai_router import router_ai
 
 
@@ -120,6 +121,9 @@ def create_app() -> FastAPI:
 
     # 系统公告
     app.include_router(router_announcement, prefix=api_prefix)
+
+    # 站内通知
+    app.include_router(router_notification, prefix=api_prefix)
 
     # AI 助手
     app.include_router(router_ai, prefix=api_prefix)

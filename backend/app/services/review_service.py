@@ -41,6 +41,9 @@ from app.schemas.project import (
     PROJECT_STATUS_PENDING_EXPERT,
     PROJECT_STATUS_PENDING_EXPERT_ASSIGN,
 )
+from app.services.notification_service import (
+    NotificationService, NOTICE_LEVEL_INFO, NOTICE_LEVEL_WARNING, NOTICE_LEVEL_SUCCESS,
+)
 
 
 class ReviewService:
@@ -238,12 +241,24 @@ class ReviewService:
                 if pass_count * 2 >= total:
                     project.status = 9  # 多数通过 -> 已结题
                     project.reject_reason = None
+                    NotificationService.push(
+                        db, project.leader_id, "结项验收通过",
+                        f"项目「{project.project_name}」结项验收已通过，项目已完成结题。",
+                        level=NOTICE_LEVEL_SUCCESS, biz_type="project", biz_id=project.id,
+                        link=f"/projects/{project.id}/final",
+                    )
                 else:
                     project.status = 8  # 多数驳回 -> 退回待结题，可修改后重提
                     reason = f"结题验收未通过（{pass_count}/{total} 位专家同意）"
                     if req.review_result != REVIEW_RESULT_PASS and (req.review_comment or "").strip():
                         reason += f"：{req.review_comment.strip()}"
                     project.reject_reason = reason[:500]
+                    NotificationService.push(
+                        db, project.leader_id, "结项验收未通过",
+                        f"项目「{project.project_name}」结项验收未通过：{reason}",
+                        level=NOTICE_LEVEL_WARNING, biz_type="project", biz_id=project.id,
+                        link=f"/projects/{project.id}/final",
+                    )
             else:
                 # 尚未全部提交：保持待结题，报告继续等待其余专家验收
                 project.status = 8
@@ -801,6 +816,17 @@ class MidtermService:
             obj.status = 4
         else:
             obj.status = 3
+        # 审核结果通知项目负责人（通过/退回/驳回）
+        result_text = {1: "已通过", 2: "已被驳回", 3: "需修改后重新提交"}.get(req.result, "已审核")
+        content = f"项目「{project.project_name}」的中期检查报告{result_text}。"
+        if req.review_comment:
+            content += f"审核意见：{req.review_comment}"
+        NotificationService.push(
+            db, project.leader_id, f"中期检查{result_text}", content,
+            level=NOTICE_LEVEL_SUCCESS if req.result == 1 else NOTICE_LEVEL_WARNING,
+            biz_type="midterm", biz_id=obj.id,
+            link=f"/projects/{project.id}/midterm",
+        )
         db.commit()
         db.refresh(obj)
         return MidtermService._to_response(db, obj)

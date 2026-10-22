@@ -258,6 +258,27 @@ class ProjAchievement(BaseModel):
     )
 
 
+class ProjAchievementReview(BaseModel):
+    """项目成果认定记录（一条成果对应一条认定记录）"""
+    __tablename__ = "proj_achievement_review"
+
+    achievement_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("proj_achievement.id"), nullable=False, comment="成果ID"
+    )
+    # 状态: 0-待认定 1-已认定 2-不通过
+    status: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, comment="认定状态")
+    reviewer_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True, comment="认定人ID")
+    reviewer_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, comment="认定人姓名")
+    review_comment: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, comment="认定意见")
+    review_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="认定时间")
+    submit_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="提交认定时间")
+
+    __table_args__ = (
+        Index("uk_achievement_review", "achievement_id", unique=True),
+        Index("idx_achievement_review_status", "status"),
+    )
+
+
 class ProjMidtermCheck(BaseModel):
     """项目中期检查ORM模型"""
     __tablename__ = "proj_midterm_check"

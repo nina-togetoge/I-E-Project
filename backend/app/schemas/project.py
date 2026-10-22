@@ -254,6 +254,18 @@ class AchievementResponse(AchievementBase):
     project_id: int
     created_at: datetime
     attachments: List[dict] = Field(default_factory=list, description="成果证明材料列表")
+    # 成果认定（无认定记录的历史成果按「已认定」展示）
+    review_status: int = Field(default=1, description="认定状态:0待认定 1已认定 2不通过")
+    review_status_name: str = Field(default="已认定", description="认定状态名称")
+    review_comment: Optional[str] = Field(default=None, description="认定意见")
+    reviewer_name: Optional[str] = Field(default=None, description="认定人")
+    review_time: Optional[datetime] = Field(default=None, description="认定时间")
+
+
+class AchievementReviewRequest(BaseModel):
+    """成果认定请求"""
+    result: int = Field(..., ge=1, le=2, description="认定结果:1通过 2不通过")
+    comment: Optional[str] = Field(default=None, max_length=500, description="认定意见")
 
 
 # ====================================================================

@@ -23,13 +23,14 @@ from app.schemas.review import (
     REVIEW_STAGE_FINAL, REVIEW_RESULT_REJECT, REVIEW_RESULT_MODIFY,
 )
 from app.models import (
-    ProjProject, SysUser, ProjAchievement, ProjBudget, ProjReview, ProjExpense,
-    ProjChangeRequest, Competition,
+    ProjProject, SysUser, ProjAchievement, ProjAchievementReview, ProjBudget,
+    ProjReview, ProjExpense, ProjChangeRequest, Competition,
 )
 from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectQueryParams,
     ProjectListItem, ProjectDetailResponse, ProjectSubmitResponse,
-    AchievementCreate, AchievementUpdate, AchievementResponse, ProjectStatisticsResponse,
+    AchievementCreate, AchievementUpdate, AchievementReviewRequest, AchievementResponse,
+    ProjectStatisticsResponse,
     StatisticsTrendItem, CollegeStatisticsItem, PROJECT_STATUS_DRAFT, PROJECT_STATUS_PENDING_COLLEGE,
     PROJECT_STATUS_PENDING_TEACHER, PROJECT_STATUS_PENDING_UNIVERSITY, PROJECT_STATUS_PENDING_EXPERT,
     PROJECT_STATUS_PENDING_EXPERT_ASSIGN,
@@ -39,6 +40,9 @@ from app.schemas.project import (
 )
 from app.schemas.review import (
     CHANGE_STATUS_PENDING, CHANGE_STATUS_EXPIRED,
+)
+from app.services.notification_service import (
+    NotificationService, NOTICE_LEVEL_INFO, NOTICE_LEVEL_WARNING, NOTICE_LEVEL_SUCCESS,
 )
 
 
@@ -1353,6 +1357,8 @@ class AchievementService:
 
     # 可登记/编辑成果的项目阶段：已立项及之后
     EDITABLE_PROJECT_STATUSES = (6, 7, 8, 9)
+    # 成果认定状态
+    REVIEW_STATUS_NAME = {0: "待认定", 1: "已认定", 2: "不通过"}
 
     @staticmethod
     def _ensure_project_status(project: ProjProject) -> None:
@@ -1373,6 +1379,19 @@ class AchievementService:
         ):
             return
         raise PermissionDeniedException(message=deny_message)
+
+    @staticmethod
+    def _ensure_review_permission(project: ProjProject, operator: SysUser) -> None:
+        """成果认定权限：该项目指导教师、学院管理员、超级管理员（负责人不得自认）"""
+        if is_super_admin(operator):
+            return
+        if is_college_admin(operator):
+            if not operator.college_id or project.college_id != operator.college_id:
+                raise PermissionDeniedException(message="学院管理员仅可认定本院项目成果")
+            return
+        if operator.role == RoleEnum.TEACHER and project.teacher_id == operator.id:
+            return
+        raise PermissionDeniedException(message="仅项目指导教师或管理员可认定成果")
 
     @staticmethod
     def _validate_publish_date(project: ProjProject, publish_date: Optional[date]) -> None:
@@ -1399,7 +1418,36 @@ class AchievementService:
         ).update({SysAttachment.biz_id: ach_id}, synchronize_session=False)
 
     @staticmethod
-    def _to_response(db: Session, ach: ProjAchievement) -> AchievementResponse:
+    def _review_map(db: Session, ach_ids: List[int]) -> Dict[int, ProjAchievementReview]:
+        if not ach_ids:
+            return {}
+        rows = db.query(ProjAchievementReview).filter(
+            ProjAchievementReview.achievement_id.in_(ach_ids),
+            ProjAchievementReview.is_deleted == 0,
+        ).all()
+        return {r.achievement_id: r for r in rows}
+
+    @staticmethod
+    def _reset_review(db: Session, ach_id: int) -> ProjAchievementReview:
+        """成果新增/修改后回到「待认定」，清空上一轮认定结论"""
+        row = db.query(ProjAchievementReview).filter(
+            ProjAchievementReview.achievement_id == ach_id
+        ).first()
+        if not row:
+            row = ProjAchievementReview(achievement_id=ach_id, status=0)
+            db.add(row)
+        row.status = 0
+        row.reviewer_id = None
+        row.reviewer_name = None
+        row.review_comment = None
+        row.review_time = None
+        row.submit_time = datetime.now()
+        row.is_deleted = 0
+        return row
+
+    @staticmethod
+    def _to_response(db: Session, ach: ProjAchievement,
+                     review: Optional[ProjAchievementReview] = None) -> AchievementResponse:
         from app.models import SysAttachment
         item = AchievementResponse.model_validate(ach)
         atts = db.query(SysAttachment).filter(
@@ -1414,6 +1462,12 @@ class AchievementService:
             "download_url": f"/api/files/download/{a.id}",
             "preview_url": f"/api/files/preview/{a.id}",
         } for a in atts]
+        # 历史成果无认定记录，按「已认定」展示，避免全量显示为待认定
+        item.review_status = review.status if review else 1
+        item.review_status_name = AchievementService.REVIEW_STATUS_NAME.get(item.review_status, "")
+        item.review_comment = review.review_comment if review else None
+        item.reviewer_name = review.reviewer_name if review else None
+        item.review_time = review.review_time if review else None
         return item
 
     @staticmethod
@@ -1424,7 +1478,8 @@ class AchievementService:
         # 权限校验：复用项目详情可见性规则（草稿仅本人/成员，教师限本院，专家限被分配）
         ProjectService.get_detail(db, project_id, operator)
         items = AchievementCRUD.list_by_project(db, project_id)
-        return [AchievementService._to_response(db, i) for i in items]
+        reviews = AchievementService._review_map(db, [i.id for i in items])
+        return [AchievementService._to_response(db, i, reviews.get(i.id)) for i in items]
 
     @staticmethod
     def create(db: Session, req: AchievementCreate, operator: SysUser) -> AchievementResponse:
@@ -1438,9 +1493,19 @@ class AchievementService:
         AchievementService._validate_publish_date(obj, data.get("publish_date"))
         ach = AchievementCRUD.create(db, data)
         AchievementService._bind_attachments(db, ach.id, attachment_ids, operator)
+        review = AchievementService._reset_review(db, ach.id)
+        # 通知指导教师及时认定（登记人本人为教师时不重复通知）
+        if obj.teacher_id and obj.teacher_id != operator.id:
+            NotificationService.push(
+                db, obj.teacher_id, "新成果待认定",
+                f"项目「{obj.project_name}」登记了成果「{ach.title}」，请及时认定。",
+                level=NOTICE_LEVEL_INFO, biz_type="achievement", biz_id=ach.id,
+                link=f"/projects/{obj.id}/achievements",
+            )
         db.commit()
         db.refresh(ach)
-        return AchievementService._to_response(db, ach)
+        db.refresh(review)
+        return AchievementService._to_response(db, ach, review)
 
     @staticmethod
     def update(db: Session, pk: int, req: AchievementUpdate, operator: SysUser) -> AchievementResponse:
@@ -1455,6 +1520,11 @@ class AchievementService:
             raise ResourceNotFoundException(message="所属项目不存在")
         AchievementService._ensure_project_status(obj)
         AchievementService._ensure_permission(obj, operator, "仅项目负责人、指导教师或管理员可编辑成果")
+        old_review = db.query(ProjAchievementReview).filter(
+            ProjAchievementReview.achievement_id == ach.id,
+            ProjAchievementReview.is_deleted == 0,
+        ).first()
+        old_status = old_review.status if old_review else 1
         data = req.model_dump(exclude_unset=True)
         attachment_ids = data.pop("attachment_ids", []) or []
         if "publish_date" in data:
@@ -1462,9 +1532,58 @@ class AchievementService:
         for key, value in data.items():
             setattr(ach, key, value)
         AchievementService._bind_attachments(db, ach.id, attachment_ids, operator)
+        review = AchievementService._reset_review(db, ach.id)
+        # 已认定/不通过的成果被修改后需重新认定，通知指导教师
+        if old_status in (1, 2) and obj.teacher_id and obj.teacher_id != operator.id:
+            NotificationService.push(
+                db, obj.teacher_id, "成果已修改，待重新认定",
+                f"项目「{obj.project_name}」的成果「{ach.title}」已修改，请重新认定。",
+                level=NOTICE_LEVEL_INFO, biz_type="achievement", biz_id=ach.id,
+                link=f"/projects/{obj.id}/achievements",
+            )
         db.commit()
         db.refresh(ach)
-        return AchievementService._to_response(db, ach)
+        db.refresh(review)
+        return AchievementService._to_response(db, ach, review)
+
+    @staticmethod
+    def review(db: Session, pk: int, req: AchievementReviewRequest,
+               operator: SysUser) -> AchievementResponse:
+        """成果认定：通过(1) / 不通过(2)"""
+        from app.models import ProjAchievement
+        ach = db.query(ProjAchievement).filter(
+            ProjAchievement.id == pk, ProjAchievement.is_deleted == 0
+        ).first()
+        if not ach:
+            raise ResourceNotFoundException(message="成果不存在")
+        obj = ProjectCRUD.get_by_id(db, ach.project_id)
+        if not obj:
+            raise ResourceNotFoundException(message="所属项目不存在")
+        AchievementService._ensure_project_status(obj)
+        AchievementService._ensure_review_permission(obj, operator)
+        if req.result == 2 and not (req.comment or "").strip():
+            raise ParamValidateException(message="认定不通过时请填写认定意见")
+        row = AchievementService._reset_review(db, ach.id)
+        row.status = req.result
+        row.reviewer_id = operator.id
+        row.reviewer_name = operator.real_name
+        row.review_comment = (req.comment or "").strip() or None
+        row.review_time = datetime.now()
+        passed = req.result == 1
+        title = "成果认定通过" if passed else "成果认定未通过"
+        content = f"项目「{obj.project_name}」的成果「{ach.title}」已{'通过' if passed else '未通过'}认定。"
+        if row.review_comment:
+            content += f"认定意见：{row.review_comment}"
+        NotificationService.push(
+            db, obj.leader_id, title, content,
+            level=NOTICE_LEVEL_SUCCESS if passed else NOTICE_LEVEL_WARNING,
+            biz_type="achievement", biz_id=ach.id,
+            link=f"/projects/{obj.id}/achievements",
+        )
+        db.commit()
+        db.refresh(ach)
+        db.refresh(row)
+        return AchievementService._to_response(db, ach, row)
 
     @staticmethod
     def delete(db: Session, pk: int, operator: SysUser) -> None:
@@ -1482,4 +1601,7 @@ class AchievementService:
             elif not obj or obj.leader_id != operator.id:
                 raise PermissionDeniedException(message="仅负责人或管理员可删除成果")
         ach.is_deleted = 1
+        db.query(ProjAchievementReview).filter(
+            ProjAchievementReview.achievement_id == ach.id
+        ).update({ProjAchievementReview.is_deleted: 1}, synchronize_session=False)
         db.commit()

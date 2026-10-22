@@ -293,6 +293,52 @@ class ExcelHelper:
                 results.append(row_data)
         return results, errors
 
+    # ---------- 多工作表导出 ----------
+    @staticmethod
+    def export_sheets(
+        sheets: List[Tuple[str, List[Tuple[str, str, Optional[Callable]]], List[Dict[str, Any]]]],
+    ) -> bytes:
+        """
+        将多个工作表导出为同一个 Excel 二进制
+        sheets 示例: [("项目概况", [("字段", "k"), ("内容", "v")], rows), ...]
+        """
+        ExcelHelper._ensure_openpyxl()
+        wb = Workbook()
+        wb.remove(wb.active)
+        header_font = Font(bold=True, color="FFFFFF", size=11)
+        header_fill = PatternFill("solid", fgColor="4F81BD")
+        center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        thin = Side(style="thin")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+        for sheet_name, columns, data_rows in sheets:
+            # 兼容 (表头, 字段) 与 (表头, 字段, 格式化函数) 两种列定义
+            cols = [tuple(c) + (None,) * (3 - len(c)) for c in columns]
+            ws = wb.create_sheet(title=sheet_name[:31])
+            for col_idx, (header, _, _) in enumerate(cols, start=1):
+                cell = ws.cell(row=1, column=col_idx, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = center
+                cell.border = border
+                ws.column_dimensions[get_column_letter(col_idx)].width = max(14, len(header) * 2 + 2)
+            for r_idx, row in enumerate(data_rows, start=2):
+                for c_idx, (_, field, fmt) in enumerate(cols, start=1):
+                    val = row.get(field) if isinstance(row, dict) else getattr(row, field, None)
+                    if fmt and val is not None:
+                        try:
+                            val = fmt(val)
+                        except Exception:
+                            pass
+                    cell = ws.cell(row=r_idx, column=c_idx, value=val)
+                    cell.alignment = Alignment(vertical="center", wrap_text=True)
+                    cell.border = border
+            ws.freeze_panes = "A2"
+
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        return buffer.getvalue()
+
     # ---------- 导出列表 ----------
     @staticmethod
     def export_list(

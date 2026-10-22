@@ -1,9 +1,12 @@
 """
 项目申报模块 API 路由层
 """
+import io
 from typing import Optional, List
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import PaginationParams, DataScope, OperationContext
@@ -16,10 +19,11 @@ from app.models import SysUser
 from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectQueryParams, ProjectListItem,
     ProjectDetailResponse, ProjectSubmitResponse,
-    AchievementCreate, AchievementUpdate, AchievementResponse, ProjectStatisticsResponse,
+    AchievementCreate, AchievementUpdate, AchievementReviewRequest, AchievementResponse, ProjectStatisticsResponse,
     StatisticsTrendItem, CollegeStatisticsItem, FinalSubmitRequest,
 )
 from app.services.project_service import ProjectService, AchievementService
+from app.services.archive_service import ArchiveService
 
 router_project = APIRouter(prefix="/projects", tags=["项目申报"])
 router_achievement = APIRouter(prefix="/achievements", tags=["项目成果"])
@@ -71,6 +75,24 @@ def api_project_detail(
     current_user: SysUser = require_login,
 ):
     return success(data=ProjectService.get_detail(db, project_id, current_user))
+
+
+@router_project.get("/{project_id}/archive", summary="导出结项归档(ZIP)")
+def api_project_archive(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = require_login,
+):
+    """仅已结题项目可导出：项目归档信息.xlsx + 附件目录"""
+    filename, data = ArchiveService.export_zip(db, project_id, current_user)
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
 
 
 @router_project.post("", response_model=ResponseModel[ProjectDetailResponse], summary="创建项目(草稿)")
@@ -222,6 +244,20 @@ def api_achievement_update(
         ctx.set_desc(f"编辑成果#{pk}")
         data = AchievementService.update(db, pk, req, current_user)
     return success(data=data, message="成果修改成功")
+
+
+@router_achievement.post("/{pk}/review", response_model=ResponseModel[AchievementResponse], summary="成果认定")
+def api_achievement_review(
+    pk: int,
+    req: AchievementReviewRequest,
+    db: Session = Depends(get_db),
+    current_user: SysUser = require_login,
+    ctx: OperationContext = Depends(),
+):
+    with ctx:
+        ctx.set_desc(f"认定成果#{pk}")
+        data = AchievementService.review(db, pk, req, current_user)
+    return success(data=data, message="成果认定完成")
 
 
 @router_achievement.delete("/{pk}", response_model=ResponseModel, summary="删除成果")

@@ -17,11 +17,13 @@ from app.models.project import (
     ProjBudget,
     ProjExpense,
     ProjAchievement,
+    ProjAchievementReview,
     ProjMidtermCheck,
     ProjChangeRequest,
 )
 from app.models.competition import Competition
 from app.models.announcement import Announcement
+from app.models.notification import SysNotification
 
 __all__ = [
     # Base
@@ -41,10 +43,13 @@ __all__ = [
     "ProjBudget",
     "ProjExpense",
     "ProjAchievement",
+    "ProjAchievementReview",
     "ProjMidtermCheck",
     "ProjChangeRequest",
     # Competition
     "Competition",
     # Announcement
     "Announcement",
+    # Notification
+    "SysNotification",
 ]
