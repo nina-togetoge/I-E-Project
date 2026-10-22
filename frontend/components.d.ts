@@ -7,6 +7,7 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AchievementPanel: typeof import('./src/components/AchievementPanel.vue')['default']
     AIAssistant: typeof import('./src/components/AIAssistant.vue')['default']
     ApprovalFlow: typeof import('./src/components/ApprovalFlow.vue')['default']
     AvatarCropper: typeof import('./src/components/AvatarCropper.vue')['default']
@@ -87,6 +88,7 @@ declare module 'vue' {
     RichEditor: typeof import('./src/components/RichEditor.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    StagePageShell: typeof import('./src/components/StagePageShell.vue')['default']
     StatusTag: typeof import('./src/components/StatusTag.vue')['default']
     TagsView: typeof import('./src/components/TagsView.vue')['default']
     ThemePicker: typeof import('./src/components/ThemePicker.vue')['default']

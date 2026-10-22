@@ -1,216 +1,218 @@
 <!--
-  结项验收（独立页面）
+  结项验收（结项工作台）
+  顶部固定「结项条件检查」，下方 Tab 分为「成果登记」与「结项报告与验收」。
   待结题(8)：负责人填写结项验收报告并提交，等待专家验收；驳回后可直接修改重提（不受截止日限制）
   已结题(9)：展示验收结果与报告正文
 -->
 <template>
-  <div class="page-container" v-loading="loading">
-    <template v-if="project">
-      <div class="page-header">
-        <div class="header-row">
-          <div>
-            <h2 class="page-title">结项验收</h2>
-            <div class="page-subtitle">
-              <el-tag :type="reportStatusTagType" size="small">{{ reportStatusText }}</el-tag>
-            </div>
-          </div>
-          <div class="header-actions">
-            <el-button
-              v-if="project.status === 9"
-              type="success"
-              :loading="archiving"
-              @click="handleExportArchive"
-            >导出结项归档</el-button>
-            <ProjectSwitcher :current-id="pid" suffix="final" />
-          </div>
-        </div>
+  <StagePageShell
+    :project="project"
+    title="结项验收"
+    current="final"
+    :loading="loading"
+    :status-text="reportStatusText"
+    :status-type="reportStatusTagType"
+  >
+    <template #actions>
+      <el-button
+        v-if="project?.status === 9"
+        type="success"
+        :loading="archiving"
+        @click="handleExportArchive"
+      >导出结项归档</el-button>
+    </template>
+
+    <!-- 截止日提示（已驳回时不受截止日限制） -->
+    <el-alert
+      v-if="finalDeadlineText && project?.status === 8"
+      :title="finalDeadlineText"
+      :type="finalLocked && reportStatus !== 3 ? 'warning' : 'info'"
+      :closable="false"
+      class="mb-16"
+      show-icon
+    />
+
+    <!-- 状态提示 -->
+    <el-alert
+      v-if="reportStatus === 2"
+      title="结项验收已通过，项目已完成结题"
+      type="success"
+      :closable="false"
+      show-icon
+      class="mb-16"
+    />
+    <el-alert
+      v-else-if="reportStatus === 3"
+      :title="`验收驳回：${project?.final_reject_reason || project?.reject_reason || '请修改后重新提交'}`"
+      type="error"
+      :closable="false"
+      show-icon
+      class="mb-16"
+    />
+    <el-alert
+      v-else-if="reportStatus === 1"
+      title="结项验收报告已提交，等待专家验收"
+      type="success"
+      :closable="false"
+      show-icon
+      class="mb-16"
+    />
+    <el-alert
+      v-else-if="project && project.status !== 8"
+      title="当前项目尚未进入结项验收阶段"
+      type="info"
+      :closable="false"
+      show-icon
+      class="mb-16"
+    />
+
+    <!-- 结项条件检查（固定在 Tab 上方，提交报告前可随时核对） -->
+    <el-card v-if="checklist.length && isFinalStage" shadow="never" class="mb-16">
+      <template #header><span class="card-title">结项条件检查</span></template>
+      <div v-for="item in checklist" :key="item.key" class="check-item">
+        <el-icon :class="item.passed ? 'check-pass' : 'check-fail'">
+          <CircleCheckFilled v-if="item.passed" />
+          <WarningFilled v-else />
+        </el-icon>
+        <span class="check-label">{{ item.label }}</span>
+        <span class="check-detail">{{ item.detail }}</span>
       </div>
+    </el-card>
 
-      <ProjectStageSteps :project="project" current="final" />
+    <el-tabs v-model="activeTab" class="final-tabs">
+      <!-- 成果登记：与旧路由 /projects/:id/achievements 共用同一面板 -->
+      <el-tab-pane label="成果登记" name="achievements" lazy>
+        <AchievementPanel v-if="project" :project="project" />
+      </el-tab-pane>
 
-      <!-- 截止日提示（已驳回时不受截止日限制） -->
-      <el-alert
-        v-if="finalDeadlineText && project.status === 8"
-        :title="finalDeadlineText"
-        :type="finalLocked && reportStatus !== 3 ? 'warning' : 'info'"
-        :closable="false"
-        class="mb-16"
-        show-icon
-      />
-
-      <!-- 状态提示 -->
-      <el-alert
-        v-if="reportStatus === 2"
-        title="结项验收已通过，项目已完成结题"
-        type="success"
-        :closable="false"
-        show-icon
-        class="mb-16"
-      />
-      <el-alert
-        v-else-if="reportStatus === 3"
-        :title="`验收驳回：${project.final_reject_reason || project.reject_reason || '请修改后重新提交'}`"
-        type="error"
-        :closable="false"
-        show-icon
-        class="mb-16"
-      />
-      <el-alert
-        v-else-if="reportStatus === 1"
-        title="结项验收报告已提交，等待专家验收"
-        type="success"
-        :closable="false"
-        show-icon
-        class="mb-16"
-      />
-      <el-alert
-        v-else-if="project.status !== 8"
-        title="当前项目尚未进入结项验收阶段"
-        type="info"
-        :closable="false"
-        show-icon
-        class="mb-16"
-      />
-
-      <!-- 结项条件检查（仅进入待结题/已结题阶段后展示） -->
-      <el-card v-if="checklist.length && isFinalStage" shadow="never" class="mb-16">
-        <template #header><span class="card-title">结项条件检查</span></template>
-        <div v-for="item in checklist" :key="item.key" class="check-item">
-          <el-icon :class="item.passed ? 'check-pass' : 'check-fail'">
-            <CircleCheckFilled v-if="item.passed" />
-            <WarningFilled v-else />
-          </el-icon>
-          <span class="check-label">{{ item.label }}</span>
-          <span class="check-detail">{{ item.detail }}</span>
-        </div>
-      </el-card>
-
-      <!-- 专家验收进度 -->
-      <el-card v-if="reportStatus === 1 && reviewTotal > 0" shadow="never" class="mb-16">
-        <template #header><span class="card-title">专家验收进度</span></template>
-        <div class="review-progress">
-          <el-progress
-            :percentage="reviewPercent"
-            :status="reviewPercent === 100 ? 'success' : undefined"
-            style="flex: 1"
-          />
-          <span class="review-count">{{ reviewDone }} / {{ reviewTotal }} 位专家已提交验收意见</span>
-        </div>
-      </el-card>
-
-      <!-- 结项报告 -->
-      <el-card shadow="never" class="mb-16">
-        <template #header><span class="card-title">结项验收报告</span></template>
-
-        <!-- 可编辑：待结题 + 负责人 + 未提交/已驳回 -->
-        <el-form
-          v-if="canEdit"
-          ref="finalFormRef"
-          :model="finalForm"
-          :rules="finalRules"
-          label-width="100px"
-        >
-          <el-form-item label="结项报告" prop="final_report">
-            <el-input
-              v-model="finalForm.final_report"
-              type="textarea"
-              :rows="8"
-              placeholder="请填写项目完成情况、成果总结等结项验收报告内容"
-              maxlength="2000"
-              show-word-limit
+      <el-tab-pane label="结项报告与验收" name="final">
+        <!-- 专家验收进度 -->
+        <el-card v-if="reportStatus === 1 && reviewTotal > 0" shadow="never" class="mb-16">
+          <template #header><span class="card-title">专家验收进度</span></template>
+          <div class="review-progress">
+            <el-progress
+              :percentage="reviewPercent"
+              :status="reviewPercent === 100 ? 'success' : undefined"
+              style="flex: 1"
             />
-          </el-form-item>
-          <el-form-item label="验收材料">
-            <FileUpload
-              :accept="['.pdf', '.doc', '.docx', '.zip', '.rar', '.png', '.jpg']"
-              :form-data="{ biz_type: 'project', biz_id: 0 }"
-              @success="handleFinalFileUpload"
-            />
-          </el-form-item>
-          <el-form-item>
-            <el-button
-              type="success"
-              :loading="finalLoading"
-              :disabled="finalLocked && reportStatus !== 3"
-              @click="handleSubmitFinal"
-            >{{ reportStatus === 3 ? '重新提交结项报告' : '提交结项报告' }}</el-button>
-          </el-form-item>
-        </el-form>
-
-        <!-- 只读：已提交/已结题/非负责人 -->
-        <template v-else>
-          <div v-if="project.final_report" class="report-text">{{ project.final_report }}</div>
-          <div v-else class="report-empty">
-            项目进入「待结题」阶段后，由负责人填写并提交结项验收报告。
+            <span class="review-count">{{ reviewDone }} / {{ reviewTotal }} 位专家已提交验收意见</span>
           </div>
+        </el-card>
+
+        <!-- 结项报告 -->
+        <el-card shadow="never" class="mb-16">
+          <template #header><span class="card-title">结项验收报告</span></template>
+
+          <!-- 可编辑：待结题 + 负责人 + 未提交/已驳回 -->
+          <el-form
+            v-if="canEdit"
+            ref="finalFormRef"
+            :model="finalForm"
+            :rules="finalRules"
+            label-width="100px"
+          >
+            <el-form-item label="结项报告" prop="final_report">
+              <el-input
+                v-model="finalForm.final_report"
+                type="textarea"
+                :rows="8"
+                placeholder="请填写项目完成情况、成果总结等结项验收报告内容"
+                maxlength="2000"
+                show-word-limit
+              />
+            </el-form-item>
+            <el-form-item label="验收材料">
+              <FileUpload
+                :accept="['.pdf', '.doc', '.docx', '.zip', '.rar', '.png', '.jpg']"
+                :form-data="{ biz_type: 'project', biz_id: 0 }"
+                @success="handleFinalFileUpload"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button
+                type="success"
+                :loading="finalLoading"
+                :disabled="finalLocked && reportStatus !== 3"
+                @click="handleSubmitFinal"
+              >{{ reportStatus === 3 ? '重新提交结项报告' : '提交结项报告' }}</el-button>
+            </el-form-item>
+          </el-form>
+
+          <!-- 只读：已提交/已结题/非负责人 -->
+          <template v-else>
+            <div v-if="project?.final_report" class="report-text">{{ project.final_report }}</div>
+            <div v-else class="report-empty">
+              项目进入「待结题」阶段后，由负责人填写并提交结项验收报告。
+            </div>
+            <el-alert
+              v-if="!isLeader && project?.status === 8 && reportStatus === 0"
+              title="仅项目负责人可填写并提交结项验收报告"
+              type="info"
+              :closable="false"
+              show-icon
+              class="mt-16"
+            />
+            <el-button
+              v-if="canWithdrawFinal"
+              type="warning"
+              :loading="finalLoading"
+              class="mt-16"
+              @click="handleWithdrawFinal"
+            >撤回报告提交</el-button>
+          </template>
+        </el-card>
+
+        <!-- 专家验收区：被分配到该项目的专家 / 超级管理员，且报告待验收 -->
+        <el-card v-if="canAcceptNow" shadow="never">
+          <template #header><span class="card-title">专家验收</span></template>
           <el-alert
-            v-if="!isLeader && project.status === 8 && reportStatus === 0"
-            title="仅项目负责人可填写并提交结项验收报告"
+            v-if="reviewTotal > 1"
+            :title="`该项目由 ${reviewTotal} 位专家验收，全部提交后按多数意见判定`"
             type="info"
             :closable="false"
             show-icon
-            class="mt-16"
+            class="mb-16"
           />
-          <el-button
-            v-if="canWithdrawFinal"
-            type="warning"
-            :loading="finalLoading"
-            class="mt-16"
-            @click="handleWithdrawFinal"
-          >撤回报告提交</el-button>
-        </template>
-      </el-card>
-
-      <!-- 专家验收区：被分配到该项目的专家 / 超级管理员，且报告待验收 -->
-      <el-card v-if="canAcceptNow" shadow="never">
-        <template #header><span class="card-title">专家验收</span></template>
+          <el-form label-width="100px">
+            <el-form-item label="验收意见">
+              <el-input
+                v-model="acceptComment"
+                type="textarea"
+                :rows="3"
+                placeholder="请填写验收意见（驳回时请说明需要修改的内容）"
+                maxlength="1000"
+                show-word-limit
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="success" :loading="acceptLoading" @click="handleAccept('pass')">通过</el-button>
+              <el-button type="danger" :loading="acceptLoading" @click="handleAccept('reject')">驳回</el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
         <el-alert
-          v-if="reviewTotal > 1"
-          :title="`该项目由 ${reviewTotal} 位专家验收，全部提交后按多数意见判定`"
+          v-else-if="project?.final_can_accept && project?.final_reviewed_by_me && reportStatus === 1"
+          title="您已提交本轮验收意见，等待其他专家验收"
           type="info"
           :closable="false"
           show-icon
           class="mb-16"
         />
-        <el-form label-width="100px">
-          <el-form-item label="验收意见">
-            <el-input
-              v-model="acceptComment"
-              type="textarea"
-              :rows="3"
-              placeholder="请填写验收意见（驳回时请说明需要修改的内容）"
-              maxlength="1000"
-              show-word-limit
-            />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="success" :loading="acceptLoading" @click="handleAccept('pass')">通过</el-button>
-            <el-button type="danger" :loading="acceptLoading" @click="handleAccept('reject')">驳回</el-button>
-          </el-form-item>
-        </el-form>
-      </el-card>
-      <el-alert
-        v-else-if="project.final_can_accept && project.final_reviewed_by_me && reportStatus === 1"
-        title="您已提交本轮验收意见，等待其他专家验收"
-        type="info"
-        :closable="false"
-        show-icon
-        class="mb-16"
-      />
-    </template>
-  </div>
+      </el-tab-pane>
+    </el-tabs>
+  </StagePageShell>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { CircleCheckFilled, WarningFilled } from '@element-plus/icons-vue'
 import { getProjectDetail, submitFinal, withdrawFinal, downloadProjectArchive } from '@/api/project'
 import { submitReview } from '@/api/review'
 import FileUpload from '@/components/FileUpload.vue'
-import ProjectSwitcher from '@/components/ProjectSwitcher.vue'
-import ProjectStageSteps from '@/components/ProjectStageSteps.vue'
+import StagePageShell from '@/components/StagePageShell.vue'
+import AchievementPanel from '@/components/AchievementPanel.vue'
 import { useProcessStore } from '@/store/process'
 import { useUserStore } from '@/store/user'
 
@@ -232,6 +234,14 @@ const finalRules: FormRules = {
   final_report: [{ required: true, message: '请填写结项验收报告', trigger: 'blur' }],
 }
 
+/** 当前 Tab：默认结项报告，支持 ?tab=achievements 直达成果登记 */
+type FinalTab = 'achievements' | 'final'
+const activeTab = ref<FinalTab>(route.query.tab === 'achievements' ? 'achievements' : 'final')
+watch(
+  () => route.query.tab,
+  (tab) => { activeTab.value = tab === 'achievements' ? 'achievements' : 'final' },
+)
+
 /** 是否为项目负责人（后端 submit 仅允许负责人） */
 const isLeader = computed(() =>
   !!project.value && Number(userStore.userInfo?.id) === Number(project.value.leader_id)
@@ -246,8 +256,10 @@ const reportStatusText = computed(() => {
   if (reportStatus.value === 0 && !isFinalStage.value) return '未开始'
   return map[reportStatus.value] || '未提交'
 })
-const reportStatusTagType = computed(() => {
-  const map: Record<number, string> = { 0: 'info', 1: 'warning', 2: 'success', 3: 'danger' }
+const reportStatusTagType = computed<'primary' | 'success' | 'info' | 'warning' | 'danger'>(() => {
+  const map: Record<number, 'primary' | 'success' | 'info' | 'warning' | 'danger'> = {
+    0: 'info', 1: 'warning', 2: 'success', 3: 'danger',
+  }
   return map[reportStatus.value] || 'info'
 })
 
@@ -395,13 +407,10 @@ onBeforeUnmount(() => processStore.reset())
 </script>
 
 <style scoped>
-.page-header { margin-bottom: 20px; }
-.header-row { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
-.page-title { font-size: 20px; font-weight: 600; margin: 0; white-space: nowrap; }
-.page-subtitle { color: #909399; font-size: 13px; margin-top: 6px; }
 .mb-16 { margin-bottom: 16px; }
 .mt-16 { margin-top: 16px; }
 .card-title { font-weight: 600; }
+.final-tabs :deep(.el-tabs__header) { margin-bottom: 16px; }
 .check-item {
   display: flex;
   align-items: center;

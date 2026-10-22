@@ -3,126 +3,117 @@
   从项目详情页抽离，支持填写/保存/提交中期检查
 -->
 <template>
-  <div class="page-container" v-loading="loading">
-    <template v-if="project">
-      <div class="page-header">
-        <div class="header-row">
-          <div>
-            <h2 class="page-title">中期检查</h2>
-            <div class="page-subtitle">
-              <el-tag v-if="midterm.id" :type="statusTagType" size="small">{{ midterm.status_name || '草稿' }}</el-tag>
-            </div>
-          </div>
-          <ProjectSwitcher :current-id="pid" suffix="midterm" />
+  <StagePageShell
+    :project="project"
+    title="中期检查"
+    current="midterm"
+    :loading="loading"
+    :status-text="midterm.id ? (midterm.status_name || '草稿') : ''"
+    :status-type="statusTagType"
+  >
+    <!-- 审核意见（退回修改 / 驳回时显示） -->
+    <el-alert
+      v-if="(midterm.status === 3 || midterm.status === 4) && midterm.review_comment"
+      :title="`${midterm.status === 3 ? '退回修改意见' : '审核意见'}：${midterm.review_comment}`"
+      :type="midterm.status === 3 ? 'warning' : 'error'"
+      :closable="false"
+      class="mb-16"
+      show-icon
+    />
+
+    <!-- 中期报告提交截止日提示（截止日驱动锁定） -->
+    <el-alert
+      v-if="midtermDeadlineTip"
+      :title="midtermDeadlineTip"
+      :type="midtermLocked ? 'warning' : 'info'"
+      :closable="false"
+      class="mb-16"
+      show-icon
+    />
+
+    <el-form :model="midtermForm" label-width="100px" style="max-width: 1000px; margin: 0 auto;">
+      <el-form-item label="当前进展">
+        <el-input v-model="midtermForm.progress_desc" type="textarea" :rows="3" placeholder="项目当前进展情况" :disabled="isReadonly" />
+      </el-form-item>
+      <el-form-item label="已完成任务">
+        <el-input v-model="midtermForm.completed_tasks" type="textarea" :rows="3" placeholder="已完成的主要任务" :disabled="isReadonly" />
+      </el-form-item>
+      <el-form-item label="剩余任务">
+        <el-input v-model="midtermForm.remaining_tasks" type="textarea" :rows="3" placeholder="剩余任务计划" :disabled="isReadonly" />
+      </el-form-item>
+      <el-form-item label="存在问题">
+        <el-input v-model="midtermForm.problems" type="textarea" :rows="2" placeholder="遇到的问题" :disabled="isReadonly" />
+      </el-form-item>
+      <el-form-item label="下一步计划">
+        <el-input v-model="midtermForm.next_plan" type="textarea" :rows="2" placeholder="下一步工作计划" :disabled="isReadonly" />
+      </el-form-item>
+      <el-form-item label="中期报告">
+        <el-input v-model="midtermForm.report" type="textarea" :rows="6" placeholder="请填写中期报告内容" maxlength="10000" show-word-limit :disabled="isReadonly" />
+      </el-form-item>
+      <el-form-item label="报告附件">
+        <div class="attachment-block">
+          <ProjectAttachmentList
+            v-if="displayAttachments.length"
+            :attachments="displayAttachments"
+            :deletable="!isReadonly"
+            @remove="handleRemoveAttachment"
+          />
+          <FileUpload
+            v-if="!isReadonly"
+            :accept="['.pdf', '.doc', '.docx', '.zip', '.rar', '.png', '.jpg']"
+            :form-data="{ biz_type: 'midterm', biz_id: 0 }"
+            @success="handleMidtermFileUpload"
+          />
         </div>
-      </div>
+      </el-form-item>
+      <el-form-item label="已用经费">
+        <span class="budget-value">¥{{ usedAmount.toFixed(2) }}</span>
+        <span class="form-tip">
+          由项目经费报销自动汇总 · 总预算 ¥{{ Number(project.budget_amount || 0).toFixed(2) }} ·
+          剩余 ¥{{ (Number(project.budget_amount || 0) - usedAmount).toFixed(2) }}
+        </span>
+      </el-form-item>
+      <el-form-item v-if="!isReadonly">
+        <el-button :loading="midtermLoading" @click="handleSave(false)">保存草稿</el-button>
+        <el-button type="primary" :loading="midtermLoading" :disabled="midtermLocked" @click="handleSave(true)">提交审核</el-button>
+      </el-form-item>
+      <el-form-item v-else-if="!canReviewMidterm">
+        <el-alert :title="readonlyTip" type="info" :closable="false" show-icon />
+        <el-button
+          v-if="canWithdrawMidterm"
+          type="warning"
+          :loading="midtermLoading"
+          class="withdraw-btn"
+          @click="handleWithdrawMidterm"
+        >撤回提交</el-button>
+      </el-form-item>
 
-      <ProjectStageSteps :project="project" current="midterm" />
+      <!-- 审核区：仅该项目的指导教师本人 / 超级管理员，且中期检查处于待审核(1)时显示 -->
+      <template v-if="canReviewMidterm">
+        <el-form-item label="审核意见">
+          <el-input
+            v-model="reviewComment"
+            type="textarea"
+            :rows="3"
+            placeholder="请填写审核意见（驳回时请说明原因）"
+            maxlength="1000"
+            show-word-limit
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="success" :loading="reviewLoading" @click="handleReview(1)">通过</el-button>
+          <el-button type="danger" :loading="reviewLoading" @click="handleReview(2)">驳回</el-button>
+        </el-form-item>
+      </template>
+    </el-form>
 
-      <!-- 审核意见（退回修改 / 驳回时显示） -->
-      <el-alert
-        v-if="(midterm.status === 3 || midterm.status === 4) && midterm.review_comment"
-        :title="`${midterm.status === 3 ? '退回修改意见' : '审核意见'}：${midterm.review_comment}`"
-        :type="midterm.status === 3 ? 'warning' : 'error'"
-        :closable="false"
-        class="mb-16"
-        show-icon
-      />
-
-      <!-- 中期报告提交截止日提示（截止日驱动锁定） -->
-      <el-alert
-        v-if="midtermDeadlineTip"
-        :title="midtermDeadlineTip"
-        :type="midtermLocked ? 'warning' : 'info'"
-        :closable="false"
-        class="mb-16"
-        show-icon
-      />
-
-      <el-form :model="midtermForm" label-width="100px" style="max-width: 1000px; margin: 0 auto;">
-        <el-form-item label="当前进展">
-          <el-input v-model="midtermForm.progress_desc" type="textarea" :rows="3" placeholder="项目当前进展情况" :disabled="isReadonly" />
-        </el-form-item>
-        <el-form-item label="已完成任务">
-          <el-input v-model="midtermForm.completed_tasks" type="textarea" :rows="3" placeholder="已完成的主要任务" :disabled="isReadonly" />
-        </el-form-item>
-        <el-form-item label="剩余任务">
-          <el-input v-model="midtermForm.remaining_tasks" type="textarea" :rows="3" placeholder="剩余任务计划" :disabled="isReadonly" />
-        </el-form-item>
-        <el-form-item label="存在问题">
-          <el-input v-model="midtermForm.problems" type="textarea" :rows="2" placeholder="遇到的问题" :disabled="isReadonly" />
-        </el-form-item>
-        <el-form-item label="下一步计划">
-          <el-input v-model="midtermForm.next_plan" type="textarea" :rows="2" placeholder="下一步工作计划" :disabled="isReadonly" />
-        </el-form-item>
-        <el-form-item label="中期报告">
-          <el-input v-model="midtermForm.report" type="textarea" :rows="6" placeholder="请填写中期报告内容" maxlength="10000" show-word-limit :disabled="isReadonly" />
-        </el-form-item>
-        <el-form-item label="报告附件">
-          <div class="attachment-block">
-            <ProjectAttachmentList
-              v-if="displayAttachments.length"
-              :attachments="displayAttachments"
-              :deletable="!isReadonly"
-              @remove="handleRemoveAttachment"
-            />
-            <FileUpload
-              v-if="!isReadonly"
-              :accept="['.pdf', '.doc', '.docx', '.zip', '.rar', '.png', '.jpg']"
-              :form-data="{ biz_type: 'midterm', biz_id: 0 }"
-              @success="handleMidtermFileUpload"
-            />
-          </div>
-        </el-form-item>
-        <el-form-item label="已用经费">
-          <span class="budget-value">¥{{ usedAmount.toFixed(2) }}</span>
-          <span class="form-tip">
-            由项目经费报销自动汇总 · 总预算 ¥{{ Number(project.budget_amount || 0).toFixed(2) }} ·
-            剩余 ¥{{ (Number(project.budget_amount || 0) - usedAmount).toFixed(2) }}
-          </span>
-        </el-form-item>
-        <el-form-item v-if="!isReadonly">
-          <el-button :loading="midtermLoading" @click="handleSave(false)">保存草稿</el-button>
-          <el-button type="primary" :loading="midtermLoading" :disabled="midtermLocked" @click="handleSave(true)">提交审核</el-button>
-        </el-form-item>
-        <el-form-item v-else-if="!canReviewMidterm">
-          <el-alert :title="readonlyTip" type="info" :closable="false" show-icon />
-          <el-button
-            v-if="canWithdrawMidterm"
-            type="warning"
-            :loading="midtermLoading"
-            class="withdraw-btn"
-            @click="handleWithdrawMidterm"
-          >撤回提交</el-button>
-        </el-form-item>
-
-        <!-- 审核区：仅该项目的指导教师本人 / 超级管理员，且中期检查处于待审核(1)时显示 -->
-        <template v-if="canReviewMidterm">
-          <el-form-item label="审核意见">
-            <el-input
-              v-model="reviewComment"
-              type="textarea"
-              :rows="3"
-              placeholder="请填写审核意见（驳回时请说明原因）"
-              maxlength="1000"
-              show-word-limit
-            />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="success" :loading="reviewLoading" @click="handleReview(1)">通过</el-button>
-            <el-button type="danger" :loading="reviewLoading" @click="handleReview(2)">驳回</el-button>
-          </el-form-item>
-        </template>
-      </el-form>
-
-      <!-- 中期通过后的下一步 -->
-      <el-card v-if="midterm.status === 2" shadow="never" class="next-step">
-        <div class="next-step-title">中期检查已通过，可继续办理：</div>
-        <el-button type="primary" @click="goNext('achievements')">去登记成果</el-button>
-        <el-button type="success" @click="goNext('final')">去结项验收</el-button>
-      </el-card>
-    </template>
-  </div>
+    <!-- 中期通过后的下一步 -->
+    <el-card v-if="midterm.status === 2" shadow="never" class="next-step">
+      <div class="next-step-title">中期检查已通过，可继续办理：</div>
+      <el-button type="primary" @click="goNext('achievements')">去登记成果</el-button>
+      <el-button type="success" @click="goNext('final')">去结项验收</el-button>
+    </el-card>
+  </StagePageShell>
 </template>
 
 <script setup lang="ts">
@@ -133,8 +124,7 @@ import { getProjectDetail } from '@/api/project'
 import { getMidtermCheck, saveMidtermDraft, submitMidtermCheck, reviewMidtermCheck, withdrawMidtermCheck } from '@/api/review'
 import { deleteAttachment } from '@/api/common'
 import FileUpload from '@/components/FileUpload.vue'
-import ProjectSwitcher from '@/components/ProjectSwitcher.vue'
-import ProjectStageSteps from '@/components/ProjectStageSteps.vue'
+import StagePageShell from '@/components/StagePageShell.vue'
 import ProjectAttachmentList from '@/components/ProjectAttachmentList.vue'
 import { useProcessStore } from '@/store/process'
 import { useUserStore } from '@/store/user'
@@ -165,7 +155,7 @@ const midtermAttachments = ref<any[]>([])
 const newMidtermAttachments = ref<any[]>([])
 const displayAttachments = computed(() => [...midtermAttachments.value, ...newMidtermAttachments.value])
 
-const statusTagType = computed(() => {
+const statusTagType = computed<'primary' | 'success' | 'info' | 'warning' | 'danger'>(() => {
   const s = midterm.value.status
   if (s === 2) return 'success'
   if (s === 4) return 'danger'
@@ -356,27 +346,6 @@ onBeforeUnmount(() => processStore.reset())
 </script>
 
 <style scoped>
-.page-header {
-  margin-bottom: 20px;
-}
-.header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-}
-.page-title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0;
-  white-space: nowrap;
-}
-.page-subtitle {
-  color: #909399;
-  font-size: 13px;
-  display: flex;
-  align-items: center;
-}
 .mb-16 {
   margin-bottom: 16px;
 }
