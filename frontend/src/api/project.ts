@@ -1,7 +1,7 @@
 /**
  * 项目管理接口
  */
-import { get, post, put, del } from '@/utils/request'
+import { get, post, put, del, download } from '@/utils/request'
 import type { PageResult } from '@/utils/request'
 
 /** 项目列表项 */
@@ -204,6 +204,12 @@ export interface Achievement {
   summary?: string
   created_at: string
   attachments?: AchievementAttachment[]
+  /** 认定状态：0待认定 1已认定 2不通过 */
+  review_status?: number
+  review_status_name?: string
+  review_comment?: string | null
+  reviewer_name?: string | null
+  review_time?: string | null
 }
 
 /** 成果登记/编辑提交数据 */
@@ -238,4 +244,18 @@ export function updateAchievement(id: number, data: AchievementPayload) {
 /** 删除项目成果 */
 export function deleteAchievement(pk: number) {
   return del(`/api/achievements/${pk}`)
+}
+
+/** 成果认定（1通过 / 2不通过） */
+export function reviewAchievement(pk: number, data: { result: number; comment?: string }) {
+  return post<Achievement>(`/api/achievements/${pk}/review`, data)
+}
+
+/** 导出结项归档（ZIP） */
+export function downloadProjectArchive(projectId: number, filename?: string) {
+  return download(
+    `/api/projects/${projectId}/archive`,
+    undefined,
+    filename || `项目归档_${projectId}.zip`,
+  )
 }

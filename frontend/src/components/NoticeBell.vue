@@ -39,7 +39,7 @@
         <ul v-else class="notice-list">
           <li
             v-for="n in noticeStore.notices"
-            :key="n.id"
+            :key="noticeStore.noticeKey(n)"
             class="notice-item"
             :class="{ unread: !n.isRead }"
             @click="handleClick(n)"
@@ -92,14 +92,16 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { Bell } from '@element-plus/icons-vue'
 import EmptyIllustration from '@/components/EmptyIllustration.vue'
 import { useNoticeStore, type Notice, type NoticePriority } from '@/store/notice'
 import dayjs from 'dayjs'
 
 const noticeStore = useNoticeStore()
+const router = useRouter()
 const popoverVisible = ref(false)
-const expandedSet = new Set<number>()
+const expandedSet = ref(new Set<string>())
 
 onMounted(() => {
   noticeStore.fetchNotices()
@@ -136,19 +138,24 @@ function truncate(s: string, len: number): string {
 }
 
 function isExpanded(n: Notice): boolean {
-  return expandedSet.has(n.id)
+  return expandedSet.value.has(noticeStore.noticeKey(n))
 }
 
 function toggleExpand(n: Notice) {
-  if (expandedSet.has(n.id)) expandedSet.delete(n.id)
-  else expandedSet.add(n.id)
+  const key = noticeStore.noticeKey(n)
+  if (expandedSet.value.has(key)) expandedSet.value.delete(key)
+  else expandedSet.value.add(key)
 }
 
 function handleClick(n: Notice) {
-  toggleExpand(n)
   if (!n.isRead) {
-    noticeStore.markRead(n.id)
+    noticeStore.markRead(n)
   }
+  if (n.link) {
+    router.push(n.link)
+    return
+  }
+  toggleExpand(n)
 }
 </script>
 

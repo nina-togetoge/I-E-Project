@@ -14,7 +14,15 @@
               <el-tag :type="reportStatusTagType" size="small">{{ reportStatusText }}</el-tag>
             </div>
           </div>
-          <ProjectSwitcher :current-id="pid" suffix="final" />
+          <div class="header-actions">
+            <el-button
+              v-if="project.status === 9"
+              type="success"
+              :loading="archiving"
+              @click="handleExportArchive"
+            >导出结项归档</el-button>
+            <ProjectSwitcher :current-id="pid" suffix="final" />
+          </div>
         </div>
       </div>
 
@@ -195,7 +203,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { CircleCheckFilled, WarningFilled } from '@element-plus/icons-vue'
-import { getProjectDetail, submitFinal, withdrawFinal } from '@/api/project'
+import { getProjectDetail, submitFinal, withdrawFinal, downloadProjectArchive } from '@/api/project'
 import { submitReview } from '@/api/review'
 import FileUpload from '@/components/FileUpload.vue'
 import ProjectSwitcher from '@/components/ProjectSwitcher.vue'
@@ -212,6 +220,7 @@ const project = ref<any>(null)
 const loading = ref(true)
 const finalLoading = ref(false)
 const acceptLoading = ref(false)
+const archiving = ref(false)
 const finalFormRef = ref<FormInstance>()
 const finalForm = reactive({ final_report: '' })
 const acceptComment = ref('')
@@ -318,6 +327,19 @@ async function handleWithdrawFinal() {
     loadData()
   } finally {
     finalLoading.value = false
+  }
+}
+
+async function handleExportArchive() {
+  archiving.value = true
+  try {
+    const name = `项目归档_${project.value?.project_no || pid.value}.zip`
+    await downloadProjectArchive(pid.value, name)
+    ElMessage.success('归档包已开始下载')
+  } catch {
+    ElMessage.error('导出失败，请稍后重试')
+  } finally {
+    archiving.value = false
   }
 }
 

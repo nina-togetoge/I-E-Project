@@ -31,7 +31,8 @@
               <th style="width:110px">获奖等级</th>
               <th style="width:110px">日期</th>
               <th style="width:90px">证明材料</th>
-              <th style="width:110px">操作</th>
+              <th style="width:100px">认定状态</th>
+              <th style="width:150px">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -54,9 +55,24 @@
                 <span v-else>—</span>
               </td>
               <td align="center">
+                <el-tooltip
+                  v-if="a.review_status === 2 && a.review_comment"
+                  :content="a.review_comment"
+                  placement="top"
+                >
+                  <el-tag size="small" type="danger">{{ reviewStatusLabel(a.review_status) }}</el-tag>
+                </el-tooltip>
+                <el-tag
+                  v-else
+                  size="small"
+                  :type="reviewStatusTagType(a.review_status)"
+                >{{ reviewStatusLabel(a.review_status) }}</el-tag>
+              </td>
+              <td align="center">
+                <el-button v-if="canReview" link type="warning" size="small" @click="openReview(a)">认定</el-button>
                 <el-button v-if="canRegister" link type="primary" size="small" @click="openEdit(a)">编辑</el-button>
                 <el-button v-if="canDelete" link type="danger" size="small" @click="handleDelete(a)">删除</el-button>
-                <span v-if="!canRegister && !canDelete">—</span>
+                <span v-if="!canRegister && !canDelete && !canReview">—</span>
               </td>
             </tr>
           </tbody>
@@ -133,6 +149,33 @@
       </template>
     </el-dialog>
 
+    <!-- 成果认定弹窗 -->
+    <el-dialog center v-model="reviewDialog" title="成果认定" width="480px">
+      <div class="review-target">成果：{{ reviewTarget?.title }}</div>
+      <el-form label-width="88px">
+        <el-form-item label="认定结果">
+          <el-radio-group v-model="reviewForm.result">
+            <el-radio :value="1">通过</el-radio>
+            <el-radio :value="2">不通过</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="认定意见">
+          <el-input
+            v-model="reviewForm.comment"
+            type="textarea"
+            :rows="3"
+            maxlength="500"
+            show-word-limit
+            :placeholder="reviewForm.result === 2 ? '不通过时必填，请说明原因' : '选填'"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="reviewDialog = false">取消</el-button>
+        <el-button type="primary" :loading="reviewing" @click="handleReviewSubmit">提交认定</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 证明材料查看弹窗 -->
     <el-dialog center v-model="attDialog" :title="`成果证明材料 - ${attTitle}`" width="600px">
       <ProjectAttachmentList :attachments="attList" />
@@ -144,7 +187,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { getProjectDetail, listAchievements, createAchievement, updateAchievement, deleteAchievement } from '@/api/project'
+import { getProjectDetail, listAchievements, createAchievement, updateAchievement, deleteAchievement, reviewAchievement } from '@/api/project'
 import { deleteAttachment } from '@/api/common'
 import ProjectSwitcher from '@/components/ProjectSwitcher.vue'
 import ProjectStageSteps from '@/components/ProjectStageSteps.vue'
@@ -176,6 +219,9 @@ const canRegister = computed(() => !!project.value && REGISTER_STATUS.includes(N
   && (isLeader.value || isProjectTeacher.value || isProjectAdmin.value))
 // 删除成果：仅项目负责人或管理员（后端 delete 不允许指导教师删除）
 const canDelete = computed(() => isLeader.value || isProjectAdmin.value)
+// 成果认定：项目指导教师 / 学院管理员 / 超级管理员（负责人不可自认）
+const canReview = computed(() => !!project.value && REGISTER_STATUS.includes(Number(project.value.status))
+  && (isProjectTeacher.value || isProjectAdmin.value))
 const achievements = ref<any[]>([])
 const loading = ref(true)
 const showDialog = ref(false)
@@ -186,6 +232,21 @@ const newAttachments = ref<any[]>([])
 const attDialog = ref(false)
 const attTitle = ref('')
 const attList = ref<any[]>([])
+const reviewDialog = ref(false)
+const reviewing = ref(false)
+const reviewTarget = ref<any>(null)
+const reviewForm = reactive({ result: 1, comment: '' })
+const REVIEW_STATUS_LABEL: Record<number, string> = { 0: '待认定', 1: '已认定', 2: '不通过' }
+function reviewStatusLabel(status?: number): string {
+  return REVIEW_STATUS_LABEL[Number(status ?? 1)] || '已认定'
+}
+function reviewStatusTagType(status?: number): string {
+  switch (Number(status ?? 1)) {
+    case 0: return 'warning'
+    case 2: return 'danger'
+    default: return 'success'
+  }
+}
 const formRef = ref<FormInstance>()
 const form = reactive({
   achievement_type: undefined as number | undefined,
@@ -434,6 +495,35 @@ async function handleDelete(row: any) {
   loadData()
 }
 
+function openReview(row: any) {
+  reviewTarget.value = row
+  reviewForm.result = 1
+  reviewForm.comment = ''
+  reviewDialog.value = true
+}
+
+async function handleReviewSubmit() {
+  if (!reviewTarget.value) return
+  if (reviewForm.result === 2 && !reviewForm.comment.trim()) {
+    ElMessage.warning('认定不通过时请填写认定意见')
+    return
+  }
+  reviewing.value = true
+  try {
+    await reviewAchievement(reviewTarget.value.id, {
+      result: reviewForm.result,
+      comment: reviewForm.comment.trim() || undefined,
+    })
+    ElMessage.success('认定完成')
+    reviewDialog.value = false
+    loadData()
+  } catch {
+    // 错误已由全局请求拦截器统一提示
+  } finally {
+    reviewing.value = false
+  }
+}
+
 onMounted(() => loadData())
 onBeforeUnmount(() => processStore.reset())
 </script>
@@ -486,5 +576,13 @@ onBeforeUnmount(() => processStore.reset())
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+.review-target {
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #606266;
 }
 </style>
