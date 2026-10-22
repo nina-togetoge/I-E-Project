@@ -22,6 +22,7 @@
             <el-option label="待结题" :value="8" />
             <el-option label="已结题" :value="9" />
             <el-option label="已驳回" :value="10" />
+            <el-option label="已撤销" :value="11" />
           </el-select>
         </el-form-item>
         <el-form-item>

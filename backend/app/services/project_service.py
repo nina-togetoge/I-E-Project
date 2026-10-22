@@ -34,7 +34,7 @@ from app.schemas.project import (
     PROJECT_STATUS_PENDING_TEACHER, PROJECT_STATUS_PENDING_UNIVERSITY, PROJECT_STATUS_PENDING_EXPERT,
     PROJECT_STATUS_PENDING_EXPERT_ASSIGN,
     PROJECT_STATUS_APPROVED, PROJECT_STATUS_MIDTERM, PROJECT_STATUS_PENDING_FINAL,
-    PROJECT_STATUS_REJECTED, PROJECT_STATUS_NAME,
+    PROJECT_STATUS_REJECTED, PROJECT_STATUS_CANCELLED, PROJECT_STATUS_NAME,
     EXPENSE_STATUS_COMPLETED, EXPENSE_STATUS_REJECTED,
 )
 from app.schemas.review import (
@@ -128,33 +128,50 @@ class ProjectService:
 
     @staticmethod
     def sweep_expired_midterm(db: Session, project_id: int) -> None:
-        """中期检查待审核报告超过『中期报告提交截止日』仍未审完 → 置为『已作废』（留档）"""
-        midterm = MidtermCRUD.get_by_project(db, project_id)
-        if not midterm or midterm.status != 1:
-            return
+        """中期检查截止日清扫：
+        - 截止日前已提交(待审核 status=1)的报告继续保留，指导教师仍可审核（避免流程死锁）
+        - 截止日时仍未提交/未通过(草稿/修改/驳回) → 项目终止为「已撤销(11)」，留档追责
+        """
         project = ProjectCRUD.get_by_id(db, project_id)
-        deadline = ProjectService.get_midterm_deadline(db, project) if project else None
-        if deadline is not None and date.today() > deadline:
+        if not project or project.status not in (PROJECT_STATUS_APPROVED, PROJECT_STATUS_MIDTERM):
+            return
+        deadline = ProjectService.get_midterm_deadline(db, project)
+        if deadline is None or date.today() <= deadline:
+            return
+        midterm = MidtermCRUD.get_by_project(db, project_id)
+        if midterm and midterm.status in (1, 2):
+            # 已按时提交待审核 / 已通过：保留，审核不再受截止日限制
+            return
+        if midterm:
             midterm.status = 5  # 已作废
-            midterm.review_comment = "超过中期报告审核截止日自动作废"
-            db.commit()
+            midterm.review_comment = "超过中期报告提交截止日未通过，项目自动终止"
+        project.status = PROJECT_STATUS_CANCELLED
+        project.reject_reason = "超过中期检查截止日仍未通过中期检查，项目自动终止"
+        db.commit()
 
     @staticmethod
     def sweep_expired_final(db: Session, project_id: int) -> None:
-        """结项验收报告占位超过『结题报告提交截止日』仍未被验收 → 软删留档（项目退回未提交报告）"""
-        placeholder = db.query(ProjReview).filter(
+        """结题报告截止日清扫：
+        - 截止日前已提交报告（占位记录）→ 保留，专家仍可继续验收
+        - 截止日时仍未提交报告 → 项目终止为「已撤销(11)」，避免永久卡在待结题(8)
+        """
+        project = ProjectCRUD.get_by_id(db, project_id)
+        if not project or project.status != PROJECT_STATUS_PENDING_FINAL:
+            return
+        deadline = ProjectService.get_final_deadline(db, project)
+        if deadline is None or date.today() <= deadline:
+            return
+        has_report = db.query(ProjReview.id).filter(
             ProjReview.project_id == project_id,
             ProjReview.review_stage == REVIEW_STAGE_FINAL,
             ProjReview.review_result == 99,
             ProjReview.is_deleted == 0,
         ).first()
-        if not placeholder:
+        if has_report:
             return
-        project = ProjectCRUD.get_by_id(db, project_id)
-        deadline = ProjectService.get_final_deadline(db, project) if project else None
-        if deadline is not None and date.today() > deadline:
-            placeholder.is_deleted = 1  # 软删留档（记录仍在库中，便于追责）
-            db.commit()
+        project.status = PROJECT_STATUS_CANCELLED
+        project.reject_reason = "超过结题报告提交截止日未提交结项报告，项目自动终止"
+        db.commit()
 
     @staticmethod
     def _to_list_item(obj: ProjProject) -> ProjectListItem:
@@ -564,6 +581,22 @@ class ProjectService:
         elif "leader_id" not in data or not data.get("leader_id"):
             raise ParamValidateException(message="管理员创建需额外指定负责人（通过扩展字段，此示例暂不支持）")
 
+        # 校验负责人/团队成员存在，避免外键错误直接抛 500
+        if not UserCRUD.get_by_id(db, data["leader_id"]):
+            raise ParamValidateException(message="项目负责人不存在")
+        member_ids = [tm.student_id for tm in req.team_members]
+        if member_ids:
+            existing_ids = {
+                uid for (uid,) in db.query(SysUser.id).filter(
+                    SysUser.id.in_(member_ids), SysUser.is_deleted == 0
+                ).all()
+            }
+            missing_ids = sorted(set(member_ids) - existing_ids)
+            if missing_ids:
+                raise ParamValidateException(
+                    message="团队成员不存在：" + "、".join(str(i) for i in missing_ids)
+                )
+
         # 指导教师须属于该项目所在学院（真超级管理员可跨院指定，用于演示代录）
         if data.get("teacher_id") and not is_super_admin(operator):
             t = UserCRUD.get_by_id(db, data["teacher_id"])
@@ -968,6 +1001,8 @@ class ProjectService:
         q_finished = q.filter(ProjProject.status == 9)
 
         def apply_filters_and_scope(query):
+            # 所有统计口径都排除软删除项目（含预算/经费汇总查询）
+            query = query.filter(ProjProject.is_deleted == 0)
             # 1) 用户前端 UI 显式选中的筛选条件
             if college_id is not None:
                 query = query.filter(ProjProject.college_id == college_id)
@@ -1032,7 +1067,8 @@ class ProjectService:
         budget_rows = apply_filters_and_scope(db.query(
             ProjBudget.budget_item,
             func.coalesce(func.sum(ProjBudget.used_amount), 0).label("used")
-        ).join(ProjProject, ProjBudget.project_id == ProjProject.id)).group_by(ProjBudget.budget_item).all()
+        ).join(ProjProject, ProjBudget.project_id == ProjProject.id)
+            .filter(ProjBudget.is_deleted == 0)).group_by(ProjBudget.budget_item).all()
         budget_by_category = [
             {"name": str(r[0]), "amount": float(r[1] or 0)}
             for r in budget_rows

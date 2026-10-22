@@ -5,6 +5,7 @@
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -35,8 +36,15 @@ class AuthService:
     @staticmethod
     def login(db: Session, req: LoginRequest, client_ip: str) -> LoginResponse:
         """用户登录：校验账号密码 -> 生成双Token -> 更新登录信息"""
-        # 1. 查找用户
-        user = UserCRUD.get_by_username(db, req.username)
+        # 1. 查找用户（账号 / 手机号 / 邮箱 均可登录）
+        user = db.query(SysUser).filter(
+            SysUser.is_deleted == 0,
+            or_(
+                SysUser.username == req.username,
+                SysUser.phone == req.username,
+                SysUser.email == req.username,
+            ),
+        ).first()
         if not user:
             raise AuthException(message="账号或密码错误")
         if user.status != 1:
@@ -286,10 +294,9 @@ class UserService:
                 success += 1
             except Exception as e:
                 errors.append(f"第{idx}行: {str(e)}")
-        if success > 0:
-            db.commit()
-        else:
-            db.rollback()
+                # 数据库级异常会使 session 进入失效状态，必须回滚后才能处理下一行
+                db.rollback()
+        db.commit()
         return ImportResultResponse(total=total, success=success, failed=total - success, errors=errors)
 
     @staticmethod

@@ -11,7 +11,6 @@
         </el-form-item>
         <el-form-item label="状态">
           <el-select v-model="searchForm.status" placeholder="全部状态" clearable style="width: 150px">
-            <el-option label="草稿" :value="0" />
             <el-option label="待学院初审" :value="1" />
             <el-option label="待校级复审" :value="3" />
             <el-option label="待分配评审专家" :value="13" />

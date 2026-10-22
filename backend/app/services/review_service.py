@@ -159,9 +159,8 @@ class ReviewService:
         if req.review_stage == REVIEW_STAGE_TEACHER and \
                 ProjectService.is_past_deadline(ProjectService.get_teacher_confirm_deadline(db, project)):
             raise ParamValidateException(message="已超过指导教师确认截止日（学院初审审核日），无法确认")
-        if req.review_stage == REVIEW_STAGE_FINAL and \
-                ProjectService.is_past_deadline(ProjectService.get_final_deadline(db, project)):
-            raise ParamValidateException(message="已超过结题报告提交截止日，无法进行结题验收")
+        # 说明：结题报告"提交"受截止日限制，但验审核不再受截止日限制，
+        # 否则按时提交的报告在截止日后无法验收，项目会永久停留在待结题(8)。
 
         # 结题验收前置：负责人须已提交结项验收报告，且满足结项三条件
         if req.review_stage == REVIEW_STAGE_FINAL:
@@ -178,7 +177,17 @@ class ReviewService:
 
         # 同一阶段同一人只允许一次（排除占位记录）
         if ReviewCRUD.exist_real_review(db, project.id, req.review_stage, operator.id):
-            raise ParamValidateException(message="您已在该阶段审核过此项目，请勿重复提交")
+            # 结题验收示例外：若此人此前只是驳回（未通过），允许负责人在重新提交报告后再次验收；
+            # 否则项目会因驳回记录永久无法复验。
+            passed_before = req.review_stage == REVIEW_STAGE_FINAL and db.query(ProjReview.id).filter(
+                ProjReview.project_id == project.id,
+                ProjReview.review_stage == REVIEW_STAGE_FINAL,
+                ProjReview.reviewer_id == operator.id,
+                ProjReview.review_result == REVIEW_RESULT_PASS,
+                ProjReview.is_deleted == 0,
+            ).first()
+            if not (req.review_stage == REVIEW_STAGE_FINAL and not passed_before):
+                raise ParamValidateException(message="您已在该阶段审核过此项目，请勿重复提交")
 
         # 如果存在占位记录，先删除再写正式记录
         placeholder = db.query(ProjReview).filter(
@@ -491,8 +500,10 @@ class ReviewService:
             # 学院管理员：待学院初审(status=1) 且 本院项目
             q = q.filter(ProjProject.status == 1, ProjProject.college_id == operator.college_id)
         elif operator.role == RoleEnum.ADMIN and not operator.college_id:
-            # 超级管理员：待校级复审(status=3)
-            q = q.filter(ProjProject.status == 3)
+            # 超级管理员：待校级复审(3) + 待分配评审专家(13) 均为其待办
+            q = q.filter(ProjProject.status.in_(
+                [PROJECT_STATUS_PENDING_UNIVERSITY, PROJECT_STATUS_PENDING_EXPERT_ASSIGN]
+            ))
         else:
             return [], 0
 
@@ -731,10 +742,8 @@ class MidtermService:
             raise ResourceNotFoundException(message="项目不存在")
         if not is_super_admin(operator) and operator.id != project.teacher_id:
             raise PermissionDeniedException(message="仅该项目的指导教师可审核中期检查")
-        # 截止日校验：中期报告审核上限为『中期报告提交截止日』
-        from app.services.project_service import ProjectService
-        if ProjectService.is_past_deadline(ProjectService.get_midterm_deadline(db, project)):
-            raise ParamValidateException(message="已超过中期报告审核截止日，无法审核")
+        # 说明：截止日仅限制"提交"，按时提交的报告在截止日后仍可审核，
+        # 否则教师未及时审核会导致项目永久停留在中期检查中(7)。
         # 1 通过 -> 状态2；2 驳回 -> 状态4；3 修改 -> 状态3
         obj.reviewer_id = operator.id
         obj.review_comment = req.review_comment
@@ -817,8 +826,12 @@ class ChangeService:
         project_ids = None
         if operator is not None:
             if operator.role == RoleEnum.STUDENT:
-                # 学生：仅本人发起的申请
+                # 学生：仅本人发起的申请；清扫范围也限制在本人申请涉及的项目
                 applicant_id = operator.id
+                project_ids = [pid for (pid,) in db.query(ProjChangeRequest.project_id).filter(
+                    ProjChangeRequest.applicant_id == operator.id,
+                    ProjChangeRequest.is_deleted == 0,
+                ).distinct().all()]
             elif is_super_admin(operator):
                 # 超级管理员：全校可查
                 pass
@@ -872,14 +885,27 @@ class ChangeService:
         project = ProjectCRUD.get_by_id(db, obj.project_id)
         if not project:
             raise ResourceNotFoundException(message="关联项目不存在")
-        # 审批人：仅该项目的指导教师本人（真超级管理员可代操作）
+        # 审批人：该项目的指导教师本人 / 项目所属学院的学院管理员（真超级管理员可代操作）
         if not is_super_admin(operator):
-            if operator.role != RoleEnum.TEACHER or project.teacher_id != operator.id:
-                raise PermissionDeniedException(message="仅该项目的指导教师可审批变更申请")
+            is_project_teacher = operator.role == RoleEnum.TEACHER and project.teacher_id == operator.id
+            is_project_college_admin = (
+                is_college_admin(operator)
+                and operator.college_id == project.college_id
+            )
+            if not (is_project_teacher or is_project_college_admin):
+                raise PermissionDeniedException(message="仅该项目的指导教师或所属学院管理员可审批变更申请")
         if obj.status != CHANGE_STATUS_PENDING:
             raise ParamValidateException(message="该申请已完成审批或已撤回，不可重复审批")
         # 提交时所处的审核段（决定退回目标与审批截止日）
         from_status = obj.project_status_at_submit or project.status
+        # 项目可能已被后续审核推进（如校级复审通过），此时不能按旧申请强行回退，
+        # 否则会把已进入专家评审/已立项的项目拉回学院初审并清空后续审核记录。
+        if project.status != from_status:
+            raise ParamValidateException(
+                message=f"项目当前状态[{PROJECT_STATUS_NAME.get(project.status, project.status)}]"
+                        f"已不同于申请提交时状态[{PROJECT_STATUS_NAME.get(from_status, from_status)}]，"
+                        f"无法按原申请回退"
+            )
         # 审批须在『提交阶段审核日 + 1 天缓冲期』内完成；超期申请会被自动作废
         from app.services.project_service import ProjectService
         _deadline = ProjectService.get_change_deadline_for_status(db, project, from_status)

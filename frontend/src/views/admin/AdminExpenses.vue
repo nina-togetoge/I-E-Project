@@ -66,8 +66,8 @@
       </template>
       <template #actions="{ row }">
         <el-button link type="primary" size="small" @click="handleView(row)">查看</el-button>
-        <el-button v-if="row.status >= 0 && row.status <= 5" link type="success" size="small" @click="handleApprove(row, true)">通过</el-button>
-        <el-button v-if="row.status >= 0 && row.status <= 5" link type="danger" size="small" @click="handleApprove(row, false)">驳回</el-button>
+        <el-button v-if="row.status >= 1 && row.status <= 5" link type="success" size="small" @click="handleApprove(row, true)">通过</el-button>
+        <el-button v-if="row.status >= 1 && row.status <= 5" link type="danger" size="small" @click="handleApprove(row, false)">驳回</el-button>
       </template>
       <template #empty>
         <EmptyIllustration type="file" description="暂无报销数据" />

@@ -79,20 +79,25 @@ class ProjectCRUD:
                     ProjProject.leader_id == data_scope.user_id,
                     ProjProject.id.in_(member_ids) if member_ids else False,
                 ))
-            # 指导教师：自己是指导老师
+            # 指导教师：自己指导的项目 + 本院项目（与详情页可见范围保持一致）
             elif scope.get("teacher_user_ids"):
                 t_ids = scope["teacher_user_ids"]
+                conds = []
                 if t_ids:
-                    q = q.filter(ProjProject.teacher_id.in_(t_ids))
+                    conds.append(ProjProject.teacher_id.in_(t_ids))
                 if scope.get("college_ids"):
-                    q = q.filter(ProjProject.college_id.in_(scope["college_ids"]))
+                    conds.append(ProjProject.college_id.in_(scope["college_ids"]))
+                if conds:
+                    q = q.filter(or_(*conds))
             # 学院维度
             elif scope.get("college_ids"):
                 q = q.filter(ProjProject.college_id.in_(scope["college_ids"]))
-            # 专家：有评审记录的项目
+            # 专家：有有效专家评审记录的项目（已取消分配的记录不再授予可见性）
             elif scope.get("expert_user_id"):
                 expert_pids = db.query(ProjReview.project_id).filter(
-                    ProjReview.reviewer_id == scope["expert_user_id"]
+                    ProjReview.reviewer_id == scope["expert_user_id"],
+                    ProjReview.review_stage == 3,  # REVIEW_STAGE_EXPERT
+                    ProjReview.is_deleted == 0,
                 ).all()
                 pids = [r.project_id for r in expert_pids]
                 q = q.filter(ProjProject.id.in_(pids) if pids else False)
@@ -179,8 +184,15 @@ class ProjectCRUD:
     def update(db: Session, obj: ProjProject, data: Dict[str, Any]) -> ProjProject:
         team_members_data = data.pop("team_members", None)
         budgets_data = data.pop("budgets", None)
+        # 允许显式置空的字段：调用方传入 None 时清空；
+        # 其余字段传 None 视为未填写，跳过以免触发非空约束。
+        nullable_fields = {
+            "teacher_id", "competition_id", "competition_session",
+            "start_date", "end_date", "project_summary",
+            "innovation_points", "expected_results", "reject_reason",
+        }
         for f, v in data.items():
-            if v is not None and hasattr(obj, f) and f != "id":
+            if hasattr(obj, f) and f != "id" and (v is not None or f in nullable_fields):
                 setattr(obj, f, v)
         # 替换团队成员
         if team_members_data is not None:

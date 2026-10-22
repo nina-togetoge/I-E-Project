@@ -425,7 +425,7 @@ const finalLoading = ref(false)
 const finalSubmitted = computed(() => !!project.value?.final_report_submitted)
 /** 撤回结项报告提交：仅项目负责人本人（或超管），且报告已提交 */
 const canWithdrawFinal = computed(() =>
-  finalSubmitted.value && (isProjectLeader.value || userStore.isSuperAdmin)
+  finalSubmitted.value && !finalLocked.value && (isProjectLeader.value || userStore.isSuperAdmin)
 )
 
 async function handleWithdrawFinal() {

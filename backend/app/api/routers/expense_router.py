@@ -8,7 +8,9 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.deps import PaginationParams, DataScope, OperationContext
-from app.core.security import RequireRole, RoleEnum, require_login, is_super_admin
+from app.core.security import (
+    RequireRole, RoleEnum, require_login, is_super_admin, is_college_admin,
+)
 from app.core.response import ResponseModel, success, PageResult
 from app.core.exceptions import BizException, PermissionDeniedException, ParamValidateException
 from app.database.session import get_db
@@ -118,19 +120,17 @@ def api_expense_review(
                 if current_user.id != project.teacher_id:
                     raise PermissionDeniedException(message="待导师审批阶段需由项目指导教师本人审批")
             else:
-                # 导师审批通过(状态2)：本院教师/学院管理员可推进到下一阶段（待学院）
-                if not (current_user.college_id
-                        and current_user.college_id == project.college_id
-                        and current_user.role in (RoleEnum.TEACHER, RoleEnum.ADMIN)):
-                    raise PermissionDeniedException(message="仅本院教师或学院管理员可推进到学院审批阶段")
+                # 导师审批通过(状态2)：推进到学院审批，仅项目所属学院的学院管理员可操作
+                if not (is_college_admin(current_user)
+                        and current_user.college_id == project.college_id):
+                    raise PermissionDeniedException(message="仅项目所属学院的学院管理员可推进到学院审批阶段")
 
         elif st in REVIEWABLE_BY_COLLEGE:
-            # 学院级审批：仅本院学院管理员 / 本院教师 / 超级管理员
+            # 学院级审批：仅项目所属学院的学院管理员 / 超级管理员，普通教师不得审批
             if not is_super_admin(current_user):
-                if not (current_user.college_id
-                        and current_user.college_id == project.college_id
-                        and current_user.role in (RoleEnum.TEACHER, RoleEnum.ADMIN)):
-                    raise PermissionDeniedException(message="仅系统管理员或本院人员可执行学院级审批")
+                if not (is_college_admin(current_user)
+                        and current_user.college_id == project.college_id):
+                    raise PermissionDeniedException(message="仅系统管理员或项目所属学院的学院管理员可执行学院级审批")
 
         elif st in REVIEWABLE_BY_FINANCE:
             # 财务终审：仅真超级管理员，学院管理员禁止
