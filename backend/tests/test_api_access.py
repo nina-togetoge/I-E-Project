@@ -175,7 +175,8 @@ def test_change_create_non_leader_forbidden(client, seed, auth_headers):
     college = seed.college()
     leader = seed.user(1, college.id)
     expert = seed.user(3, college.id)
-    project = seed.project(college.id, leader.id, status=6)
+    # 变更窗口为 3(待校级复审)/5(待专家评审)；需先通过阶段校验，才能验证身份校验返回 403
+    project = seed.project(college.id, leader.id, status=3)
 
     r = client.post("/api/changes",
                     json={"project_id": project.id, "change_type": 1, "change_reason": "工期顺延"},

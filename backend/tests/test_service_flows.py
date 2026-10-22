@@ -368,7 +368,8 @@ def test_withdraw_clears_reject_fields(seed, db):
     """[P3] 撤回退回草稿时清空驳回原因与当前审批人，避免旧字段残留。"""
     college = seed.college()
     leader = seed.user(1, college.id)
-    project = seed.project(college.id, leader.id, status=1)
+    # 仅「待指导教师确认」(12) 阶段可撤回
+    project = seed.project(college.id, leader.id, status=12)
     p = db.get(M.ProjProject, project.id)
     p.reject_reason = "上一轮驳回原因"
     p.current_approver_id = 999

@@ -97,7 +97,8 @@ def test_college_admin_can_withdraw_same_college(client, seed, auth_headers):
     ca = seed.college(name="A学院")
     admin = seed.user(4, ca.id)
     leader = seed.user(1, ca.id)
-    proj = seed.project(college_id=ca.id, leader_id=leader.id, status=1)
+    # 仅「待指导教师确认」(12) 阶段可撤回
+    proj = seed.project(college_id=ca.id, leader_id=leader.id, status=12)
 
     r = client.post(f"/api/projects/{proj.id}/withdraw", headers=auth_headers(admin))
     assert r.json()["code"] == 200

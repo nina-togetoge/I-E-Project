@@ -14,7 +14,7 @@ def test_next_status_after_pass_mapping():
     """各审核阶段通过后应流转到正确的目标状态"""
     assert ReviewService._next_status_after_pass(12, REVIEW_STAGE_TEACHER) == 1
     assert ReviewService._next_status_after_pass(1, REVIEW_STAGE_COLLEGE) == 3
-    assert ReviewService._next_status_after_pass(3, REVIEW_STAGE_UNIVERSITY) == 5
+    assert ReviewService._next_status_after_pass(3, REVIEW_STAGE_UNIVERSITY) == 13
     assert ReviewService._next_status_after_pass(5, REVIEW_STAGE_EXPERT) == 6
     assert ReviewService._next_status_after_pass(8, REVIEW_STAGE_FINAL) == 9
 
