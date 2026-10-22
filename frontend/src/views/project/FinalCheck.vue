@@ -18,6 +18,8 @@
         </div>
       </div>
 
+      <ProjectStageSteps :project="project" current="final" />
+
       <!-- 截止日提示（已驳回时不受截止日限制） -->
       <el-alert
         v-if="finalDeadlineText && project.status === 8"
@@ -197,6 +199,7 @@ import { getProjectDetail, submitFinal, withdrawFinal } from '@/api/project'
 import { submitReview } from '@/api/review'
 import FileUpload from '@/components/FileUpload.vue'
 import ProjectSwitcher from '@/components/ProjectSwitcher.vue'
+import ProjectStageSteps from '@/components/ProjectStageSteps.vue'
 import { useProcessStore } from '@/store/process'
 import { useUserStore } from '@/store/user'
 

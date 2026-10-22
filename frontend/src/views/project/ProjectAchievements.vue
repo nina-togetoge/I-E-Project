@@ -12,10 +12,12 @@
           </div>
           <div class="header-actions">
             <ProjectSwitcher :current-id="pid" suffix="achievements" />
-            <el-button v-if="canRegister" type="primary" @click="showDialog = true">登记成果</el-button>
+            <el-button v-if="canRegister" type="primary" @click="openCreate">登记成果</el-button>
           </div>
         </div>
       </div>
+
+      <ProjectStageSteps :project="project" current="achievements" />
 
       <div class="table-wrap" v-if="achievements.length > 0">
         <table class="paper-table">
@@ -28,11 +30,12 @@
               <th style="width:90px">级别</th>
               <th style="width:110px">获奖等级</th>
               <th style="width:110px">日期</th>
-              <th style="width:70px">操作</th>
+              <th style="width:90px">证明材料</th>
+              <th style="width:110px">操作</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(a, i) in achievements" :key="i">
+            <tr v-for="(a, i) in achievements" :key="a.id">
               <td align="center">{{ i + 1 }}</td>
               <td>{{ achievementTypeMap[a.achievement_type] }}</td>
               <td>{{ a.title }}</td>
@@ -41,8 +44,19 @@
               <td align="center">{{ a.award_level || '—' }}</td>
               <td>{{ formatDate(a.publish_date) }}</td>
               <td align="center">
-                <el-button v-if="canDelete" link type="danger" size="small" @click="handleDelete(a)">删除</el-button>
+                <el-button
+                  v-if="a.attachments && a.attachments.length"
+                  link
+                  type="primary"
+                  size="small"
+                  @click="viewAttachments(a)"
+                >{{ a.attachments.length }} 份</el-button>
                 <span v-else>—</span>
+              </td>
+              <td align="center">
+                <el-button v-if="canRegister" link type="primary" size="small" @click="openEdit(a)">编辑</el-button>
+                <el-button v-if="canDelete" link type="danger" size="small" @click="handleDelete(a)">删除</el-button>
+                <span v-if="!canRegister && !canDelete">—</span>
               </td>
             </tr>
           </tbody>
@@ -51,8 +65,8 @@
       <el-empty v-else description="暂无成果" :image-size="60" />
     </template>
 
-    <!-- 成果登记弹窗 -->
-    <el-dialog center v-model="showDialog" title="登记项目成果" width="600px">
+    <!-- 成果登记/编辑弹窗 -->
+    <el-dialog center v-model="showDialog" :title="editingId ? '编辑项目成果' : '登记项目成果'" width="600px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-form-item label="成果类型" prop="achievement_type">
           <el-select v-model="form.achievement_type" placeholder="请选择" style="width: 100%" @change="onTypeChange">
@@ -66,7 +80,14 @@
           <el-input v-model="form.author" :placeholder="labelOf('author')" maxlength="255" />
         </el-form-item>
         <el-form-item v-if="isFieldVisible('publish_date')" :label="labelOf('publish_date')">
-          <el-date-picker v-model="form.publish_date" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
+          <el-date-picker
+            v-model="form.publish_date"
+            type="date"
+            value-format="YYYY-MM-DD"
+            :disabled-date="disabledPublishDate"
+            :placeholder="publishDateTip"
+            style="width: 100%"
+          />
         </el-form-item>
         <el-form-item v-if="isFieldVisible('publisher')" :label="labelOf('publisher')">
           <el-input v-model="form.publisher" :placeholder="labelOf('publisher')" maxlength="255" />
@@ -90,11 +111,31 @@
         <el-form-item label="成果简介">
           <el-input v-model="form.summary" type="textarea" :rows="3" placeholder="成果简介（选填）" />
         </el-form-item>
+        <el-form-item label="证明材料">
+          <div class="attachment-block">
+            <ProjectAttachmentList
+              v-if="dialogAttachments.length"
+              :attachments="dialogAttachments"
+              deletable
+              @remove="handleRemoveAttachment"
+            />
+            <FileUpload
+              :accept="['.pdf', '.doc', '.docx', '.zip', '.rar', '.png', '.jpg']"
+              :form-data="{ biz_type: 'achievement', biz_id: 0 }"
+              @success="handleFileUpload"
+            />
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showDialog = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="handleSubmit">提交</el-button>
       </template>
+    </el-dialog>
+
+    <!-- 证明材料查看弹窗 -->
+    <el-dialog center v-model="attDialog" :title="`成果证明材料 - ${attTitle}`" width="600px">
+      <ProjectAttachmentList :attachments="attList" />
     </el-dialog>
   </div>
 </template>
@@ -103,8 +144,12 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { getProjectDetail, listAchievements, createAchievement, deleteAchievement } from '@/api/project'
+import { getProjectDetail, listAchievements, createAchievement, updateAchievement, deleteAchievement } from '@/api/project'
+import { deleteAttachment } from '@/api/common'
 import ProjectSwitcher from '@/components/ProjectSwitcher.vue'
+import ProjectStageSteps from '@/components/ProjectStageSteps.vue'
+import ProjectAttachmentList from '@/components/ProjectAttachmentList.vue'
+import FileUpload from '@/components/FileUpload.vue'
 import { formatDate } from '@/utils/format'
 import { useProcessStore } from '@/store/process'
 import { useUserStore } from '@/store/user'
@@ -135,6 +180,12 @@ const achievements = ref<any[]>([])
 const loading = ref(true)
 const showDialog = ref(false)
 const submitting = ref(false)
+const editingId = ref<number | null>(null)
+const existingAttachments = ref<any[]>([])
+const newAttachments = ref<any[]>([])
+const attDialog = ref(false)
+const attTitle = ref('')
+const attList = ref<any[]>([])
 const formRef = ref<FormInstance>()
 const form = reactive({
   achievement_type: undefined as number | undefined,
@@ -250,14 +301,104 @@ async function loadData() {
   }
 }
 
+/** 弹窗内展示的证明材料 = 已保存的 + 本次新上传的 */
+const dialogAttachments = computed(() => [...existingAttachments.value, ...newAttachments.value])
+
+/** 成果日期下限：项目开始日期；上限：今天 */
+function disabledPublishDate(d: Date) {
+  const today = new Date()
+  today.setHours(23, 59, 59, 999)
+  if (d.getTime() > today.getTime()) return true
+  const start = project.value?.start_date
+  if (start) {
+    const s = new Date(`${String(start).slice(0, 10)}T00:00:00`)
+    if (d.getTime() < s.getTime()) return true
+  }
+  return false
+}
+const publishDateTip = computed(() => {
+  const start = project.value?.start_date ? String(project.value.start_date).slice(0, 10) : ''
+  return start ? `不早于项目开始日期（${start}），不晚于今天` : '不晚于今天'
+})
+
+function resetDialogForm() {
+  editingId.value = null
+  existingAttachments.value = []
+  newAttachments.value = []
+  form.achievement_type = undefined
+  form.title = ''
+  form.author = ''
+  form.publish_date = ''
+  form.publisher = ''
+  form.achievement_no = ''
+  form.level = undefined
+  form.award_level = ''
+  form.summary = ''
+  formRef.value?.clearValidate()
+}
+
+function openCreate() {
+  resetDialogForm()
+  showDialog.value = true
+}
+
+function openEdit(row: any) {
+  resetDialogForm()
+  editingId.value = row.id
+  form.achievement_type = row.achievement_type
+  form.title = row.title || ''
+  form.author = row.author || ''
+  form.publish_date = row.publish_date ? String(row.publish_date).slice(0, 10) : ''
+  form.publisher = row.publisher || ''
+  form.achievement_no = row.achievement_no || ''
+  form.level = row.level
+  form.award_level = row.award_level || ''
+  form.summary = row.summary || ''
+  existingAttachments.value = row.attachments || []
+  showDialog.value = true
+}
+
+function handleFileUpload(file: any) {
+  if (!file?.id) return
+  newAttachments.value.push({
+    ...file,
+    uploader_name: userStore.userInfo?.real_name || '本人',
+    download_url: file.file_url,
+    preview_url: `/api/files/preview/${file.id}`,
+  })
+}
+
+async function handleRemoveAttachment(att: any) {
+  const isNew = newAttachments.value.some((a) => a.id === att.id)
+  if (!isNew) {
+    try {
+      await ElMessageBox.confirm(`确定删除证明材料「${att.file_name}」？`, '提示', { type: 'warning' })
+    } catch {
+      return
+    }
+  }
+  try {
+    await deleteAttachment(att.id)
+  } catch {
+    // 临时附件删除失败不影响表单，后续保存时仍会绑定
+  }
+  existingAttachments.value = existingAttachments.value.filter((a) => a.id !== att.id)
+  newAttachments.value = newAttachments.value.filter((a) => a.id !== att.id)
+}
+
+function viewAttachments(row: any) {
+  attTitle.value = row.title
+  attList.value = row.attachments || []
+  attDialog.value = true
+}
+
 async function handleSubmit() {
   if (!formRef.value) return
   const valid = await formRef.value.validate().catch(() => false)
   if (!valid) return
   submitting.value = true
   try {
-    await createAchievement({
-      project_id: pid.value,
+    const payload = {
       achievement_type: form.achievement_type!,
       title: form.title,
       author: form.author || undefined,
@@ -267,10 +408,17 @@ async function handleSubmit() {
       level: form.level,
       award_level: form.award_level || undefined,
       summary: form.summary || undefined,
-    })
-    ElMessage.success('成果登记成功')
+      attachment_ids: newAttachments.value.map((a) => a.id),
+    }
+    if (editingId.value) {
+      await updateAchievement(editingId.value, payload)
+      ElMessage.success('成果已更新')
+    } else {
+      await createAchievement({ ...payload, project_id: pid.value })
+      ElMessage.success('成果登记成功')
+    }
     showDialog.value = false
-    formRef.value?.resetFields()
+    resetDialogForm()
     loadData()
   } catch {
     // 错误已由全局请求拦截器统一提示，此处仅兜底避免未捕获异常
@@ -332,5 +480,11 @@ onBeforeUnmount(() => processStore.reset())
 }
 .paper-table tbody tr:hover {
   background: #fafafa;
+}
+.attachment-block {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 </style>

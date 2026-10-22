@@ -8,6 +8,8 @@
 """
 import pytest
 
+from datetime import date, timedelta
+
 import app.models as M
 
 
@@ -278,3 +280,120 @@ def test_expense_complete_writes_back_used_amount(client, seed, auth_headers):
     assert seed.reload(M.ProjExpense, exp.id).status == 6
     assert str(seed.reload(M.ProjProject, project.id).used_amount) == "300.00"
     assert str(seed.reload(M.ProjBudget, budget.id).used_amount) == "300.00"
+
+# ====================================================================
+# P1：成果编辑（权限 / 字段更新）
+# ====================================================================
+def test_achievement_update_permission_and_fields(client, seed, auth_headers):
+    college = seed.college()
+    leader = seed.user(1, college.id)
+    teacher = seed.user(2, college.id)
+    outsider = seed.user(1, college.id)
+    project = seed.project(college.id, leader.id, teacher_id=teacher.id, status=6)
+    ach = seed.achievement(project.id, title="旧标题")
+
+    # 指导教师可编辑
+    r = client.put(f"/api/achievements/{ach.id}",
+                   json={"title": "新标题", "summary": "成果简介"},
+                   headers=auth_headers(teacher))
+    assert r.json()["code"] == 200
+    assert r.json()["data"]["title"] == "新标题"
+    assert seed.reload(M.ProjAchievement, ach.id).summary == "成果简介"
+
+    # 无关学生不可编辑
+    r = client.put(f"/api/achievements/{ach.id}", json={"title": "越权修改"},
+                   headers=auth_headers(outsider))
+    assert r.json()["code"] == 403
+    assert seed.reload(M.ProjAchievement, ach.id).title == "新标题"
+
+
+# ====================================================================
+# P1：成果日期须落在「项目开始日期 ~ 今天」
+# ====================================================================
+def test_achievement_publish_date_range(client, seed, auth_headers):
+    college = seed.college()
+    leader = seed.user(1, college.id)
+    today = date.today()
+    start = today - timedelta(days=30)
+    project = seed.project(college.id, leader.id, status=6, start_date=start)
+
+    # 未来日期：拒绝
+    r = client.post("/api/achievements",
+                    json={"project_id": project.id, "achievement_type": 1, "title": "未来成果",
+                          "publish_date": (today + timedelta(days=1)).isoformat()},
+                    headers=auth_headers(leader))
+    assert r.json()["code"] == 400
+
+    # 早于项目开始日期：拒绝
+    r = client.post("/api/achievements",
+                    json={"project_id": project.id, "achievement_type": 1, "title": "过早成果",
+                          "publish_date": (start - timedelta(days=1)).isoformat()},
+                    headers=auth_headers(leader))
+    assert r.json()["code"] == 400
+
+    # 区间内：通过，且编辑时同样校验
+    r = client.post("/api/achievements",
+                    json={"project_id": project.id, "achievement_type": 1, "title": "正常成果",
+                          "publish_date": today.isoformat()},
+                    headers=auth_headers(leader))
+    assert r.json()["code"] == 200
+    ach_id = r.json()["data"]["id"]
+    r = client.put(f"/api/achievements/{ach_id}",
+                   json={"publish_date": (start - timedelta(days=1)).isoformat()},
+                   headers=auth_headers(leader))
+    assert r.json()["code"] == 400
+
+
+# ====================================================================
+# P1：成果证明材料绑定与回显（仅本人临时附件可绑定）
+# ====================================================================
+def test_achievement_attachment_bind_and_echo(client, seed, auth_headers, tmp_path):
+    college = seed.college()
+    leader = seed.user(1, college.id)
+    other = seed.user(1, college.id)
+    project = seed.project(college.id, leader.id, status=6)
+
+    f1 = tmp_path / "proof.pdf"; f1.write_bytes(b"%PDF-1.4 proof")
+    f2 = tmp_path / "other.pdf"; f2.write_bytes(b"%PDF-1.4 other")
+    mine = seed.attachment("achievement", 0, uploader_id=leader.id, file_path=str(f1), file_name="proof.pdf")
+    others = seed.attachment("achievement", 0, uploader_id=other.id, file_path=str(f2), file_name="other.pdf")
+
+    r = client.post("/api/achievements",
+                    json={"project_id": project.id, "achievement_type": 1, "title": "带材料成果",
+                          "attachment_ids": [mine.id, others.id]},
+                    headers=auth_headers(leader))
+    assert r.json()["code"] == 200
+    data = r.json()["data"]
+    assert [a["id"] for a in data["attachments"]] == [mine.id]
+    assert seed.reload(M.SysAttachment, mine.id).biz_id == data["id"]
+    # 他人临时附件未被劫持
+    assert seed.reload(M.SysAttachment, others.id).biz_id == 0
+
+    # 列表回显附件
+    r = client.get(f"/api/achievements/by-project/{project.id}", headers=auth_headers(leader))
+    assert r.json()["code"] == 200
+    assert [a["id"] for a in r.json()["data"][0]["attachments"]] == [mine.id]
+
+
+# ====================================================================
+# P1：中期报告附件绑定与回显
+# ====================================================================
+def test_midterm_attachment_bind_and_echo(client, seed, auth_headers, tmp_path):
+    college = seed.college()
+    leader = seed.user(1, college.id)
+    project = seed.project(college.id, leader.id, status=6)
+
+    f = tmp_path / "midterm.pdf"; f.write_bytes(b"%PDF-1.4 midterm")
+    att = seed.attachment("midterm", 0, uploader_id=leader.id, file_path=str(f), file_name="midterm.pdf")
+
+    r = client.post("/api/midterm/submit",
+                    json={"project_id": project.id, "attachment_ids": [att.id]},
+                    headers=auth_headers(leader))
+    assert r.json()["code"] == 200
+    check = r.json()["data"]
+    assert [a["id"] for a in check["attachments"]] == [att.id]
+    assert seed.reload(M.SysAttachment, att.id).biz_id == check["id"]
+
+    r = client.get(f"/api/midterm/by-project/{project.id}", headers=auth_headers(leader))
+    assert r.json()["code"] == 200
+    assert [a["id"] for a in r.json()["data"]["attachments"]] == [att.id]

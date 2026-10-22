@@ -178,26 +178,20 @@ export function getCollegeBreakdown() {
 }
 
 // ========== 项目成果 ==========
-/** 查询项目下的成果列表 */
-export function listAchievements(projectId: number) {
-  return get<Array<{
-    id: number
-    project_id: number
-    achievement_type: number
-    title: string
-    author?: string
-    publish_date?: string
-    publisher?: string
-    achievement_no?: string
-    level?: number
-    award_level?: string
-    summary?: string
-    created_at: string
-  }>>(`/api/achievements/by-project/${projectId}`)
+/** 成果附件（证明材料） */
+export interface AchievementAttachment {
+  id: number
+  file_name: string
+  file_size: number
+  file_type?: string
+  uploader_name?: string
+  download_url?: string
+  preview_url?: string
 }
 
-/** 登记项目成果 */
-export function createAchievement(data: {
+/** 项目成果 */
+export interface Achievement {
+  id: number
   project_id: number
   achievement_type: number
   title: string
@@ -208,8 +202,37 @@ export function createAchievement(data: {
   level?: number
   award_level?: string
   summary?: string
-}) {
+  created_at: string
+  attachments?: AchievementAttachment[]
+}
+
+/** 成果登记/编辑提交数据 */
+export interface AchievementPayload {
+  achievement_type: number
+  title: string
+  author?: string
+  publish_date?: string
+  publisher?: string
+  achievement_no?: string
+  level?: number
+  award_level?: string
+  summary?: string
+  attachment_ids?: number[]
+}
+
+/** 查询项目下的成果列表 */
+export function listAchievements(projectId: number) {
+  return get<Achievement[]>(`/api/achievements/by-project/${projectId}`)
+}
+
+/** 登记项目成果 */
+export function createAchievement(data: AchievementPayload & { project_id: number }) {
   return post('/api/achievements', data)
+}
+
+/** 编辑项目成果 */
+export function updateAchievement(id: number, data: AchievementPayload) {
+  return put(`/api/achievements/${id}`, data)
 }
 
 /** 删除项目成果 */

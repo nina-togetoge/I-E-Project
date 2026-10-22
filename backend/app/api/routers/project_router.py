@@ -16,7 +16,7 @@ from app.models import SysUser
 from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectQueryParams, ProjectListItem,
     ProjectDetailResponse, ProjectSubmitResponse,
-    AchievementCreate, AchievementResponse, ProjectStatisticsResponse,
+    AchievementCreate, AchievementUpdate, AchievementResponse, ProjectStatisticsResponse,
     StatisticsTrendItem, CollegeStatisticsItem, FinalSubmitRequest,
 )
 from app.services.project_service import ProjectService, AchievementService
@@ -208,6 +208,20 @@ def api_achievement_create(
         ctx.set_desc(f"登记项目#{req.project_id}成果[{req.title}]")
         data = AchievementService.create(db, req, current_user)
     return success(data=data, message="成果登记成功")
+
+
+@router_achievement.put("/{pk}", response_model=ResponseModel[AchievementResponse], summary="编辑成果")
+def api_achievement_update(
+    pk: int,
+    req: AchievementUpdate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = require_login,
+    ctx: OperationContext = Depends(),
+):
+    with ctx:
+        ctx.set_desc(f"编辑成果#{pk}")
+        data = AchievementService.update(db, pk, req, current_user)
+    return success(data=data, message="成果修改成功")
 
 
 @router_achievement.delete("/{pk}", response_model=ResponseModel, summary="删除成果")

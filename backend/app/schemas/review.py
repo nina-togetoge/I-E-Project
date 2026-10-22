@@ -147,6 +147,7 @@ class MidtermCheckResponse(MidtermCheckCreate):
     review_comment: Optional[str] = None
     review_time: Optional[datetime] = None
     submit_time: Optional[datetime] = None
+    attachments: List[dict] = Field(default_factory=list, description="中期报告附件列表")
 
 
 class MidtermReviewRequest(BaseModel):

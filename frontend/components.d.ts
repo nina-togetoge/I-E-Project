@@ -76,6 +76,7 @@ declare module 'vue' {
     PasswordStrength: typeof import('./src/components/PasswordStrength.vue')['default']
     ProjectAttachmentList: typeof import('./src/components/ProjectAttachmentList.vue')['default']
     ProjectDetailDialog: typeof import('./src/components/ProjectDetailDialog.vue')['default']
+    ProjectStageSteps: typeof import('./src/components/ProjectStageSteps.vue')['default']
     ProjectSwitcher: typeof import('./src/components/ProjectSwitcher.vue')['default']
     ProjectTemplatePicker: typeof import('./src/components/ProjectTemplatePicker.vue')['default']
     ProjectTimeline: typeof import('./src/components/ProjectTimeline.vue')['default']

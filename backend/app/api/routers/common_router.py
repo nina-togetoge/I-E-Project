@@ -133,6 +133,12 @@ def _resolve_biz_project(db: Session, biz_type: str, biz_id: int):
             ProjAchievement.id == biz_id, ProjAchievement.is_deleted == 0
         ).first()
         return ProjectCRUD.get_by_id(db, ach.project_id) if ach else None
+    if biz_type == "midterm":
+        from app.models import ProjMidtermCheck
+        mid = db.query(ProjMidtermCheck).filter(
+            ProjMidtermCheck.id == biz_id, ProjMidtermCheck.is_deleted == 0
+        ).first()
+        return ProjectCRUD.get_by_id(db, mid.project_id) if mid else None
     if biz_type == "expense":
         from app.models import ProjExpense
         exp = db.query(ProjExpense).filter(

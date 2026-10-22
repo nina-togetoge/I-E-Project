@@ -29,7 +29,7 @@ from app.models import (
 from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectQueryParams,
     ProjectListItem, ProjectDetailResponse, ProjectSubmitResponse,
-    AchievementCreate, AchievementResponse, ProjectStatisticsResponse,
+    AchievementCreate, AchievementUpdate, AchievementResponse, ProjectStatisticsResponse,
     StatisticsTrendItem, CollegeStatisticsItem, PROJECT_STATUS_DRAFT, PROJECT_STATUS_PENDING_COLLEGE,
     PROJECT_STATUS_PENDING_TEACHER, PROJECT_STATUS_PENDING_UNIVERSITY, PROJECT_STATUS_PENDING_EXPERT,
     PROJECT_STATUS_PENDING_EXPERT_ASSIGN,
@@ -1351,6 +1351,71 @@ class ProjectService:
 class AchievementService:
     """项目成果业务服务"""
 
+    # 可登记/编辑成果的项目阶段：已立项及之后
+    EDITABLE_PROJECT_STATUSES = (6, 7, 8, 9)
+
+    @staticmethod
+    def _ensure_project_status(project: ProjProject) -> None:
+        if project.status not in AchievementService.EDITABLE_PROJECT_STATUSES:
+            raise ParamValidateException(message="仅已立项及之后阶段可登记或编辑成果")
+
+    @staticmethod
+    def _ensure_permission(project: ProjProject, operator: SysUser, deny_message: str) -> None:
+        """登记/编辑权限：超管全校；学院管理员限本院；项目负责人或该项目指导教师本人"""
+        if is_super_admin(operator):
+            return
+        if is_college_admin(operator):
+            if not operator.college_id or project.college_id != operator.college_id:
+                raise PermissionDeniedException(message="学院管理员仅可管理本院项目成果")
+            return
+        if project.leader_id == operator.id or (
+            operator.role == RoleEnum.TEACHER and project.teacher_id == operator.id
+        ):
+            return
+        raise PermissionDeniedException(message=deny_message)
+
+    @staticmethod
+    def _validate_publish_date(project: ProjProject, publish_date: Optional[date]) -> None:
+        """成果日期须落在「项目开始日期 ~ 今天」区间内"""
+        if publish_date is None:
+            return
+        if publish_date > date.today():
+            raise ParamValidateException(message="成果日期不能晚于今天")
+        if project.start_date and publish_date < project.start_date:
+            raise ParamValidateException(message=f"成果日期不能早于项目开始日期（{project.start_date}）")
+
+    @staticmethod
+    def _bind_attachments(db: Session, ach_id: int, attachment_ids: List[int], operator: SysUser) -> None:
+        """把本人上传的临时证明材料（biz_type=achievement, biz_id=0）绑定到成果"""
+        if not attachment_ids:
+            return
+        from app.models import SysAttachment
+        db.query(SysAttachment).filter(
+            SysAttachment.id.in_(attachment_ids),
+            SysAttachment.biz_type == "achievement",
+            SysAttachment.biz_id == 0,
+            SysAttachment.uploader_id == operator.id,
+            SysAttachment.is_deleted == 0,
+        ).update({SysAttachment.biz_id: ach_id}, synchronize_session=False)
+
+    @staticmethod
+    def _to_response(db: Session, ach: ProjAchievement) -> AchievementResponse:
+        from app.models import SysAttachment
+        item = AchievementResponse.model_validate(ach)
+        atts = db.query(SysAttachment).filter(
+            SysAttachment.biz_type == "achievement",
+            SysAttachment.biz_id == ach.id,
+            SysAttachment.is_deleted == 0,
+        ).order_by(SysAttachment.created_at.desc()).all()
+        item.attachments = [{
+            "id": a.id, "file_name": a.file_name, "file_size": a.file_size,
+            "file_type": a.file_type, "uploader_name": a.uploader_name,
+            "download_count": a.download_count, "created_at": a.created_at,
+            "download_url": f"/api/files/download/{a.id}",
+            "preview_url": f"/api/files/preview/{a.id}",
+        } for a in atts]
+        return item
+
     @staticmethod
     def list_by_project(db: Session, project_id: int, operator: SysUser) -> List[AchievementResponse]:
         obj = ProjectCRUD.get_by_id(db, project_id)
@@ -1359,29 +1424,47 @@ class AchievementService:
         # 权限校验：复用项目详情可见性规则（草稿仅本人/成员，教师限本院，专家限被分配）
         ProjectService.get_detail(db, project_id, operator)
         items = AchievementCRUD.list_by_project(db, project_id)
-        return [AchievementResponse.model_validate(i) for i in items]
+        return [AchievementService._to_response(db, i) for i in items]
 
     @staticmethod
     def create(db: Session, req: AchievementCreate, operator: SysUser) -> AchievementResponse:
         obj = ProjectCRUD.get_by_id(db, req.project_id)
         if not obj:
             raise ResourceNotFoundException(message="所属项目不存在")
-        if obj.status not in (6, 7, 8, 9):
-            raise ParamValidateException(message="仅已立项及之后阶段可登记成果")
-        # 权限分级：超管全校；学院管理员限本院项目；项目负责人/该项目指导教师本人
-        if is_super_admin(operator):
-            pass
-        elif is_college_admin(operator):
-            if not operator.college_id or obj.college_id != operator.college_id:
-                raise PermissionDeniedException(message="学院管理员仅可为本院项目登记成果")
-        elif obj.leader_id == operator.id or (operator.role == RoleEnum.TEACHER and obj.teacher_id == operator.id):
-            pass
-        else:
-            raise PermissionDeniedException(message="仅项目负责人、指导教师或管理员可登记成果")
-        ach = AchievementCRUD.create(db, req.model_dump())
+        AchievementService._ensure_project_status(obj)
+        AchievementService._ensure_permission(obj, operator, "仅项目负责人、指导教师或管理员可登记成果")
+        data = req.model_dump()
+        attachment_ids = data.pop("attachment_ids", []) or []
+        AchievementService._validate_publish_date(obj, data.get("publish_date"))
+        ach = AchievementCRUD.create(db, data)
+        AchievementService._bind_attachments(db, ach.id, attachment_ids, operator)
         db.commit()
         db.refresh(ach)
-        return AchievementResponse.model_validate(ach)
+        return AchievementService._to_response(db, ach)
+
+    @staticmethod
+    def update(db: Session, pk: int, req: AchievementUpdate, operator: SysUser) -> AchievementResponse:
+        from app.models import ProjAchievement
+        ach = db.query(ProjAchievement).filter(
+            ProjAchievement.id == pk, ProjAchievement.is_deleted == 0
+        ).first()
+        if not ach:
+            raise ResourceNotFoundException(message="成果不存在")
+        obj = ProjectCRUD.get_by_id(db, ach.project_id)
+        if not obj:
+            raise ResourceNotFoundException(message="所属项目不存在")
+        AchievementService._ensure_project_status(obj)
+        AchievementService._ensure_permission(obj, operator, "仅项目负责人、指导教师或管理员可编辑成果")
+        data = req.model_dump(exclude_unset=True)
+        attachment_ids = data.pop("attachment_ids", []) or []
+        if "publish_date" in data:
+            AchievementService._validate_publish_date(obj, data["publish_date"])
+        for key, value in data.items():
+            setattr(ach, key, value)
+        AchievementService._bind_attachments(db, ach.id, attachment_ids, operator)
+        db.commit()
+        db.refresh(ach)
+        return AchievementService._to_response(db, ach)
 
     @staticmethod
     def delete(db: Session, pk: int, operator: SysUser) -> None:

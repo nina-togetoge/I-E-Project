@@ -664,6 +664,25 @@ class MidtermService:
     """中期检查业务服务"""
 
     @staticmethod
+    def _to_response(db: Session, obj) -> MidtermCheckResponse:
+        item = MidtermCheckResponse.model_validate(obj)
+        item.status_name = MIDTERM_STATUS_NAME.get(item.status, "")
+        from app.models import SysAttachment
+        atts = db.query(SysAttachment).filter(
+            SysAttachment.biz_type == "midterm",
+            SysAttachment.biz_id == obj.id,
+            SysAttachment.is_deleted == 0,
+        ).order_by(SysAttachment.created_at.desc()).all()
+        item.attachments = [{
+            "id": a.id, "file_name": a.file_name, "file_size": a.file_size,
+            "file_type": a.file_type, "uploader_name": a.uploader_name,
+            "download_count": a.download_count, "created_at": a.created_at,
+            "download_url": f"/api/files/download/{a.id}",
+            "preview_url": f"/api/files/preview/{a.id}",
+        } for a in atts]
+        return item
+
+    @staticmethod
     def get_by_project(db: Session, project_id: int, operator: SysUser) -> Optional[MidtermCheckResponse]:
         project = ProjectCRUD.get_by_id(db, project_id)
         if not project:
@@ -674,9 +693,7 @@ class MidtermService:
         obj = MidtermCRUD.get_by_project(db, project_id)
         if not obj:
             return None
-        item = MidtermCheckResponse.model_validate(obj)
-        item.status_name = MIDTERM_STATUS_NAME.get(item.status, "")
-        return item
+        return MidtermService._to_response(db, obj)
 
     @staticmethod
     def submit(db: Session, req: MidtermCheckCreate, operator: SysUser, is_draft: bool) -> MidtermCheckResponse:
@@ -717,21 +734,19 @@ class MidtermService:
             if project.status == 6:
                 project.status = 7
         obj = MidtermCRUD.create_or_update(db, data)
-        # 关联中期报告附件到项目（仅限本人上传的临时附件，防止劫持他人/其他业务附件）
+        # 关联中期报告附件到中期检查记录（仅限本人上传的临时附件，防止劫持他人/其他业务附件）
         if attachment_ids:
             from app.models.user import SysAttachment
             db.query(SysAttachment).filter(
                 SysAttachment.id.in_(attachment_ids),
-                SysAttachment.biz_type == "project",
+                SysAttachment.biz_type == "midterm",
                 SysAttachment.biz_id == 0,
                 SysAttachment.uploader_id == operator.id,
                 SysAttachment.is_deleted == 0,
-            ).update({SysAttachment.biz_id: req.project_id}, synchronize_session=False)
+            ).update({SysAttachment.biz_id: obj.id}, synchronize_session=False)
         db.commit()
         db.refresh(obj)
-        item = MidtermCheckResponse.model_validate(obj)
-        item.status_name = MIDTERM_STATUS_NAME.get(item.status, "")
-        return item
+        return MidtermService._to_response(db, obj)
 
     @staticmethod
     def withdraw(db: Session, check_id: int, operator: SysUser) -> MidtermCheckResponse:
@@ -755,9 +770,7 @@ class MidtermService:
         obj.status = 0
         db.commit()
         db.refresh(obj)
-        item = MidtermCheckResponse.model_validate(obj)
-        item.status_name = MIDTERM_STATUS_NAME.get(item.status, "")
-        return item
+        return MidtermService._to_response(db, obj)
 
     @staticmethod
     def review(db: Session, req: MidtermReviewRequest, operator: SysUser) -> MidtermCheckResponse:
@@ -790,9 +803,7 @@ class MidtermService:
             obj.status = 3
         db.commit()
         db.refresh(obj)
-        item = MidtermCheckResponse.model_validate(obj)
-        item.status_name = MIDTERM_STATUS_NAME.get(item.status, "")
-        return item
+        return MidtermService._to_response(db, obj)
 
 
 class ChangeService:

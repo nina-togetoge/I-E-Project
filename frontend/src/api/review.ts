@@ -104,6 +104,14 @@ export function getMidtermCheck(projectId: number) {
     review_comment?: string
     review_time?: string
     submit_time?: string
+    attachments?: Array<{
+      id: number
+      file_name: string
+      file_size: number
+      uploader_name?: string
+      download_url?: string
+      preview_url?: string
+    }>
   }>(`/api/midterm/by-project/${projectId}`)
 }
 

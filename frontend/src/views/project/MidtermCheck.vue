@@ -17,6 +17,8 @@
         </div>
       </div>
 
+      <ProjectStageSteps :project="project" current="midterm" />
+
       <!-- 审核意见（退回修改 / 驳回时显示） -->
       <el-alert
         v-if="(midterm.status === 3 || midterm.status === 4) && midterm.review_comment"
@@ -56,12 +58,21 @@
         <el-form-item label="中期报告">
           <el-input v-model="midtermForm.report" type="textarea" :rows="6" placeholder="请填写中期报告内容" maxlength="10000" show-word-limit :disabled="isReadonly" />
         </el-form-item>
-        <el-form-item v-if="!isReadonly" label="报告附件">
-          <FileUpload
-            :accept="['.pdf', '.doc', '.docx', '.zip', '.rar', '.png', '.jpg']"
-            :form-data="{ biz_type: 'project', biz_id: 0 }"
-            @success="handleMidtermFileUpload"
-          />
+        <el-form-item label="报告附件">
+          <div class="attachment-block">
+            <ProjectAttachmentList
+              v-if="displayAttachments.length"
+              :attachments="displayAttachments"
+              :deletable="!isReadonly"
+              @remove="handleRemoveAttachment"
+            />
+            <FileUpload
+              v-if="!isReadonly"
+              :accept="['.pdf', '.doc', '.docx', '.zip', '.rar', '.png', '.jpg']"
+              :form-data="{ biz_type: 'midterm', biz_id: 0 }"
+              @success="handleMidtermFileUpload"
+            />
+          </div>
         </el-form-item>
         <el-form-item label="已用经费">
           <span class="budget-value">¥{{ usedAmount.toFixed(2) }}</span>
@@ -120,8 +131,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getProjectDetail } from '@/api/project'
 import { getMidtermCheck, saveMidtermDraft, submitMidtermCheck, reviewMidtermCheck, withdrawMidtermCheck } from '@/api/review'
+import { deleteAttachment } from '@/api/common'
 import FileUpload from '@/components/FileUpload.vue'
 import ProjectSwitcher from '@/components/ProjectSwitcher.vue'
+import ProjectStageSteps from '@/components/ProjectStageSteps.vue'
+import ProjectAttachmentList from '@/components/ProjectAttachmentList.vue'
 import { useProcessStore } from '@/store/process'
 import { useUserStore } from '@/store/user'
 
@@ -145,6 +159,11 @@ const midtermForm = reactive({
   budget_usage: 0,
 })
 const midtermAttachmentIds = ref<number[]>([])
+/** 已保存的中期报告附件（后端返回，用于回显） */
+const midtermAttachments = ref<any[]>([])
+/** 本次新上传、尚未保存的附件 */
+const newMidtermAttachments = ref<any[]>([])
+const displayAttachments = computed(() => [...midtermAttachments.value, ...newMidtermAttachments.value])
 
 const statusTagType = computed(() => {
   const s = midterm.value.status
@@ -256,9 +275,12 @@ async function loadData() {
     ])
     project.value = detailRes.data
     processStore.setStatus(detailRes.data.status)
-    midterm.value = midRes.data || {}
+    const md: any = midRes.data || {}
+    midterm.value = md
+    midtermAttachments.value = md.attachments || []
+    newMidtermAttachments.value = []
+    midtermAttachmentIds.value = []
     if (midRes.data) {
-      const md: any = midRes.data
       midtermForm.progress_desc = md.progress_desc || ''
       midtermForm.completed_tasks = md.completed_tasks || ''
       midtermForm.remaining_tasks = md.remaining_tasks || ''
@@ -277,7 +299,28 @@ async function loadData() {
 function handleMidtermFileUpload(file: any) {
   if (file?.id && !midtermAttachmentIds.value.includes(file.id)) {
     midtermAttachmentIds.value.push(file.id)
+    newMidtermAttachments.value.push({
+      ...file,
+      uploader_name: userStore.userInfo?.real_name || '本人',
+      download_url: file.file_url,
+      preview_url: `/api/files/preview/${file.id}`,
+    })
   }
+}
+
+async function handleRemoveAttachment(att: any) {
+  const isNew = newMidtermAttachments.value.some((a) => a.id === att.id)
+  if (!isNew) {
+    try {
+      await ElMessageBox.confirm(`确定删除报告附件「${att.file_name}」？`, '提示', { type: 'warning' })
+    } catch {
+      return
+    }
+  }
+  await deleteAttachment(att.id)
+  midtermAttachments.value = midtermAttachments.value.filter((a) => a.id !== att.id)
+  newMidtermAttachments.value = newMidtermAttachments.value.filter((a) => a.id !== att.id)
+  midtermAttachmentIds.value = midtermAttachmentIds.value.filter((id) => id !== att.id)
 }
 
 async function handleSave(submit: boolean) {
@@ -352,5 +395,11 @@ onBeforeUnmount(() => processStore.reset())
 .next-step-title {
   font-weight: 600;
   margin-bottom: 12px;
+}
+.attachment-block {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 </style>

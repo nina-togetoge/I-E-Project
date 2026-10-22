@@ -137,13 +137,13 @@ class Seeder:
         return u
 
     def project(self, college_id, leader_id, teacher_id=None, status=0, name=None,
-                budget="10000.00", used="0.00", project_no=None):
+                budget="10000.00", used="0.00", project_no=None, start_date=None):
         return self._add(M.ProjProject(
             project_name=name or self._name("项目"),
             project_type=1, project_level=1,
             college_id=college_id, leader_id=leader_id, teacher_id=teacher_id,
             status=status, budget_amount=Decimal(budget), used_amount=Decimal(used),
-            project_no=project_no, submit_time=datetime.now(),
+            project_no=project_no, submit_time=datetime.now(), start_date=start_date,
         ))
 
     def assign_expert(self, project_id, expert_id, stage=3):

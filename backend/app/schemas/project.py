@@ -217,8 +217,7 @@ class FinalSubmitRequest(BaseModel):
 # ====================================================================
 # 成果登记模型（用于项目归档部分）
 # ====================================================================
-class AchievementCreate(BaseModel):
-    project_id: int
+class AchievementBase(BaseModel):
     achievement_type: int = Field(..., ge=1, le=6, description="成果类型:1论文2专利3软著4竞赛5创业6其他")
     title: str = Field(..., min_length=1, max_length=255)
     author: Optional[str] = Field(default=None, max_length=255)
@@ -230,10 +229,31 @@ class AchievementCreate(BaseModel):
     summary: Optional[str] = None
 
 
-class AchievementResponse(AchievementCreate):
+class AchievementCreate(AchievementBase):
+    project_id: int
+    attachment_ids: List[int] = Field(default_factory=list, description="证明材料临时附件IDs（biz_id=0）")
+
+
+class AchievementUpdate(BaseModel):
+    """编辑项目成果：仅传入需要修改的字段"""
+    achievement_type: Optional[int] = Field(default=None, ge=1, le=6)
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    author: Optional[str] = Field(default=None, max_length=255)
+    publish_date: Optional[date] = None
+    publisher: Optional[str] = Field(default=None, max_length=255)
+    achievement_no: Optional[str] = Field(default=None, max_length=128)
+    level: Optional[int] = Field(default=None, ge=1, le=4)
+    award_level: Optional[str] = Field(default=None, max_length=64)
+    summary: Optional[str] = None
+    attachment_ids: List[int] = Field(default_factory=list, description="新增证明材料临时附件IDs（biz_id=0）")
+
+
+class AchievementResponse(AchievementBase):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    project_id: int
     created_at: datetime
+    attachments: List[dict] = Field(default_factory=list, description="成果证明材料列表")
 
 
 # ====================================================================
