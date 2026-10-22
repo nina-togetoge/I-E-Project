@@ -47,7 +47,7 @@ from app.api.routers.review_router import (
     router_review, router_midterm, router_change,
 )
 from app.api.routers.common_router import (
-    router_common, router_upload, router_search, router_excel, router_health,
+    router_common, router_upload, router_excel, router_health,
 )
 from app.api.routers.expense_router import router_expense
 from app.api.routers.competition_router import router_competition
@@ -68,8 +68,7 @@ def create_app() -> FastAPI:
             "- 参数校验：Pydantic v2\n"
             "- 认证：JWT(AccessToken + RefreshToken) + bcrypt\n"
             "- 缓存：Redis(自动降级内存缓存)\n"
-            "- Excel：openpyxl\n"
-            "- 全文检索：Whoosh + Jieba(自动降级 LIKE 查询)\n\n"
+            "- Excel：openpyxl\n\n"
             "> 安全提示：初始用户密码由系统初始化脚本生成，首次登录后请立即修改。\n"
             "> 接口默认使用 Bearer Token 认证，详细权限请参考各路由说明。"
         ),
@@ -93,7 +92,6 @@ def create_app() -> FastAPI:
     # 注意：不再挂载 /static 静态目录，避免上传文件被未鉴权直接访问；
     # 所有附件统一通过 /api/files/download|preview 接口（带登录校验与归属校验）访问。
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
-    os.makedirs(settings.WHOOSH_INDEX_DIR, exist_ok=True)
 
     # ---- 4. 挂载业务路由 ----
     api_prefix = "/api"
@@ -129,7 +127,6 @@ def create_app() -> FastAPI:
     # 通用工具 / 文件 / 搜索 / Excel / 健康检查
     app.include_router(router_common, prefix=api_prefix)
     app.include_router(router_upload, prefix=api_prefix)
-    app.include_router(router_search, prefix=api_prefix)
     app.include_router(router_excel, prefix=api_prefix)
     app.include_router(router_health)
 
@@ -150,13 +147,6 @@ def create_app() -> FastAPI:
                 print("[OK] 数据库表结构已同步（create_all 跳过已存在）")
             except Exception as e:
                 print(f"[WARN] 自动建表失败，请手动执行 schema.sql ({e})")
-
-        # 全文检索：首次自动尝试重建索引（可选）
-        try:
-            from app.utils.search_engine import search_engine
-            print("[INFO] 全文检索引擎已加载（首次运行可调用 /api/search/rebuild-index 重建索引）")
-        except Exception as e:
-            print(f"[WARN] 全文检索初始化提示: {e}")
 
         # Redis 连通性（已在内部自行打印）
         try:

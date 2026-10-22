@@ -11,6 +11,7 @@
       <p v-if="item.subtitle">{{ item.subtitle }}</p>
       <p v-if="item.content">{{ item.content }}</p>
       <p v-if="item.score">评分：{{ item.score }}</p>
+      <p v-if="item.dimScores">分项：{{ dimScoreText(item.dimScores) }}</p>
       <el-tag
         v-if="item.resultTag"
         size="small"
@@ -31,6 +32,7 @@
 import { computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { formatDateTime } from '@/utils/format'
+import { scoringCriteria } from '@/data/scoringCriteria'
 
 interface TimelineEvent {
   timestamp: string
@@ -39,6 +41,7 @@ interface TimelineEvent {
   subtitle?: string
   content?: string
   score?: number
+  dimScores?: Record<string, number>
   resultTag?: string
   hasAttachment?: boolean
   attachmentId?: number
@@ -48,6 +51,11 @@ const props = defineProps<{
   project: any
   reviewHistory: any[]
 }>()
+
+/** 专家分项得分文案：创新性 90 · 可行性 85 · ... */
+function dimScoreText(dim: Record<string, number>) {
+  return scoringCriteria.map((c) => `${c.name} ${dim[c.key] ?? 0}`).join(' · ')
+}
 
 const timelineEvents = computed<TimelineEvent[]>(() => {
   const events: TimelineEvent[] = []
@@ -66,7 +74,7 @@ const timelineEvents = computed<TimelineEvent[]>(() => {
     events.push({
       timestamp: formatDateTime(p.submitted_at || p.submit_time),
       type: 'warning',
-      title: '提交审核，等待初审',
+      title: '提交审核，等待指导教师确认',
     })
   }
 
@@ -81,6 +89,7 @@ const timelineEvents = computed<TimelineEvent[]>(() => {
       subtitle: `审核人：${review.reviewer_name || '待分配'}`,
       content: review.review_comment ? `意见：${review.review_comment}` : undefined,
       score: review.score || undefined,
+      dimScores: review.dim_scores || undefined,
       resultTag: review.review_result_name || (isPass ? '通过' : '驳回'),
       hasAttachment: !!review.attachment_id,
       attachmentId: review.attachment_id,

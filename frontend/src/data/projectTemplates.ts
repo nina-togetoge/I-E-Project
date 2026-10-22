@@ -25,8 +25,8 @@ export const projectTemplates: ProjectTemplate[] = [
     name: '国家级大学生创新创业训练计划模板',
     category: 1,
     category_name: '创新训练',
-    level: 3,
-    level_name: '省部级',
+    level: 4,
+    level_name: '国家级',
     summary:
       '本项目围绕XX领域核心问题，采用XX技术手段，旨在研发具有创新性的XX系统/方法。项目基于现有研究基础，结合前沿理论，预期在XX方面取得突破，为XX行业发展提供技术支撑与实践范例。',
     innovation_points:
@@ -37,14 +37,14 @@ export const projectTemplates: ProjectTemplate[] = [
       '<p>1. <b>学术成果</b>：发表SCI/EI检索论文1-2篇，申请发明专利1项。</p>' +
       '<p>2. <b>知识产权</b>：申请软件著作权1-2项，形成技术文档1套。</p>' +
       '<p>3. <b>系统原型</b>：完成可演示的原型系统1套，包含XX核心功能模块，通过用户验收测试。</p>' +
-      '<p>4. <b>竞赛获奖</b>：争取在XX创新创业赛事中获得省部级以上奖项。</p>',
+      '<p>4. <b>竞赛获奖</b>：争取在XX创新创业赛事中获得省级以上奖项。</p>',
     budgets: [
       { budget_item: '材料费', budget_amount: 5000, remark: '实验耗材、元器件采购' },
       { budget_item: '差旅费', budget_amount: 3000, remark: '调研、参加学术会议差旅' },
       { budget_item: '劳务费', budget_amount: 4000, remark: '学生助研劳务补贴' },
     ],
-    description: '适用于国家级、省部级大创项目申报，涵盖创新训练类项目完整申报结构。',
-    tags: ['大创', '创新训练', '国家级', '省部级'],
+    description: '适用于国家级、省级大创项目申报，涵盖创新训练类项目完整申报结构。',
+    tags: ['大创', '创新训练', '国家级', '省级'],
   },
   {
     id: 'tiaozhanbei',

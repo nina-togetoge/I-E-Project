@@ -29,13 +29,10 @@ env/
 mysql_data/
 redis_data/
 
-# 上传文件与索引
+# 上传文件
 static/uploads/*
-static/whoosh_index/*
 !static/uploads/.gitkeep
-!static/whoosh_index/.gitkeep
 backend/static/uploads/*
-backend/static/whoosh_index/*
 
 # 上传/测试时产生的临时文件（任何层级）
 test_upload.*

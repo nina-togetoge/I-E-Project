@@ -1,13 +1,13 @@
 """FastAPI API / 服务层测试公共夹具。
 
 设计要点（不改动业务代码）：
-- 使用**临时文件型 SQLite**：保证 get_db 与全文检索引擎各自新建会话时，都能看到同一份已提交数据。
+- 使用**临时文件型 SQLite**：保证 get_db 与各业务服务各自新建会话时，都能看到同一份已提交数据。
 - 建表前对全局 ``Base.metadata`` 做两处仅在测试进程生效的适配：
   1) SQLite 索引名全局唯一 —— 把跨表同名索引加上"表名_"前缀（MySQL 索引名按表隔离，SQLite 全局隔离）；
   2) BigInteger 列在 SQLite 下改用 Integer —— 否则 ``BIGINT PRIMARY KEY`` 不是 rowid 别名，无法自增。
 - 断言针对响应体的业务 ``code``：本项目全局异常处理器把业务异常/参数校验异常统一包装成
   ``HTTP 200 + {code, message, data}``，因此 401/403/400/422 体现在 body 的 code 字段。
-- 应用用 ``TestClient(app)`` 构造（**不用** ``with``），避免触发 lifespan（Whoosh/Redis 初始化）。
+- 应用用 ``TestClient(app)`` 构造（**不用** ``with``），避免触发 lifespan（Redis 初始化）。
 """
 import os
 import tempfile
@@ -72,16 +72,12 @@ def db(SessionFactory):
 def client(SessionFactory, monkeypatch):
     """FastAPI TestClient：注入测试库、隔离 Redis 与真实 MySQL。"""
     import app.core.middleware as mw
-    import app.utils.search_engine as se
     from main import app
 
     # 1) 免 Redis：token 黑名单恒为未拉黑
     monkeypatch.setattr(TokenBlacklist, "is_blacklisted", classmethod(lambda cls, t, j: False))
     # 2) 免真实 MySQL：操作日志落库改为空操作（后台线程写入直连 SessionLocal）
     monkeypatch.setattr(mw, "_write_operation_log_sync", lambda data: None)
-    # 3) 全文检索：会话指向测试库，并强制走 SQL 降级路径，保证结果由测试数据决定
-    monkeypatch.setattr(se, "SessionLocal", SessionFactory)
-    monkeypatch.setattr(se.search_engine, "index", None)
 
     def _override_get_db():
         s = SessionFactory()

@@ -95,7 +95,9 @@ app.directive('lazy', lazyDirective)
 
 app.use(createPinia())
 app.use(router)
-app.use(ElementPlus, { locale: zhCn })
+// zIndex 起始值高于项目内自定义悬浮窗的固定层级（3000/4000），
+// 确保 Element 的弹窗、下拉、气泡等提示层始终显示在弹窗之上。
+app.use(ElementPlus, { locale: zhCn, zIndex: 5000 })
 
 // Service Worker 已移除（登录型管理系统无离线需求，且缓存策略导致发版后旧页面残留）。
 // 以下为存量浏览器的一次性自清理：注销历史 SW 并清空其缓存，之后可整体删除。

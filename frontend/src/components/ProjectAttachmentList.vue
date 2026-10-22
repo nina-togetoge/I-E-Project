@@ -17,6 +17,7 @@
       <div class="att-actions">
         <el-button link type="primary" size="small" @click="handlePreview(att)">预览</el-button>
         <el-button link type="primary" size="small" @click="handleDownload(att)">下载</el-button>
+        <el-button v-if="deletable" link type="danger" size="small" @click="emit('remove', att)">删除</el-button>
       </div>
     </div>
   </div>
@@ -24,9 +25,35 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{
-  attachments: any[]
+import { useUserStore } from '@/store/user'
+
+withDefaults(
+  defineProps<{
+    attachments: any[]
+    /** 是否显示删除按钮（编辑场景传入 true） */
+    deletable?: boolean
+  }>(),
+  { deletable: false }
+)
+
+const emit = defineEmits<{
+  'remove': [att: any]
 }>()
+
+const userStore = useUserStore()
+
+/**
+ * 为受鉴权保护的文件 URL 追加 token。
+ * 说明：window.open 无法携带 Authorization 头，后端已对
+ * /api/files/download、/api/files/preview 两个前缀开放 ?token= 兜底鉴权。
+ */
+function withToken(url: string): string {
+  if (!url) return url
+  const token = userStore.accessToken
+  if (!token) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}token=${encodeURIComponent(token)}`
+}
 
 function fileIcon(fileName: string): string {
   const ext = (fileName.split('.').pop() || '').toLowerCase()
@@ -51,11 +78,13 @@ function formatFileSize(bytes: number): string {
 }
 
 function handlePreview(att: any) {
-  window.open(att.preview_url, '_blank')
+  const url = att.preview_url || `/api/files/preview/${att.id}`
+  window.open(withToken(url), '_blank', 'noopener,noreferrer')
 }
 
 function handleDownload(att: any) {
-  window.open(att.download_url, '_blank')
+  const url = att.download_url || `/api/files/download/${att.id}`
+  window.open(withToken(url), '_blank', 'noopener,noreferrer')
 }
 </script>
 

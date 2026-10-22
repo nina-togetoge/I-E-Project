@@ -14,6 +14,11 @@
       </el-form>
     </el-card>
 
+    <el-radio-group v-model="scope" class="scope-switch" @change="handleScopeChange">
+      <el-radio-button value="pending">待评审</el-radio-button>
+      <el-radio-button value="reviewed">已评审</el-radio-button>
+    </el-radio-group>
+
     <PaginationTable
       :data="sortedTableData"
       :columns="columns"
@@ -28,32 +33,44 @@
         {{ displayCollegeName(row) }}
       </template>
       <template #status="{ row }">
-        <el-tag :type="row.status === 8 ? 'danger' : (row.my_review_result == null ? 'warning' : 'success')">
+        <el-tag v-if="scope === 'reviewed'" type="info">已评审</el-tag>
+        <el-tag v-else :type="row.status === 8 ? 'danger' : (row.my_review_result == null ? 'warning' : 'success')">
           {{ row.status === 8 ? '待结题验收' : (row.my_review_result == null ? '待评审' : '已评审') }}
         </el-tag>
       </template>
       <template #actions="{ row }">
-        <!-- 待专家评审(未评) 或 项目处于待结题(8)需专家结题验收，均需提供入口 -->
+        <!-- 已评审：仅提供回看入口；待评审：待打分或待结题验收均给出操作入口 -->
         <el-button
-          v-if="row.my_review_result == null || row.status === 8"
+          v-if="scope === 'reviewed'"
           link
           type="primary"
           size="small"
-          @click="router.push(`/review/${row.project_id}`)"
+          @click="projectDetailStore.open(row.project_id)"
+        >
+          查看
+        </el-button>
+        <el-button
+          v-else-if="row.my_review_result == null || row.status === 8"
+          link
+          type="primary"
+          size="small"
+          @click="projectDetailStore.open(row.project_id)"
         >
           {{ row.status === 8 ? '结题验收' : '评审' }}
         </el-button>
       </template>
       <template #empty>
-        <EmptyIllustration type="project" description="暂无待评审项目" />
+        <EmptyIllustration
+          type="project"
+          :description="scope === 'reviewed' ? '暂无已评审项目' : '暂无待评审项目'"
+        />
       </template>
     </PaginationTable>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import PaginationTable from '@/components/PaginationTable.vue'
 import EmptyIllustration from '@/components/EmptyIllustration.vue'
@@ -61,12 +78,19 @@ import type { TableColumn } from '@/components/PaginationTable.vue'
 import { getExpertTasks } from '@/api/review'
 import { formatDateTime } from '@/utils/format'
 import { useAppearanceStore } from '@/store/appearance'
+import { useProjectDetailStore } from '@/store/projectDetail'
 import { useBlindReview } from '@/composables/useBlindReview'
 
-const router = useRouter()
 const appearanceStore = useAppearanceStore()
+const projectDetailStore = useProjectDetailStore()
+
+// 评审在项目详情弹窗内完成，弹窗关闭后刷新列表状态
+watch(() => projectDetailStore.visible, (v) => {
+  if (!v) loadData()
+})
 const { maskName, maskCollege } = useBlindReview(() => appearanceStore.isBlindMode)
 const searchForm = reactive({ keyword: '' })
+const scope = ref<'pending' | 'reviewed'>('pending')
 const tableData = ref<any[]>([])
 const total = ref(0)
 const loading = ref(false)
@@ -96,7 +120,9 @@ function displayCollegeName(row: any) {
 async function loadData() {
   loading.value = true
   try {
-    const res = await getExpertTasks({ page: page.value, page_size: pageSize.value, ...searchForm })
+    const res = await getExpertTasks({
+      page: page.value, page_size: pageSize.value, scope: scope.value, ...searchForm
+    })
     tableData.value = res.data.items
     total.value = res.data.total
   } finally {
@@ -104,6 +130,7 @@ async function loadData() {
   }
 }
 
+function handleScopeChange() { page.value = 1; loadData() }
 function handleSearch() { page.value = 1; loadData() }
 function handlePageChange(p: number, ps: number) { page.value = p; pageSize.value = ps; loadData() }
 
@@ -112,4 +139,5 @@ onMounted(() => loadData())
 
 <style scoped>
 .search-card { margin-bottom: 16px; }
+.scope-switch { margin-bottom: 12px; }
 </style>

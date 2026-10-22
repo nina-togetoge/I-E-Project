@@ -148,7 +148,7 @@ const statCards = computed(() => {
       { label: '待处理', value: stats.value.pending_review, icon: Bell, color: '#409EFF' },
       { label: '评审项目', value: stats.value.total_projects, icon: Files, color: '#67C23A' },
       { label: '已立项', value: stats.value.approved_projects, icon: Document, color: '#E6A23C' },
-      { label: '报销申请', value: stats.value.expense_count, icon: Wallet, color: '#F56C6C' },
+      { label: '已结题', value: stats.value.finished_projects, icon: Box, color: '#F56C6C' },
     ]
   } else {
     return [
@@ -160,13 +160,27 @@ const statCards = computed(() => {
   }
 })
 
+// 快捷入口按角色过滤：目标路由的 meta.roles 必须包含当前角色，否则会跳 403
+// （/projects→[1,2]，/projects/create 仅学生使用，/expenses→[1]，
+//   /admin/expenses→[2,4]，/expert/pending→[3]，其余管理页→[4]）
 const quickEntries = computed(() => {
-  const entries = [
-    { label: '我的项目', path: '/projects', icon: Files, color: '#409EFF' },
-    { label: '项目申报', path: '/projects/create', icon: EditPen, color: '#67C23A' },
-    { label: '报销申请', path: '/expenses', icon: Wallet, color: '#E6A23C' },
-    { label: '归档项目库', path: '/admin/archive', icon: Box, color: '#909399' },
-  ]
+  const entries: { label: string; path: string; icon: any; color: string }[] = []
+  if (userStore.isStudent || userStore.isTeacher) {
+    entries.push({ label: '我的项目', path: '/projects', icon: Files, color: '#409EFF' })
+  }
+  if (userStore.isStudent) {
+    entries.push(
+      { label: '项目申报', path: '/projects/create', icon: EditPen, color: '#67C23A' },
+      { label: '报销申请', path: '/expenses', icon: Wallet, color: '#E6A23C' },
+    )
+  }
+  if (userStore.isExpert) {
+    entries.push({ label: '待评审项目', path: '/expert/pending', icon: Document, color: '#409EFF' })
+  }
+  if (userStore.isTeacher || userStore.isAdmin) {
+    entries.push({ label: '经费管理', path: '/admin/expenses', icon: Wallet, color: '#E6A23C' })
+  }
+  entries.push({ label: '归档项目库', path: '/admin/archive', icon: Box, color: '#909399' })
   if (userStore.isAdmin) {
     entries.push(
       { label: '数据看板', path: '/admin/statistics', icon: DataAnalysis, color: '#F56C6C' },
@@ -194,8 +208,8 @@ async function loadStatistics() {
     }
   } catch {}
 
-  // 报销申请数量（学生和教师）
-  if (!userStore.isAdmin) {
+  // 报销申请数量（学生和教师；专家/管理员无报销业务）
+  if (userStore.isStudent || userStore.isTeacher) {
     try {
       const res: any = await post('/api/expenses/list', {}, { params: { page: 1, page_size: 1 } })
       stats.value.expense_count = res?.data?.total || 0

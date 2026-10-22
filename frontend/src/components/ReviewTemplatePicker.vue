@@ -7,6 +7,7 @@
     center
     :close-on-click-modal="true"
     append-to-body
+    :z-index="4000"
     class="template-picker-dialog"
   >
     <el-tabs v-model="activeTab">
@@ -75,12 +76,19 @@ function handleSelect(text: string) {
 }
 </script>
 
-<style scoped>
-:deep(.template-picker-dialog) {
+<style>
+/*
+  评语模板对话框通过 append-to-body 挂载到 body 下，
+  scoped 样式无法命中，必须使用全局样式才能保证垂直居中
+*/
+.template-picker-dialog.el-dialog {
   top: 50% !important;
   margin-top: 0 !important;
   transform: translateY(-50%);
 }
+</style>
+
+<style scoped>
 .template-list {
   max-height: 360px;
   overflow-y: auto;

@@ -78,9 +78,13 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=120, description="访问令牌过期时间(分钟)")
     REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=7, description="刷新令牌过期时间(天)")
 
+    # ========== 评审配置 ==========
+    EXPERT_PASS_SCORE: int = Field(default=60, description="专家评审及格线(百分制)，低于该分数不可判定为通过")
+    EXPERT_MIN_COUNT: int = Field(default=2, description="单个项目最少分配的评审专家人数")
+
     # ========== 文件上传配置 ==========
     UPLOAD_DIR: str = Field(default="static/uploads", description="文件上传目录")
-    MAX_UPLOAD_SIZE: int = Field(default=50 * 1024 * 1024, description="最大上传文件大小(50MB)")
+    MAX_UPLOAD_SIZE: int = Field(default=200 * 1024 * 1024, description="最大上传文件大小(200MB)")
     ALLOWED_EXTENSIONS: str = Field(
         default=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.zip,.rar",
         description="允许上传的文件扩展名"
@@ -90,9 +94,6 @@ class Settings(BaseSettings):
     def ALLOWED_EXTENSIONS_LIST(self) -> List[str]:
         """返回允许的扩展名列表(小写)"""
         return [ext.strip().lower() for ext in self.ALLOWED_EXTENSIONS.split(",") if ext.strip()]
-
-    # ========== 全文检索配置 ==========
-    WHOOSH_INDEX_DIR: str = Field(default="static/whoosh_index", description="Whoosh索引目录")
 
     # ========== 火山引擎 Ark (豆包) AI 配置 ==========
     ARK_API_KEY: str = Field(default="", description="火山引擎 Ark API Key")

@@ -82,8 +82,8 @@
         <el-tag :type="roleTagType(row.user_role)">{{ roleLabel(row.user_role) }}</el-tag>
       </template>
       <template #status="{ row }">
-        <el-tag :type="row.status === 'success' || row.status === 1 ? 'success' : 'danger'" size="small">
-          {{ row.status === 'success' || row.status === 1 ? '成功' : '失败' }}
+        <el-tag :type="isSuccess(row.response_code) ? 'success' : 'danger'" size="small">
+          {{ isSuccess(row.response_code) ? '成功' : '失败' }}
         </el-tag>
       </template>
       <template #empty>
@@ -138,22 +138,29 @@ const columns: TableColumn[] = [
   { prop: 'operation_type', label: '操作类型', slot: 'operation_type', width: 100 },
   { prop: 'operation_desc', label: '描述', minWidth: 200 },
   { prop: 'ip_address', label: 'IP', width: 130 },
-  { prop: 'status', label: '结果', slot: 'status', width: 80 },
+  { prop: 'response_code', label: '结果', slot: 'status', width: 80 },
   { prop: 'operation_time', label: '操作时间', minWidth: 160, formatter: (val: string) => formatDateTime(val) },
 ]
+
+function buildFilterParams(): any {
+  const params: any = {}
+  if (searchForm.keyword) params.keyword = searchForm.keyword
+  if (searchForm.dateRange && searchForm.dateRange.length === 2) {
+    params.start_time = `${searchForm.dateRange[0]} 00:00:00`
+    // 结束日期补足到当天 23:59:59，否则会漏掉当天的日志
+    params.end_time = `${searchForm.dateRange[1]} 23:59:59`
+  }
+  if (searchForm.modules.length > 0) params.modules = searchForm.modules.join(',')
+  if (searchForm.operation_types.length > 0) params.operation_types = searchForm.operation_types.join(',')
+  if (searchForm.user_roles.length > 0) params.user_roles = searchForm.user_roles.join(',')
+  if (searchForm.statuses.length > 0) params.statuses = searchForm.statuses.join(',')
+  return params
+}
 
 async function loadData() {
   loading.value = true
   try {
-    const params: any = { page: page.value, page_size: pageSize.value, keyword: searchForm.keyword }
-    if (searchForm.dateRange.length === 2) {
-      params.start_time = searchForm.dateRange[0]
-      params.end_time = searchForm.dateRange[1]
-    }
-    if (searchForm.modules.length > 0) params.modules = searchForm.modules.join(',')
-    if (searchForm.operation_types.length > 0) params.operation_types = searchForm.operation_types.join(',')
-    if (searchForm.user_roles.length > 0) params.user_roles = searchForm.user_roles.join(',')
-    if (searchForm.statuses.length > 0) params.statuses = searchForm.statuses.join(',')
+    const params = { page: page.value, page_size: pageSize.value, ...buildFilterParams() }
     const res = await getOperationLogs(params)
     tableData.value = res.data.items
     total.value = res.data.total
@@ -191,13 +198,13 @@ function handleResetAdvanced() {
 }
 
 async function handleExport() {
-  const params: any = { ...searchForm }
-  if (searchForm.modules.length > 0) params.modules = searchForm.modules.join(',')
-  if (searchForm.operation_types.length > 0) params.operation_types = searchForm.operation_types.join(',')
-  if (searchForm.user_roles.length > 0) params.user_roles = searchForm.user_roles.join(',')
-  if (searchForm.statuses.length > 0) params.statuses = searchForm.statuses.join(',')
-  await download('/api/excel/export/logs', params, '操作日志.xlsx')
+  await download('/api/excel/export/logs', buildFilterParams(), '操作日志.xlsx')
   ElMessage.success('导出成功')
+}
+
+// 后端无 status 字段，以 response_code 判定成功/失败（2xx 视为成功）
+function isSuccess(code: number | null | undefined): boolean {
+  return typeof code === 'number' && code >= 200 && code < 300
 }
 
 function opTypeTag(type: string): string {

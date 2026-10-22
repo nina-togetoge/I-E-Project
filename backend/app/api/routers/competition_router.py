@@ -13,7 +13,7 @@ from app.database.session import get_db
 from app.models import SysUser
 from app.schemas.competition import (
     CompetitionCreate, CompetitionUpdate,
-    CompetitionListItem, CompetitionDetail,
+    CompetitionListItem, CompetitionDetail, AwardGenerateResult,
 )
 from app.services.competition_service import CompetitionService
 
@@ -112,3 +112,17 @@ def api_competition_status(
         ctx.set_desc(f"修改比赛状态[ID:{comp_id}→{status}]")
         data = CompetitionService.update_status(db, comp_id, status, current_user)
     return success(data=data, message="状态更新成功")
+
+
+@router_competition.post("/{comp_id}/generate-awards", response_model=ResponseModel[AwardGenerateResult],
+                         summary="生成获奖名单(仅校级比赛,自动分配)")
+def api_competition_generate_awards(
+    comp_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = require_admin,
+    ctx: OperationContext = Depends(),
+):
+    with ctx:
+        ctx.set_desc(f"生成比赛[ID:{comp_id}]获奖名单")
+        data = CompetitionService.generate_awards(db, comp_id, current_user)
+    return success(data=data, message=f"已生成获奖名单，共 {data['total_awarded']} 项")

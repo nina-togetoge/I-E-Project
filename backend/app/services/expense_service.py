@@ -4,6 +4,7 @@
 from typing import Optional, Tuple
 from decimal import Decimal
 from datetime import datetime
+from uuid import uuid4
 
 from sqlalchemy import or_, func
 from sqlalchemy.orm import Session
@@ -207,7 +208,35 @@ class ExpenseService:
         remaining = budget - Decimal(occupied)
         if amount > remaining:
             raise BizException(f"报销金额超出剩余预算（剩余 {remaining} 元）")
-        expense_no = f"EXP{datetime.now().strftime('%Y%m%d%H%M%S')}{applicant_id % 100:02d}"
+
+        # [预算科目] 指定预算科目时，额外校验该科目剩余额度，避免单科目超支
+        if data.budget_item_id:
+            budget_row = db.query(ProjBudget).filter(
+                ProjBudget.id == data.budget_item_id,
+                ProjBudget.project_id == project.id,
+                ProjBudget.is_deleted == 0,
+            ).first()
+            if not budget_row:
+                raise BizException("所选预算科目不存在或不属于该项目")
+            item_occupied = db.query(
+                func.coalesce(func.sum(ProjExpense.expense_amount), 0)
+            ).filter(
+                ProjExpense.budget_item_id == budget_row.id,
+                ProjExpense.is_deleted == 0,
+                ProjExpense.status != EXPENSE_STATUS_REJECTED,
+            ).scalar() or Decimal("0")
+            item_remaining = Decimal(budget_row.budget_amount or 0) - Decimal(item_occupied)
+            if amount > item_remaining:
+                raise BizException(
+                    f"报销金额超出该预算科目剩余额度"
+                    f"（科目「{budget_row.budget_item}」剩余 {item_remaining} 元）"
+                )
+
+        # 单号加入微秒 + 随机后缀，避免同一申请人同一秒内两次提交撞唯一键
+        expense_no = (
+            f"EXP{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+            f"{uuid4().hex[:4].upper()}"
+        )
         exp = ProjExpense(
             expense_no=expense_no,
             project_id=data.project_id,
@@ -221,8 +250,7 @@ class ExpenseService:
             submit_time=datetime.now(),
         )
         db.add(exp)
-        db.commit()
-        db.refresh(exp)
+        db.flush()  # 先落库取得 exp.id
         # 关联上传的临时附件（biz_id=0 → 当前报销单 id）
         if data.attachment_ids:
             db.query(SysAttachment).filter(
@@ -232,13 +260,18 @@ class ExpenseService:
                 SysAttachment.uploader_id == applicant_id,  # 仅可绑定本人上传的临时附件
                 SysAttachment.is_deleted == 0,
             ).update({SysAttachment.biz_id: exp.id}, synchronize_session=False)
-            db.commit()
+        # 单次提交：避免"报销单已提交但附件未绑定"的半成品状态
+        db.commit()
+        db.refresh(exp)
         return exp
 
     @staticmethod
     def review(db: Session, expense_id: int, approved: bool, opinion: Optional[str] = None) -> ProjExpense:
         """审批报销：approved=True 推进下一阶段，False 驳回"""
-        exp = db.query(ProjExpense).filter(ProjExpense.id == expense_id, ProjExpense.is_deleted == 0).first()
+        # 行级锁：串行化同一报销单的并发审批，避免重复审批与额度重复回写
+        exp = db.query(ProjExpense).filter(
+            ProjExpense.id == expense_id, ProjExpense.is_deleted == 0
+        ).with_for_update().first()
         if not exp:
             raise BizException("报销记录不存在")
 
@@ -261,12 +294,17 @@ class ExpenseService:
             if next_status == EXPENSE_STATUS_COMPLETED:
                 exp.approval_time = datetime.now()
                 # 终审完成：回写已使用金额（项目总额 + 对应预算科目），避免预算占用统计失真
+                # 行级锁：并发终审时串行化读改写，防止 used_amount 丢失更新
                 amt = Decimal(exp.expense_amount or 0)
-                project = db.query(ProjProject).filter(ProjProject.id == exp.project_id).first()
+                project = db.query(ProjProject).filter(
+                    ProjProject.id == exp.project_id
+                ).with_for_update().first()
                 if project:
                     project.used_amount = Decimal(project.used_amount or 0) + amt
                 if exp.budget_item_id:
-                    budget = db.query(ProjBudget).filter(ProjBudget.id == exp.budget_item_id).first()
+                    budget = db.query(ProjBudget).filter(
+                        ProjBudget.id == exp.budget_item_id
+                    ).with_for_update().first()
                     if budget:
                         budget.used_amount = Decimal(budget.used_amount or 0) + amt
 

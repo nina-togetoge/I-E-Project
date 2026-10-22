@@ -55,13 +55,13 @@ const layoutRoutes: RouteRecordRaw[] = [
         path: 'projects',
         name: 'MyProjects',
         component: () => import(/* webpackChunkName: "project" */ '@/views/project/MyProjects.vue'),
-        meta: { title: '我的项目', icon: 'Folder', roles: [1, 2, 4], group: 'project' },
+        meta: { title: '我的项目', icon: 'Folder', roles: [1, 2], group: 'project' },
       },
       {
         path: 'projects/create',
         name: 'ProjectCreate',
         component: () => import(/* webpackChunkName: "project" */ '@/views/project/ProjectCreate.vue'),
-        meta: { title: '项目申报', hidden: true, roles: [1, 2, 3, 4] },
+        meta: { title: '项目申报', hidden: true, roles: [1] },
       },
       {
         path: 'projects/:id',
@@ -82,6 +82,12 @@ const layoutRoutes: RouteRecordRaw[] = [
         meta: { title: '项目成果', hidden: true },
       },
       {
+        path: 'projects/:id/final',
+        name: 'ProjectFinal',
+        component: () => import(/* webpackChunkName: "project" */ '@/views/project/FinalCheck.vue'),
+        meta: { title: '结项验收', hidden: true },
+      },
+      {
         path: 'expenses',
         name: 'MyExpenses',
         component: () => import(/* webpackChunkName: "expense" */ '@/views/expense/MyExpenses.vue'),
@@ -90,16 +96,22 @@ const layoutRoutes: RouteRecordRaw[] = [
 
       // ==================== 审核中心 ====================
       {
+        path: 'review',
+        name: 'ReviewCenter',
+        component: () => import(/* webpackChunkName: "review" */ '@/views/review/ReviewCenter.vue'),
+        meta: { title: '审核工作台', icon: 'Bell', roles: [2, 4], group: 'review' },
+      },
+      {
         path: 'review/pending',
         name: 'ReviewPending',
         component: () => import(/* webpackChunkName: "review" */ '@/views/review/ReviewPending.vue'),
-        meta: { title: '待审核列表', icon: 'Bell', roles: [2, 4], group: 'review' },
+        meta: { title: '待审核列表', icon: 'Bell', roles: [2, 4], group: 'review', hidden: true },
       },
       {
-        path: 'review/:id',
-        name: 'ReviewDetail',
-        component: () => import(/* webpackChunkName: "review" */ '@/views/review/ReviewDetail.vue'),
-        meta: { title: '审核详情', hidden: true, roles: [2, 3, 4] },
+        path: 'review/changes',
+        name: 'ChangeApproval',
+        component: () => import(/* webpackChunkName: "review" */ '@/views/review/ChangeApproval.vue'),
+        meta: { title: '变更申请审批', icon: 'EditPen', roles: [2, 4], group: 'review', hidden: true },
       },
 
       // ==================== 专家端 ====================
@@ -141,6 +153,12 @@ const layoutRoutes: RouteRecordRaw[] = [
         component: () => import(/* webpackChunkName: "admin" */ '@/views/admin/OperationLogs.vue'),
         meta: { title: '操作日志', icon: 'List', roles: [4], group: 'system' },
       },
+      {
+        path: 'admin/colleges',
+        name: 'CollegeManage',
+        component: () => import(/* webpackChunkName: "admin" */ '@/views/admin/CollegeManage.vue'),
+        meta: { title: '学院管理', icon: 'OfficeBuilding', roles: [4], group: 'system' },
+      },
 
       // ==================== 资源中心 ====================
       {
@@ -172,12 +190,6 @@ const layoutRoutes: RouteRecordRaw[] = [
         name: 'ProjectArchive',
         component: () => import(/* webpackChunkName: "misc" */ '@/views/archive/ArchiveList.vue'),
         meta: { title: '归档项目库', icon: 'Box', roles: [1, 2, 3, 4], group: 'resource' },
-      },
-      {
-        path: 'admin/search',
-        name: 'FullSearch',
-        component: () => import(/* webpackChunkName: "misc" */ '@/views/search/FullSearch.vue'),
-        meta: { title: '全文检索', icon: 'Search', roles: [1, 2, 3, 4], group: 'resource' },
       },
     ],
   },

@@ -23,8 +23,6 @@ export interface ReviewRecord {
 export function getReviewList(params: {
   page: number
   page_size: number
-  stage?: number
-  status?: number
   keyword?: string
 }) {
   return get<PageResult<ReviewRecord>>('/api/reviews', params)
@@ -46,6 +44,8 @@ export function submitExpertReview(data: {
   score: number
   review_result: number
   review_comment?: string
+  /** 分项评分明细：创新性/可行性/团队/市场（与后端 ExpertReviewCreateRequest.dim_scores 对应） */
+  dim_scores?: Record<string, number>
 }) {
   return post('/api/reviews/expert', data)
 }
@@ -54,7 +54,6 @@ export function submitExpertReview(data: {
 export function assignExperts(data: {
   project_id: number
   expert_ids: number[]
-  review_stage?: number
 }) {
   return post('/api/reviews/assign-experts', data)
 }
@@ -64,6 +63,7 @@ export function getExpertTasks(params: {
   page: number
   page_size: number
   keyword?: string
+  scope?: 'pending' | 'reviewed'
 }) {
   return get<PageResult<{
     project_id: number
@@ -96,6 +96,7 @@ export function getMidtermCheck(projectId: number) {
     remaining_tasks?: string
     problems?: string
     next_plan?: string
+    report?: string
     budget_usage?: number
     status: number
     status_name: string
@@ -114,7 +115,9 @@ export function saveMidtermDraft(data: {
   remaining_tasks?: string
   problems?: string
   next_plan?: string
+  report?: string
   budget_usage?: number
+  attachment_ids?: number[]
 }) {
   return post('/api/midterm/draft', data)
 }
@@ -127,7 +130,9 @@ export function submitMidtermCheck(data: {
   remaining_tasks?: string
   problems?: string
   next_plan?: string
+  report?: string
   budget_usage?: number
+  attachment_ids?: number[]
 }) {
   return post('/api/midterm/submit', data)
 }
@@ -139,6 +144,11 @@ export function reviewMidtermCheck(data: {
   review_comment: string
 }) {
   return post('/api/midterm/review', data)
+}
+
+/** 撤回中期检查提交（退回草稿，可再次修改并提交） */
+export function withdrawMidtermCheck(checkId: number) {
+  return post('/api/midterm/withdraw', undefined, { params: { check_id: checkId } })
 }
 
 // ========== 变更/延期申请接口 ==========
@@ -164,6 +174,7 @@ export function getChangeList(params: {
   return get<PageResult<{
     id: number
     project_id: number
+    project_name?: string | null
     change_type: number
     change_type_name: string
     change_reason: string
@@ -195,4 +206,20 @@ export function rejectChangeRequest(changeId: number, comment?: string) {
     url: `/api/changes/${changeId}/reject`,
     params: { comment: comment || '' },
   })
+}
+
+/** 撤回变更申请（申请人本人，仅待审核可撤回） */
+export function withdrawChangeRequest(changeId: number) {
+  return post(`/api/changes/${changeId}/withdraw`)
+}
+
+/** 重新提交被驳回的变更申请（复用同一条记录） */
+export function resubmitChangeRequest(changeId: number, data: {
+  project_id: number
+  change_type: number
+  change_reason: string
+  original_content?: string
+  new_content?: string
+}) {
+  return post(`/api/changes/${changeId}/resubmit`, data)
 }

@@ -44,7 +44,10 @@
           <span class="level-badge" :class="`level-${item.level}`">{{ item.level_name }}</span>
         </div>
         <div class="card-body">
-          <h3 class="card-title">{{ item.title }}</h3>
+          <h3 class="card-title">
+            {{ item.title }}
+            <span v-if="item.session" class="session-badge">{{ item.session }}</span>
+          </h3>
           <div class="card-meta">
             <span v-if="item.organizer"><el-icon><OfficeBuilding /></el-icon> {{ item.organizer }}</span>
             <span v-if="item.location"><el-icon><Location /></el-icon> {{ item.location }}</span>
@@ -92,6 +95,7 @@
           <el-tag type="info">{{ detail.competition_type_name }}</el-tag>
         </div>
         <el-descriptions :column="2" border class="detail-desc">
+          <el-descriptions-item label="届次">{{ detail.session || '-' }}</el-descriptions-item>
           <el-descriptions-item label="主办方">{{ detail.organizer || '-' }}</el-descriptions-item>
           <el-descriptions-item label="承办方">{{ detail.co_organizer || '-' }}</el-descriptions-item>
           <el-descriptions-item label="报名时间">{{ formatDate(detail.registration_start) }} ~ {{ formatDate(detail.registration_end) }}</el-descriptions-item>
@@ -242,6 +246,11 @@ onMounted(loadData)
 .level-4 { background: #e6a23c; }  /* 国际级 橙色 */
 .card-body { padding: 14px; }
 .card-title { margin: 0 0 8px; font-size: 16px; color: #303133; }
+.session-badge {
+  display: inline-block; margin-left: 6px; padding: 1px 6px;
+  font-size: 12px; font-weight: normal; color: #409eff;
+  background: #ecf5ff; border: 1px solid #b3d8ff; border-radius: 4px;
+}
 .card-meta { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #606266; margin-bottom: 10px; }
 .card-meta span { display: flex; align-items: center; gap: 4px; }
 .card-dates { font-size: 12px; color: #909399; line-height: 1.8; margin-bottom: 10px; }

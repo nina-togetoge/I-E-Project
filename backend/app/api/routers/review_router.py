@@ -99,14 +99,18 @@ def api_review_flow(
 
 
 @router_review.get("/expert-tasks", response_model=ResponseModel[PageResult[ExpertProjectItem]],
-                   summary="专家查询待评审项目列表")
+                   summary="专家项目列表(待办/已评审历史)")
 def api_expert_tasks(
     keyword: Optional[str] = None,
+    scope: str = Query(default="pending", pattern="^(pending|reviewed)$",
+                       description="pending=待我评审; reviewed=我已评审(历史)"),
     pager: PaginationParams = Depends(),
     db: Session = Depends(get_db),
     current_user: SysUser = Depends(RequireRole(RoleEnum.EXPERT, RoleEnum.ADMIN)),
 ):
-    items, total = ReviewService.expert_pending_projects(db, current_user.id, pager, keyword)
+    service = (ReviewService.expert_reviewed_projects if scope == "reviewed"
+               else ReviewService.expert_pending_projects)
+    items, total = service(db, current_user.id, pager, keyword)
     return success(data=PageResult.create(items, total, pager.page, pager.page_size))
 
 
@@ -148,6 +152,20 @@ def api_midterm_submit(
         ctx.set_desc(f"提交项目#{req.project_id}中期检查")
         data = MidtermService.submit(db, req, current_user, is_draft=False)
     return success(data=data, message="中期检查已提交审核")
+
+
+@router_midterm.post("/withdraw", response_model=ResponseModel[MidtermCheckResponse],
+                     summary="撤回中期检查报告提交")
+def api_midterm_withdraw(
+    check_id: int = Query(..., description="中期检查记录ID"),
+    db: Session = Depends(get_db),
+    current_user: SysUser = require_login,
+    ctx: OperationContext = Depends(),
+):
+    with ctx:
+        ctx.set_desc(f"撤回中期检查#{check_id}提交")
+        data = MidtermService.withdraw(db, check_id, current_user)
+    return success(data=data, message="已撤回提交，可重新填写并提交")
 
 
 @router_midterm.post("/review", response_model=ResponseModel[MidtermCheckResponse], summary="审核中期检查")
@@ -222,3 +240,32 @@ def api_change_reject(
         ctx.set_desc(f"驳回变更申请#{change_id}")
         data = ChangeService.approve(db, change_id, approve=False, comment=comment, operator=current_user)
     return success(data=data, message="已驳回")
+
+
+@router_change.post("/{change_id}/withdraw", response_model=ResponseModel[ChangeRequestResponse],
+                    summary="撤回变更申请(申请人)")
+def api_change_withdraw(
+    change_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = require_login,
+    ctx: OperationContext = Depends(),
+):
+    with ctx:
+        ctx.set_desc(f"撤回变更申请#{change_id}")
+        data = ChangeService.withdraw(db, change_id, current_user)
+    return success(data=data, message="已撤回")
+
+
+@router_change.post("/{change_id}/resubmit", response_model=ResponseModel[ChangeRequestResponse],
+                    summary="重新提交被驳回的变更申请")
+def api_change_resubmit(
+    change_id: int,
+    req: ChangeRequestCreate,
+    db: Session = Depends(get_db),
+    current_user: SysUser = require_login,
+    ctx: OperationContext = Depends(),
+):
+    with ctx:
+        ctx.set_desc(f"重新提交变更申请#{change_id}")
+        data = ChangeService.resubmit(db, change_id, req, current_user)
+    return success(data=data, message="已重新提交")

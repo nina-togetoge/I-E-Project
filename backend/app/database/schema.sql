@@ -54,6 +54,7 @@ CREATE TABLE `sys_user` (
   `phone` varchar(20) DEFAULT NULL COMMENT '手机号',
   `role` tinyint NOT NULL DEFAULT '1' COMMENT '角色: 1-学生 2-指导教师 3-评审专家 4-系统管理员',
   `college_id` bigint DEFAULT NULL COMMENT '所属学院ID',
+  `grade` varchar(32) DEFAULT NULL COMMENT '年级',
   `avatar` longtext,
   `status` tinyint NOT NULL DEFAULT '1' COMMENT '状态: 0-禁用 1-启用',
   `force_change_pwd` tinyint NOT NULL DEFAULT '0' COMMENT '首次登录强制改密',
@@ -91,6 +92,7 @@ CREATE TABLE `sys_dict` (
 -- biz_competition
 CREATE TABLE `biz_competition` (
   `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '比赛名称',
+  `session` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '届次(如 2026届)',
   `competition_type` smallint NOT NULL COMMENT '比赛类型',
   `level` smallint NOT NULL COMMENT '比赛级别',
   `organizer` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '主办方',
@@ -102,6 +104,11 @@ CREATE TABLE `biz_competition` (
   `registration_end` date DEFAULT NULL COMMENT '报名截止日期',
   `competition_start` date DEFAULT NULL COMMENT '比赛开始日期',
   `competition_end` date DEFAULT NULL COMMENT '比赛结束日期',
+  `college_review_date` date DEFAULT NULL COMMENT '学院初审审核日(兼指导教师确认截止日)',
+  `university_review_date` date DEFAULT NULL COMMENT '校级复审审核日',
+  `expert_review_date` date DEFAULT NULL COMMENT '专家评审审核日',
+  `midterm_deadline` date DEFAULT NULL COMMENT '中期报告提交截止日',
+  `final_deadline` date DEFAULT NULL COMMENT '结题报告提交截止日',
   `location` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '比赛地点',
   `contact` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '联系方式',
   `cover_image` varchar(500) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '封面图URL',
@@ -150,11 +157,12 @@ CREATE TABLE `proj_project` (
   `project_no` varchar(64) DEFAULT NULL COMMENT '项目编号',
   `project_name` varchar(255) NOT NULL COMMENT '项目名称',
   `project_type` tinyint NOT NULL DEFAULT '1' COMMENT '项目类型: 1-创新训练 2-创业训练 3-创业实践',
-  `project_level` tinyint NOT NULL DEFAULT '1' COMMENT '项目级别: 1-校级 2-省级 3-国家级',
+  `project_level` tinyint NOT NULL DEFAULT '1' COMMENT '项目级别: 1-院级 2-校级 3-省级 4-国家级',
   `college_id` bigint NOT NULL COMMENT '申报学院ID',
   `leader_id` bigint NOT NULL COMMENT '项目负责人(学生)ID',
   `teacher_id` bigint DEFAULT NULL COMMENT '指导教师ID',
   `competition_id` bigint DEFAULT NULL COMMENT '参赛比赛ID',
+  `competition_session` varchar(32) DEFAULT NULL COMMENT '参赛比赛届次(冗余,如 2026届)',
   `start_date` date DEFAULT NULL COMMENT '立项开始日期',
   `end_date` date DEFAULT NULL COMMENT '计划结束日期',
   `budget_amount` decimal(12,2) NOT NULL DEFAULT '0.00' COMMENT '预算总额(元)',
@@ -162,7 +170,7 @@ CREATE TABLE `proj_project` (
   `project_summary` text COMMENT '项目简介',
   `innovation_points` text COMMENT '创新点',
   `expected_results` text COMMENT '预期成果',
-  `status` tinyint NOT NULL DEFAULT '0' COMMENT '项目状态: 0-草稿 1-待学院初审 2-学院初审通过 3-待校级复审 4-校级复审通过 5-待专家评审 6-已立项 7-中期检查 8-待结题 9-已结题 10-已驳回 11-已撤销',
+  `status` tinyint NOT NULL DEFAULT '0' COMMENT '项目状态: 0-草稿 1-待学院初审 2-学院初审通过 3-待校级复审 4-校级复审通过 13-待分配评审专家 5-待专家评审 6-已立项 7-中期检查 8-待结题 9-已结题 10-已驳回 11-已撤销',
   `submit_time` datetime DEFAULT NULL COMMENT '正式提交时间',
   `approval_time` datetime DEFAULT NULL COMMENT '最终立项审批时间',
   `current_approver_id` bigint DEFAULT NULL COMMENT '当前审批人ID',
@@ -214,6 +222,7 @@ CREATE TABLE `proj_review` (
   `reviewer_name` varchar(64) NOT NULL COMMENT '审核人姓名(冗余)',
   `review_result` tinyint NOT NULL COMMENT '审核结果: 1-通过 2-驳回 3-修改后重提',
   `score` decimal(5,2) DEFAULT NULL COMMENT '评分(百分制,专家评审用)',
+  `dim_scores` json DEFAULT NULL COMMENT '分项评分明细(JSON:创新性/可行性/团队/应用价值)',
   `review_comment` varchar(1000) DEFAULT NULL COMMENT '评审意见',
   `review_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '审核时间',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -307,6 +316,7 @@ CREATE TABLE `proj_midterm_check` (
   `remaining_tasks` text COMMENT '剩余任务计划',
   `problems` text COMMENT '存在问题',
   `next_plan` text COMMENT '下一步计划',
+  `report` text COMMENT '中期报告',
   `budget_usage` decimal(12,2) DEFAULT NULL COMMENT '已使用经费',
   `status` tinyint NOT NULL DEFAULT '0' COMMENT '状态: 0-草稿 1-待审核 2-审核通过 3-需修改 4-已驳回',
   `reviewer_id` bigint DEFAULT NULL COMMENT '审核人ID',
@@ -337,6 +347,7 @@ CREATE TABLE `proj_change_request` (
   `reject_reason` varchar(500) DEFAULT NULL COMMENT '驳回原因',
   `submit_time` datetime DEFAULT NULL COMMENT '提交时间',
   `approval_time` datetime DEFAULT NULL COMMENT '审批时间',
+  `project_status_at_submit` tinyint DEFAULT NULL COMMENT '提交时项目所处状态(用于每阶段限1次配额)',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `is_deleted` tinyint NOT NULL DEFAULT '0' COMMENT '软删除标记',
@@ -1112,7 +1123,7 @@ INSERT INTO `sys_user` (`id`, `username`, `password_hash`, `real_name`, `email`,
 (684, '0602', '$2b$12$BkvT/g5j4FB6WBPDYjWIHe53NopXAA4jq.fL02krwlW51bP3z1C9W', '魏平', '0602@example.com', '17945514013', 3, 6, NULL, 1, 0, NULL, NULL, '2026-09-14 18:29:08', '2026-09-14 18:29:08', 0),
 (685, '0603', '$2b$12$BkvT/g5j4FB6WBPDYjWIHe53NopXAA4jq.fL02krwlW51bP3z1C9W', '李刚', '0603@example.com', '18643786270', 3, 6, NULL, 1, 0, NULL, NULL, '2026-09-14 18:29:08', '2026-09-14 18:29:08', 0);
 
--- sys_dict: 10 rows
+-- sys_dict: 11 rows
 INSERT INTO `sys_dict` (`id`, `dict_type`, `dict_code`, `dict_label`, `dict_value`, `sort_order`, `status`, `remark`, `created_at`) VALUES
 (1, 'user_role', '1', '学生', NULL, 1, 1, NULL, '2026-08-12 19:31:58'),
 (2, 'user_role', '2', '指导教师', NULL, 2, 1, NULL, '2026-08-12 19:31:58'),
@@ -1121,9 +1132,10 @@ INSERT INTO `sys_dict` (`id`, `dict_type`, `dict_code`, `dict_label`, `dict_valu
 (5, 'project_type', '1', '创新训练项目', NULL, 1, 1, NULL, '2026-08-12 19:31:58'),
 (6, 'project_type', '2', '创业训练项目', NULL, 2, 1, NULL, '2026-08-12 19:31:58'),
 (7, 'project_type', '3', '创业实践项目', NULL, 3, 1, NULL, '2026-08-12 19:31:58'),
-(8, 'project_level', '1', '校级项目', NULL, 1, 1, NULL, '2026-08-12 19:31:58'),
-(9, 'project_level', '2', '省级项目', NULL, 2, 1, NULL, '2026-08-12 19:31:58'),
-(10, 'project_level', '3', '国家级项目', NULL, 3, 1, NULL, '2026-08-12 19:31:58');
+(8, 'project_level', '1', '院级项目', NULL, 1, 1, NULL, '2026-08-12 19:31:58'),
+(9, 'project_level', '2', '校级项目', NULL, 2, 1, NULL, '2026-08-12 19:31:58'),
+(10, 'project_level', '3', '省级项目', NULL, 3, 1, NULL, '2026-08-12 19:31:58'),
+(11, 'project_level', '4', '国家级项目', NULL, 4, 1, NULL, '2026-08-12 19:31:58');
 
 -- biz_competition: 12 rows
 INSERT INTO `biz_competition` (`title`, `competition_type`, `level`, `organizer`, `co_organizer`, `description`, `requirements`, `rewards`, `registration_start`, `registration_end`, `competition_start`, `competition_end`, `location`, `contact`, `cover_image`, `official_url`, `status`, `view_count`, `created_by`, `id`, `created_at`, `updated_at`, `is_deleted`) VALUES
@@ -1162,6 +1174,14 @@ INSERT INTO `proj_project` (`id`, `project_no`, `project_name`, `project_type`, 
 (81, 'IE2026000012', '校园无人配送小车路径规划与调度系统', 1, 2, 4, 373, 644, 43, '2026-04-11', '2027-02-10', '10000.00', '1363.01', '面向校园末端配送需求，开发一套无人配送小车的路径规划与多车调度系统。系统基于校园高精度地图，综合考虑配送时效、车辆载荷、障碍物等因素，为多辆配送小车生成最优配送路径并实现动态调度。', '1.设计改进A*算法结合时间窗约束的路径规划方法，有效避免多车碰撞；2.提出基于遗传算法的订单分配与车辆调度优化策略，配送效率提升25%；3.支持实时路况更新与动态重规划，应对突发情况。', '完成算法开发与仿真验证；与校园快递合作开展小规模试运行；申请发明专利1项。', 9, '2026-03-31 17:00:00', '2026-05-04 10:00:00', NULL, NULL, '2026-09-19 13:35:09', '2026-09-19 13:35:09', 0),
 (82, 'IE2026000013', '基于物联网的智能教室环境监测与调控系统', 1, 1, 4, 367, 644, NULL, '2026-03-16', '2026-12-24', '20000.00', '5315.91', '针对传统教室环境监测手段落后、能耗浪费严重的问题，开发一套基于物联网技术的智能教室环境监测与调控系统。系统实时采集教室温度、湿度、CO2浓度、光照强度等参数，通过智能算法自动调节空调、照明、通风设备，为师生创造舒适的学习环境，同时降低能耗。', '1.设计多传感器数据融合算法，提高环境参数监测精度；2.提出基于人体感应与课程表的智能调控策略，避免无人时段能源浪费；3.支持远程监控与手动控制，管理员可通过手机APP实时管理教室设备。', '完成系统原型开发与试点部署；实现节能率20%以上；申请软件著作权1项、实用新型专利1项。', 10, '2026-03-10 13:00:00', '2026-05-04 17:00:00', NULL, '项目预算明细不清晰，建议补充具体费用说明后重新提交。', '2026-09-19 13:35:09', '2026-09-19 13:35:09', 0),
 (83, 'IE2026000014', '基于Vue+Django的校园互助系统', 3, 2, 1, 8, 608, 43, '2026-09-19', '2026-10-03', '12000.00', '0.00', '项目基于 Vue+Django 开发校园互助系统，面向高校学生，提供闲置交换、学业帮扶、物品借用等校园互助服务。平台依托校园实名认证保障信息安全，解决校内供需信息分散、线下互助缺乏信任保障的痛点。项目以校内试点运营起步，采用轻平台运营模式，逐步扩大高校覆盖范围，构建可信高效的校园互助生态。', '<p>1. **产品创新**：面向高校校园场景一体化设计互助平台，整合闲置流转、学业帮扶、物品租借、校园代办四大模块，依托校园实名认证体系建立校内信用机制，区别于通用二手平台，针对性解决校内供需信息零散、交易信任不足的痛点，更贴合大学生使用习惯。</p><p>2. **技术壁垒**：采用 Vue 前端 + Django 后端轻量化开发架构，搭建校内消息推送、订单管理、评价信用子系统，实现前后端分离的 Web 应用。适配校园内网访问，数据隔离保障学生隐私，可快速迭代功能，同类校园平台较少实现多互助业务一体化整合。</p><p>3. **商业模式创新**：采用**校内免费基础服务 + 增值服务**双轮驱动模式，基础互助发布功能免费吸引用户，通过置顶曝光、优先匹配等增值服务获取收益；以本校为试点，验证模式后横向拓展至周边高校，校园细分市场稳定，具备可持续运营潜力。</p>', '<p>1. 商业计划：完成完整创业计划书 1 份，包含市场分析、产品方案、运营策略、财务预测、风险防控等模块。</p><p>2. 原型产品：完成 MVP 最小可行校园互助系统开发，实现发布、接单、评价、消息通知核心功能，在本校开展内测，获取首批学生种子用户验证。</p><p>3. 竞赛目标：参加第十八届挑战杯，冲击省赛奖项，力争晋级更高赛事。</p><p>4. 创业落地：完善产品迭代，在校内常态化运营，持续积累用户，探索校园服务商业化路径。</p>', 7, '2026-09-19 15:08:47', '2026-09-19 20:22:30', NULL, NULL, '2026-09-19 15:04:45', '2026-09-19 20:24:57', 0);
+
+-- 学生年级统一为 2023级（role=1 为学生）
+UPDATE `sys_user` SET `grade` = '2023' WHERE `role` = 1;
+
+-- 比赛届次回填：按比赛开始年份（无则报名开始年份/创建时间）推导，格式"YYYY届"
+UPDATE `biz_competition` SET `session` = CONCAT(YEAR(COALESCE(`competition_start`, `registration_start`, `created_at`)), '届') WHERE `session` IS NULL;
+-- 项目参赛届次回填：取自所关联比赛
+UPDATE `proj_project` p JOIN `biz_competition` c ON p.`competition_id` = c.`id` SET p.`competition_session` = c.`session`;
 
 -- proj_team_member: 63 rows
 INSERT INTO `proj_team_member` (`id`, `project_id`, `student_id`, `student_name`, `student_no`, `major`, `grade`, `role_in_team`, `task_desc`, `join_time`, `created_at`, `updated_at`, `is_deleted`) VALUES

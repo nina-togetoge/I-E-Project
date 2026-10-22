@@ -34,7 +34,7 @@
           link
           type="primary"
           size="small"
-          @click="router.push(`/review/${row.id}`)"
+          @click="projectDetailStore.open(row.id)"
         >
           审核
         </el-button>
@@ -47,15 +47,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { Search, Refresh } from '@element-plus/icons-vue'
 import PaginationTable from '@/components/PaginationTable.vue'
 import EmptyIllustration from '@/components/EmptyIllustration.vue'
 import type { TableColumn } from '@/components/PaginationTable.vue'
 import { getReviewList } from '@/api/review'
+import { useProjectDetailStore } from '@/store/projectDetail'
 
-const router = useRouter()
+const projectDetailStore = useProjectDetailStore()
+
+// 审核在项目详情弹窗内完成，弹窗关闭后刷新列表状态
+watch(() => projectDetailStore.visible, (v) => {
+  if (!v) loadData()
+})
 
 const searchForm = reactive({
   keyword: '',

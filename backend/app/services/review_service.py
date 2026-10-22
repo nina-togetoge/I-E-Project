@@ -4,12 +4,13 @@
 另外含中期检查、变更/延期审批
 """
 from typing import List, Tuple, Optional
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from decimal import Decimal
 
 from sqlalchemy import or_, func
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import RoleEnum, is_super_admin, is_college_admin
 from app.core.exceptions import (
     PermissionDeniedException, ResourceNotFoundException, ParamValidateException,
@@ -19,7 +20,7 @@ from app.crud.project import ProjectCRUD
 from app.crud.user import UserCRUD, CollegeCRUD
 from app.crud.review import ReviewCRUD, MidtermCRUD, ChangeCRUD
 from app.models import (
-    ProjProject, SysUser, ProjReview,
+    ProjProject, SysUser, ProjReview, ProjChangeRequest,
 )
 from app.schemas.review import (
     ReviewCreateRequest, ExpertReviewCreateRequest, ExpertAssignRequest,
@@ -27,10 +28,19 @@ from app.schemas.review import (
     MidtermCheckCreate, MidtermCheckResponse, MidtermReviewRequest,
     ChangeRequestCreate, ChangeRequestResponse,
     REVIEW_STAGE_TEACHER, REVIEW_STAGE_COLLEGE, REVIEW_STAGE_UNIVERSITY, REVIEW_STAGE_EXPERT, REVIEW_STAGE_FINAL,
-    REVIEW_STAGE_NAME, REVIEW_RESULT_PASS, REVIEW_RESULT_REJECT, REVIEW_RESULT_MODIFY,
+    REVIEW_STAGE_NAME, REVIEW_RESULT_PASS,
     REVIEW_RESULT_NAME, CHANGE_TYPE_NAME, CHANGE_STATUS_NAME, MIDTERM_STATUS_NAME,
+    CHANGE_STATUS_PENDING, CHANGE_STATUS_APPROVED, CHANGE_STATUS_REJECTED, CHANGE_STATUS_WITHDRAWN,
+    CHANGE_STATUS_EXPIRED,
+    CHANGE_MAX_TIMES,
 )
-from app.schemas.project import PROJECT_STATUS_NAME
+from app.schemas.project import (
+    PROJECT_STATUS_NAME,
+    PROJECT_STATUS_PENDING_COLLEGE,
+    PROJECT_STATUS_PENDING_UNIVERSITY,
+    PROJECT_STATUS_PENDING_EXPERT,
+    PROJECT_STATUS_PENDING_EXPERT_ASSIGN,
+)
 
 
 class ReviewService:
@@ -47,7 +57,7 @@ class ReviewService:
         if stage == REVIEW_STAGE_COLLEGE:
             return 3  # 学院初审通过后 -> 待校级复审
         if stage == REVIEW_STAGE_UNIVERSITY:
-            return 5  # 校级复审通过后 -> 待专家评审
+            return 13  # 校级复审通过后 -> 待分配评审专家（分配完成后转 5 待专家评审）
         if stage == REVIEW_STAGE_EXPERT:
             return 6  # 专家评审通过 -> 已立项
         if stage == REVIEW_STAGE_FINAL:
@@ -56,7 +66,8 @@ class ReviewService:
 
     @staticmethod
     def _get_stage_from_status(status: int) -> int:
-        """根据项目当前状态，推断它当前处于哪个审核阶段"""
+        """根据项目当前状态，推断它当前处于哪个审核阶段；
+        非审核流程中的状态（草稿0/已立项6/中期检查中7/已结题9/驳回10/撤销11）返回 -1"""
         if status == 12:
             return REVIEW_STAGE_TEACHER
         if status == 1:
@@ -67,7 +78,7 @@ class ReviewService:
             return REVIEW_STAGE_EXPERT
         if status == 8:
             return REVIEW_STAGE_FINAL
-        return 0
+        return -1
 
     # ---------- 通用权限校验 ----------
     @staticmethod
@@ -90,14 +101,14 @@ class ReviewService:
                 raise PermissionDeniedException(message="仅该项目的指导教师可进行确认")
             return
         if stage == REVIEW_STAGE_COLLEGE:
-            # 学院初审：真超级管理员 / 本院学院管理员 / 本院教师
+            # 学院初审：仅真超级管理员 / 本院学院管理员
+            # （指导教师只负责"指导教师确认"，不参与学院初审）
             if is_super_admin(operator):
                 return
-            # 教师与学院管理员都必须绑定且匹配项目所属学院；
-            # 未绑定学院(college_id 为空)的教师不得跨院审核
-            if operator.role in (RoleEnum.TEACHER, RoleEnum.ADMIN):
+            if operator.role == RoleEnum.ADMIN:
+                # 学院管理员必须绑定且匹配项目所属学院，未绑定不得跨院审核
                 if not operator.college_id or operator.college_id != project.college_id:
-                    raise PermissionDeniedException(message="仅本院教师/学院管理员可执行学院初审")
+                    raise PermissionDeniedException(message="仅本院学院管理员可执行学院初审")
                 return
             raise PermissionDeniedException(message="当前用户无权进行学院初审")
         if stage == REVIEW_STAGE_UNIVERSITY:
@@ -143,6 +154,15 @@ class ReviewService:
             raise ResourceNotFoundException(message="项目不存在")
         ReviewService._ensure_can_review(project, req.review_stage, operator)
 
+        from app.services.project_service import ProjectService
+        # 截止日校验：指导教师确认最晚到学院初审审核日；结题验收上限为结题报告提交截止日
+        if req.review_stage == REVIEW_STAGE_TEACHER and \
+                ProjectService.is_past_deadline(ProjectService.get_teacher_confirm_deadline(db, project)):
+            raise ParamValidateException(message="已超过指导教师确认截止日（学院初审审核日），无法确认")
+        if req.review_stage == REVIEW_STAGE_FINAL and \
+                ProjectService.is_past_deadline(ProjectService.get_final_deadline(db, project)):
+            raise ParamValidateException(message="已超过结题报告提交截止日，无法进行结题验收")
+
         # 结题验收前置：负责人须已提交结项验收报告，且满足结项三条件
         if req.review_stage == REVIEW_STAGE_FINAL:
             from app.services.project_service import ProjectService
@@ -187,15 +207,32 @@ class ReviewService:
             project.status = ReviewService._next_status_after_pass(project.status, req.review_stage)
             if project.status == 6:
                 project.approval_time = datetime.now()
+            # 校级复审通过后默认进入「待分配评审专家(13)」；
+            # 若复审前已预登记过专家占位记录，则直接进入「待专家评审(5)」
+            if project.status == PROJECT_STATUS_PENDING_EXPERT_ASSIGN:
+                has_placeholder = db.query(ProjReview.id).filter(
+                    ProjReview.project_id == project.id,
+                    ProjReview.review_stage == REVIEW_STAGE_EXPERT,
+                    ProjReview.review_result == 99,
+                    ProjReview.is_deleted == 0,
+                ).first()
+                if has_placeholder:
+                    project.status = PROJECT_STATUS_PENDING_EXPERT
             # 说明：学院初审通过(2)、校级复审通过(4)为瞬时中间态，不落库；
-            # 目标持久态已由 _next_status_after_pass 直接给出（3 / 5）
-        elif req.review_result == REVIEW_RESULT_REJECT:
-            project.status = 10
+            # 目标持久态已由 _next_status_after_pass 直接给出（3 / 13 / 5）
+        else:
+            # 驳回（含已废弃的 result=3"修改后重提"，统一按驳回处理）
+            if req.review_stage == REVIEW_STAGE_FINAL:
+                # 结题验收驳回：退回「待结题(8)」而非驳回(10)，
+                # 否则 submit_final 要求状态为 8，项目将永久无法再次结项
+                project.status = 8
+            else:
+                project.status = 10
             project.reject_reason = (req.review_comment or "")[:500]
-        elif req.review_result == REVIEW_RESULT_MODIFY:
-            # 修改后重提：驳回回草稿，提示原因
-            project.status = 10
-            project.reject_reason = ("[修改后重提] " + (req.review_comment or ""))[:500]
+
+        # 状态流转后同步"当前审批人"（待学院初审→学院管理员；其余阶段清空）
+        from app.services.project_service import ProjectService
+        ProjectService._sync_current_approver(db, project)
 
         db.flush()
         db.commit()
@@ -208,7 +245,11 @@ class ReviewService:
         # 打分动作：必须是专家本人，或真超级管理员（演示用代操作）；学院管理员不得代打
         if operator.role != RoleEnum.EXPERT and not is_super_admin(operator):
             raise PermissionDeniedException(message="仅专家可执行专家评审")
-        project = ProjectCRUD.get_by_id(db, req.project_id)
+        # 行级锁：串行化同一项目的并发专家评审，
+        # 避免"最后一位专家"并发判定导致重复立项/驳回判定或状态双写
+        project = db.query(ProjProject).filter(
+            ProjProject.id == req.project_id, ProjProject.is_deleted == 0
+        ).with_for_update().first()
         if not project:
             raise ResourceNotFoundException(message="项目不存在")
         if project.status != 5:  # 待专家评审
@@ -226,6 +267,7 @@ class ReviewService:
         # 更新或创建评审记录
         if old:
             old.score = req.score
+            old.dim_scores = req.dim_scores
             old.review_result = req.review_result
             old.review_comment = req.review_comment
             old.review_time = datetime.now()
@@ -239,6 +281,7 @@ class ReviewService:
                 "reviewer_name": operator.real_name,
                 "review_result": req.review_result,
                 "score": req.score,
+                "dim_scores": req.dim_scores,
                 "review_comment": req.review_comment,
                 "review_time": datetime.now(),
             })
@@ -263,13 +306,23 @@ class ReviewService:
             if reviews:
                 pass_count = sum(1 for r in reviews if r.review_result == REVIEW_RESULT_PASS)
                 total = len(reviews)
-                # 多数通过（含平票）则立项；多数驳回则置为已驳回，避免项目卡死在待专家评审
-                if pass_count * 2 >= total:
+                scores = [float(r.score) for r in reviews if r.score is not None]
+                avg_score = round(sum(scores) / len(scores), 2) if scores else 0.0
+                pass_score = settings.EXPERT_PASS_SCORE
+                # 双条件立项：多数专家同意（含平票）且平均分达到及格线；
+                # 否则驳回，并写明具体依据，避免项目卡死在待专家评审
+                if pass_count * 2 >= total and avg_score >= pass_score:
                     project.status = 6
                     project.approval_time = datetime.now()
                 else:
                     project.status = 10
-                    project.reject_reason = "专家评审未通过（多数专家驳回）"
+                    if pass_count * 2 < total:
+                        project.reject_reason = f"专家评审未通过（{pass_count}/{total} 位专家同意，未过半数）"
+                    else:
+                        project.reject_reason = f"专家评审未通过（平均分 {avg_score}，未达及格线 {pass_score}）"
+        # 同步"当前审批人"：立项(6)/驳回(10) 与"待专家评审(5)"均无单一审批人，统一置空
+        from app.services.project_service import ProjectService
+        ProjectService._sync_current_approver(db, project)
         db.commit()
         db.refresh(record)
         return ReviewService._record_to_item(record)
@@ -286,17 +339,39 @@ class ReviewService:
         # 学院管理员只能为本院项目分配专家
         if is_college_admin(operator) and operator.college_id != project.college_id:
             raise PermissionDeniedException(message="仅可分配本院项目的评审专家")
+        # 可分配阶段：待校级复审(3，允许提前登记)、待分配评审专家(13)、待专家评审(5，尚未有人打分时补录)
+        if project.status not in (3, 13, 5):
+            raise ParamValidateException(
+                message=f"当前项目状态为「{PROJECT_STATUS_NAME.get(project.status, project.status)}」，不可分配评审专家"
+            )
 
-        # 校验每个ID都是专家角色
+        # 一旦有专家提交了正式评审，名单即锁定：否则移除专家后其评分仍参与结算，
+        # 会出现「票已投、人被踢」的结果失真
+        reviewed = db.query(ProjReview.id).filter(
+            ProjReview.project_id == project.id,
+            ProjReview.review_stage == REVIEW_STAGE_EXPERT,
+            ProjReview.review_result != 99,
+            ProjReview.is_deleted == 0,
+        ).first()
+        if reviewed:
+            raise ParamValidateException(message="该项目已有专家提交评审，无法调整专家名单")
+
+        # 至少需分配 EXPERT_MIN_COUNT 位专家，避免单人一票定生死
+        if len(set(req.expert_ids)) < settings.EXPERT_MIN_COUNT:
+            raise ParamValidateException(
+                message=f"每个项目至少需分配 {settings.EXPERT_MIN_COUNT} 位评审专家"
+            )
+
+        # 校验每个ID都是专家角色（管理员不可被当作评审专家分配）
         for eid in req.expert_ids:
             u = UserCRUD.get_by_id(db, eid)
-            if not u or u.role not in (RoleEnum.EXPERT, RoleEnum.ADMIN):
+            if not u or u.role != RoleEnum.EXPERT:
                 raise ParamValidateException(message=f"用户ID={eid} 不是评审专家")
 
         # 获取该项目该阶段已有的占位记录（未评审的专家）
         existing = db.query(ProjReview).filter(
             ProjReview.project_id == project.id,
-            ProjReview.review_stage == req.review_stage,
+            ProjReview.review_stage == REVIEW_STAGE_EXPERT,
             ProjReview.review_result == 99,
             ProjReview.is_deleted == 0,
         ).all()
@@ -314,15 +389,19 @@ class ReviewService:
                 u = UserCRUD.get_by_id(db, eid)
                 ReviewCRUD.create(db, {
                     "project_id": project.id,
-                    "review_stage": req.review_stage,
+                    "review_stage": REVIEW_STAGE_EXPERT,
                     "reviewer_id": u.id,
                     "reviewer_name": u.real_name,
                     "review_result": 99,  # 99 占位=未评审（展示层过滤）
                     "review_comment": None,
                     "review_time": datetime.now(),
                 })
-        # 说明：校级复审通过(4)为瞬时态、不落库，分配专家时项目应已处于 5(待专家评审)；
-        # 若项目尚未进入该阶段（如仍为 3 待校级复审）则仅登记分配，不改变主状态。
+        # 13 → 5：完成专家分配后进入待专家评审；
+        # 3(待校级复审) 阶段为提前登记，保持原状态，复审通过时再决定落 13 还是 5
+        if project.status == PROJECT_STATUS_PENDING_EXPERT_ASSIGN:
+            from app.services.project_service import ProjectService
+            project.status = PROJECT_STATUS_PENDING_EXPERT
+            ProjectService._sync_current_approver(db, project)
         db.commit()
         return {"assigned_count": len(new_ids), "project_id": project.id}
 
@@ -336,6 +415,14 @@ class ReviewService:
         from app.services.project_service import ProjectService
         ProjectService.get_detail(db, project_id, operator)
         records_orm = ReviewCRUD.list_by_project(db, project_id)
+        # 专家评审独立性：专家仅可见本人的专家/结题评审记录，
+        # 不得看到其他专家的评分与评语（管理员/教师/学生仍可见全量流程记录）
+        if operator.role == RoleEnum.EXPERT:
+            records_orm = [
+                r for r in records_orm
+                if r.review_stage not in (REVIEW_STAGE_EXPERT, REVIEW_STAGE_FINAL)
+                or r.reviewer_id == operator.id
+            ]
         records: List[ReviewRecordItem] = [
             ReviewService._record_to_item(r) for r in records_orm
             if r.review_result != 99  # 过滤占位记录
@@ -397,7 +484,8 @@ class ReviewService:
         q = db.query(ProjProject).filter(ProjProject.is_deleted == 0)
 
         if operator.role == RoleEnum.TEACHER:
-            # 教师：待指导教师确认(status=12) 且 自己是指导教师
+            # 教师：仅"待指导教师确认(status=12)"且自己是该项目的指导教师
+            # （学院初审由学院管理员负责，指导教师不参与）
             q = q.filter(ProjProject.status == 12, ProjProject.teacher_id == operator.id)
         elif operator.role == RoleEnum.ADMIN and operator.college_id:
             # 学院管理员：待学院初审(status=1) 且 本院项目
@@ -445,16 +533,14 @@ class ReviewService:
             result.append(item)
         return result, total
 
-    # ---------- 专家待评项目列表 ----------
+    # ---------- 专家项目列表（待办 / 已评审历史） ----------
     @staticmethod
-    def expert_pending_projects(db: Session, expert_id: int, pager: PaginationParams,
-                                keyword: Optional[str] = None):
-        items, total = ReviewCRUD.expert_pending_projects(
-            db, expert_id, pager.offset, pager.limit, keyword
-        )
+    def _build_expert_items(db: Session, expert_id: int, items: List[ProjProject]) -> List[ExpertProjectItem]:
+        """ORM 列表 -> ExpertProjectItem 列表。
 
-        # [P1-4] 消除N+1：原代码每个项目做 3 次DB查询（专家分数/学院/负责人）
-        # 一次性批量查出所有需要的数据，然后按 ID 建字典
+        [P1-4] 消除N+1：原代码每个项目做 3 次DB查询（专家分数/学院/负责人），
+        这里一次性批量查出所有需要的数据，然后按 ID 建字典。
+        """
         project_ids = [p.id for p in items]
         college_ids = list({p.college_id for p in items if p.college_id})
         leader_ids = list({p.leader_id for p in items if p.leader_id})
@@ -502,7 +588,25 @@ class ReviewService:
                 my_score=record.score if record and record.review_result != 99 else None,
                 my_review_result=record.review_result if record and record.review_result != 99 else None,
             ))
-        return result, total
+        return result
+
+    @staticmethod
+    def expert_pending_projects(db: Session, expert_id: int, pager: PaginationParams,
+                                keyword: Optional[str] = None):
+        """专家"待办"项目：需要该专家本人操作的项目（待评审 5 / 待结题验收 8）。"""
+        items, total = ReviewCRUD.expert_pending_projects(
+            db, expert_id, pager.offset, pager.limit, keyword
+        )
+        return ReviewService._build_expert_items(db, expert_id, items), total
+
+    @staticmethod
+    def expert_reviewed_projects(db: Session, expert_id: int, pager: PaginationParams,
+                                 keyword: Optional[str] = None):
+        """专家"已评审"历史项目：该专家本人已出评审/结题验收结果的项目，供回看。"""
+        items, total = ReviewCRUD.expert_reviewed_projects(
+            db, expert_id, pager.offset, pager.limit, keyword
+        )
+        return ReviewService._build_expert_items(db, expert_id, items), total
 
     # ---------- 辅助：ORM -> Pydantic ----------
     @staticmethod
@@ -541,8 +645,15 @@ class MidtermService:
         # 中期检查提交仅限项目负责人本人（真超级管理员可代操作）
         if not is_super_admin(operator) and project.leader_id != operator.id:
             raise PermissionDeniedException(message="仅项目负责人可提交中期检查")
-        if project.status not in (6, 7, 8):
-            raise ParamValidateException(message="仅已立项/中期/待结题阶段可提交中期检查")
+        # 仅"已立项(6)/中期检查中(7)"可提交中期检查：状态 8(待结题) 时中期必已通过，
+        # 重复提交会被下方 existing.status==2 拦截，此处置为 6/7 与前端按钮可见范围一致
+        if project.status not in (6, 7):
+            raise ParamValidateException(message="仅已立项/中期检查中阶段可提交中期检查")
+        # 截止日校验：中期报告须在『中期报告提交截止日』前提交（草稿不受限）
+        if not is_draft:
+            from app.services.project_service import ProjectService
+            if ProjectService.is_past_deadline(ProjectService.get_midterm_deadline(db, project)):
+                raise ParamValidateException(message="已超过中期报告提交截止日，无法提交中期检查")
 
         # 检查现有中期检查状态，防止重复提交/修改
         existing = MidtermCRUD.get_by_project(db, req.project_id)
@@ -555,6 +666,7 @@ class MidtermService:
                 raise ParamValidateException(message="中期检查正在审核中，不可修改")
 
         data = req.model_dump()
+        attachment_ids = data.pop("attachment_ids", None) or []
         if is_draft:
             data["status"] = 0
         else:
@@ -564,6 +676,42 @@ class MidtermService:
             if project.status == 6:
                 project.status = 7
         obj = MidtermCRUD.create_or_update(db, data)
+        # 关联中期报告附件到项目（仅限本人上传的临时附件，防止劫持他人/其他业务附件）
+        if attachment_ids:
+            from app.models.user import SysAttachment
+            db.query(SysAttachment).filter(
+                SysAttachment.id.in_(attachment_ids),
+                SysAttachment.biz_type == "project",
+                SysAttachment.biz_id == 0,
+                SysAttachment.uploader_id == operator.id,
+                SysAttachment.is_deleted == 0,
+            ).update({SysAttachment.biz_id: req.project_id}, synchronize_session=False)
+        db.commit()
+        db.refresh(obj)
+        item = MidtermCheckResponse.model_validate(obj)
+        item.status_name = MIDTERM_STATUS_NAME.get(item.status, "")
+        return item
+
+    @staticmethod
+    def withdraw(db: Session, check_id: int, operator: SysUser) -> MidtermCheckResponse:
+        """撤回中期检查报告提交：仅项目负责人本人（真超级管理员可代操作）。
+        撤回后记录退回草稿(0)，项目仍停留在「中期检查中(7)」，可再次修改并重新提交。"""
+        obj = MidtermCRUD.get_by_id(db, check_id)
+        if not obj:
+            raise ResourceNotFoundException(message="中期检查记录不存在")
+        project = ProjectCRUD.get_by_id(db, obj.project_id)
+        if not project:
+            raise ResourceNotFoundException(message="项目不存在")
+        if not is_super_admin(operator) and project.leader_id != operator.id:
+            raise PermissionDeniedException(message="仅项目负责人可撤回中期检查提交")
+        if obj.status != 1:
+            raise ParamValidateException(message="仅『待审核』的中期检查可撤回提交")
+        # 截止日校验：超过中期报告截止日不允许撤回，否则撤回后将无法再次提交而卡死流程
+        from app.services.project_service import ProjectService
+        if ProjectService.is_past_deadline(ProjectService.get_midterm_deadline(db, project)):
+            raise ParamValidateException(message="已超过中期报告截止日，无法撤回中期检查")
+        # 退回草稿：项目状态保持不变（仍为 7 中期检查中），可再次编辑后重新提交
+        obj.status = 0
         db.commit()
         db.refresh(obj)
         item = MidtermCheckResponse.model_validate(obj)
@@ -583,6 +731,10 @@ class MidtermService:
             raise ResourceNotFoundException(message="项目不存在")
         if not is_super_admin(operator) and operator.id != project.teacher_id:
             raise PermissionDeniedException(message="仅该项目的指导教师可审核中期检查")
+        # 截止日校验：中期报告审核上限为『中期报告提交截止日』
+        from app.services.project_service import ProjectService
+        if ProjectService.is_past_deadline(ProjectService.get_midterm_deadline(db, project)):
+            raise ParamValidateException(message="已超过中期报告审核截止日，无法审核")
         # 1 通过 -> 状态2；2 驳回 -> 状态4；3 修改 -> 状态3
         obj.reviewer_id = operator.id
         obj.review_comment = req.review_comment
@@ -612,15 +764,47 @@ class ChangeService:
         project = ProjectCRUD.get_by_id(db, req.project_id)
         if not project:
             raise ResourceNotFoundException(message="项目不存在")
-        if project.status not in (6, 7, 8):
-            raise ParamValidateException(message="仅已立项/中期/待结题阶段可提交变更申请")
+        from app.services.project_service import ProjectService
+        # 先清扫已超审批缓冲期的待审核申请（置为已作废，留档）
+        ProjectService.sweep_expired_change_requests(db, [project.id])
+        # 提交窗口：截止日驱动（锁死日 = 项目当前阶段的审核日；比赛未配置时间表则不锁）
+        if project.status not in ProjectService.CHANGE_WINDOW_STATUSES:
+            raise ParamValidateException(message="当前项目阶段不可提交变更/延期申请")
+        if ProjectService.is_past_deadline(ProjectService.get_change_deadline(db, project)):
+            raise ParamValidateException(message="已超过当前阶段的审核日，项目已锁定，无法提交变更/延期申请")
         # 变更/延期申请仅限项目负责人本人发起（真超级管理员可代操作）
         if not is_super_admin(operator) and project.leader_id != operator.id:
             raise PermissionDeniedException(message="仅项目负责人可发起变更申请")
+        # 配额：① 每阶段限 1 次（待校级复审、待专家评审 各 1 次）② 累计上限 CHANGE_MAX_TIMES 次
+        # 说明：已撤回占用名额（撤回不退名额）；系统超期自动『已作废』不计入
+        counted = (
+            ProjChangeRequest.project_id == project.id,
+            ProjChangeRequest.is_deleted == 0,
+            ProjChangeRequest.status.notin_([CHANGE_STATUS_EXPIRED]),
+        )
+        stage_used = db.query(func.count(ProjChangeRequest.id)).filter(
+            *counted,
+            ProjChangeRequest.project_status_at_submit == project.status,
+        ).scalar() or 0
+        if stage_used >= 1:
+            raise ParamValidateException(message="当前阶段已提交过变更/延期申请（每阶段限 1 次）")
+        used = db.query(func.count(ProjChangeRequest.id)).filter(*counted).scalar() or 0
+        if used >= CHANGE_MAX_TIMES:
+            raise ParamValidateException(message=f"变更申请次数已达上限（共{CHANGE_MAX_TIMES}次）")
+        # 同一项目不允许同时存在待审核的申请
+        pending = db.query(ProjChangeRequest.id).filter(
+            ProjChangeRequest.project_id == project.id,
+            ProjChangeRequest.is_deleted == 0,
+            ProjChangeRequest.status == CHANGE_STATUS_PENDING,
+        ).first()
+        if pending:
+            raise ParamValidateException(message="存在待审批的变更申请，请等待审批完成")
         data = req.model_dump()
         data["applicant_id"] = operator.id
-        data["status"] = 0
+        data["status"] = CHANGE_STATUS_PENDING
         data["submit_time"] = datetime.now()
+        # 记录提交时项目所处阶段，作为「每阶段限 1 次」配额依据
+        data["project_status_at_submit"] = project.status
         obj = ChangeCRUD.create(db, data)
         db.commit()
         db.refresh(obj)
@@ -659,40 +843,133 @@ class ChangeService:
                 ).distinct().all()]
             else:
                 project_ids = []
+        # 查询前先清扫已超审批缓冲期的待审核申请（置为已作废，留档）
+        from app.services.project_service import ProjectService
+        ProjectService.sweep_expired_change_requests(db, project_ids)
         items, total = ChangeCRUD.paginate(
             db, pager.offset, pager.limit, project_id, change_type, status, applicant_id,
             project_ids=project_ids,
         )
-        return [ChangeService._to_item(i) for i in items], total
+        # 批量回填项目名称，避免逐条查询
+        name_map = {}
+        pids = {i.project_id for i in items}
+        if pids:
+            name_map = dict(db.query(ProjProject.id, ProjProject.project_name).filter(
+                ProjProject.id.in_(pids)
+            ).all())
+        result = []
+        for i in items:
+            it = ChangeService._to_item(i)
+            it.project_name = name_map.get(i.project_id)
+            result.append(it)
+        return result, total
 
     @staticmethod
     def approve(db: Session, change_id: int, approve: bool, comment: str, operator: SysUser):
         obj = ChangeCRUD.get_by_id(db, change_id)
         if not obj:
             raise ResourceNotFoundException(message="申请不存在")
-        # 归属校验：超管全校；学院管理员仅本院项目；教师仅本人指导的项目
         project = ProjectCRUD.get_by_id(db, obj.project_id)
         if not project:
             raise ResourceNotFoundException(message="关联项目不存在")
-        if is_super_admin(operator):
-            pass
-        elif is_college_admin(operator):
-            if not operator.college_id or project.college_id != operator.college_id:
-                raise PermissionDeniedException(message="学院管理员仅可审批本院项目的变更申请")
-        elif operator.role == RoleEnum.TEACHER:
-            if project.teacher_id != operator.id:
-                raise PermissionDeniedException(message="教师仅可审批本人指导项目的变更申请")
-        else:
-            raise PermissionDeniedException(message="仅教师/管理员可审批变更")
-        if obj.status in (3, 4):
-            raise ParamValidateException(message="该申请已完成审批，不可重复")
-        # 简单流程：一级审批即完成（可扩展多级）
+        # 审批人：仅该项目的指导教师本人（真超级管理员可代操作）
+        if not is_super_admin(operator):
+            if operator.role != RoleEnum.TEACHER or project.teacher_id != operator.id:
+                raise PermissionDeniedException(message="仅该项目的指导教师可审批变更申请")
+        if obj.status != CHANGE_STATUS_PENDING:
+            raise ParamValidateException(message="该申请已完成审批或已撤回，不可重复审批")
+        # 提交时所处的审核段（决定退回目标与审批截止日）
+        from_status = obj.project_status_at_submit or project.status
+        # 审批须在『提交阶段审核日 + 1 天缓冲期』内完成；超期申请会被自动作废
+        from app.services.project_service import ProjectService
+        _deadline = ProjectService.get_change_deadline_for_status(db, project, from_status)
+        if _deadline is not None and date.today() > _deadline + timedelta(days=1):
+            raise ParamValidateException(message="已超过审批缓冲期，该申请已自动作废，不可审批")
+        # 驳回：仅记录申请状态，不影响项目流程（项目停留在原阶段可继续处理）
         if not approve:
-            obj.status = 4
+            obj.status = CHANGE_STATUS_REJECTED
             obj.reject_reason = comment
+            db.commit()
+            db.refresh(obj)
+            return ChangeService._to_item(obj)
+        # 通过：按「提交时所处的审核段」退回上一审核段，重走该段之后的流程
+        #  - 待校级复审(3) 提交 → 退回待学院初审(1)
+        #  - 待专家评审(5) 提交 → 退回待校级复审(3)
+        if from_status == PROJECT_STATUS_PENDING_EXPERT:
+            target_status = PROJECT_STATUS_PENDING_UNIVERSITY
+            clear_stages = [REVIEW_STAGE_UNIVERSITY, REVIEW_STAGE_EXPERT]
         else:
-            obj.status = 3
-            obj.approval_time = datetime.now()
+            target_status = PROJECT_STATUS_PENDING_COLLEGE
+            clear_stages = [REVIEW_STAGE_COLLEGE, REVIEW_STAGE_UNIVERSITY, REVIEW_STAGE_EXPERT]
+        obj.status = CHANGE_STATUS_APPROVED
+        obj.approval_time = datetime.now()
+        # 清除退回后需重审的评审记录（保留专家分配占位 result=99，使学院/校级/专家可重新评审）
+        db.query(ProjReview).filter(
+            ProjReview.project_id == project.id,
+            ProjReview.review_stage.in_(clear_stages),
+            ProjReview.review_result != 99,
+            ProjReview.is_deleted == 0,
+        ).update({ProjReview.is_deleted: 1}, synchronize_session=False)
+        project.status = target_status
+        project.reject_reason = None
+        from app.services.project_service import ProjectService
+        ProjectService._sync_current_approver(db, project)
+        db.commit()
+        db.refresh(obj)
+        return ChangeService._to_item(obj)
+
+    @staticmethod
+    def withdraw(db: Session, change_id: int, operator: SysUser) -> ChangeRequestResponse:
+        """撤回变更申请：仅申请人本人（真超级管理员可代操作），且申请处于待审核(0)。"""
+        obj = ChangeCRUD.get_by_id(db, change_id)
+        if not obj:
+            raise ResourceNotFoundException(message="申请不存在")
+        if not is_super_admin(operator) and obj.applicant_id != operator.id:
+            raise PermissionDeniedException(message="仅申请人可撤回变更申请")
+        if obj.status != CHANGE_STATUS_PENDING:
+            raise ParamValidateException(message="仅『待审核』的变更申请可撤回")
+        obj.status = CHANGE_STATUS_WITHDRAWN
+        db.commit()
+        db.refresh(obj)
+        return ChangeService._to_item(obj)
+
+    @staticmethod
+    def resubmit(db: Session, change_id: int, req: ChangeRequestCreate, operator: SysUser) -> ChangeRequestResponse:
+        """被驳回的变更申请：申请人修改后复用同一条记录重新提交（已驳回(4) -> 待审核(0)）。"""
+        obj = ChangeCRUD.get_by_id(db, change_id)
+        if not obj:
+            raise ResourceNotFoundException(message="申请不存在")
+        if not is_super_admin(operator) and obj.applicant_id != operator.id:
+            raise PermissionDeniedException(message="仅申请人可重新提交变更申请")
+        if obj.status != CHANGE_STATUS_REJECTED:
+            raise ParamValidateException(message="仅『已驳回』的变更申请可修改后重新提交")
+        if req.project_id != obj.project_id:
+            raise ParamValidateException(message="项目不一致，无法重新提交")
+        project = ProjectCRUD.get_by_id(db, obj.project_id)
+        from app.services.project_service import ProjectService
+        if not project or project.status not in ProjectService.CHANGE_WINDOW_STATUSES:
+            raise ParamValidateException(message="当前项目阶段不可提交变更/延期申请")
+        if ProjectService.is_past_deadline(ProjectService.get_change_deadline(db, project)):
+            raise ParamValidateException(message="已超过当前阶段的审核日，项目已锁定，无法重新提交变更/延期申请")
+        # 分阶段配额：当前阶段若已被其他申请占用名额，则不允许改后重提
+        other_same_stage = db.query(func.count(ProjChangeRequest.id)).filter(
+            ProjChangeRequest.project_id == project.id,
+            ProjChangeRequest.id != obj.id,
+            ProjChangeRequest.is_deleted == 0,
+            ProjChangeRequest.status.notin_([CHANGE_STATUS_EXPIRED]),
+            ProjChangeRequest.project_status_at_submit == project.status,
+        ).scalar() or 0
+        if other_same_stage >= 1:
+            raise ParamValidateException(message="当前阶段已提交过变更/延期申请（每阶段限 1 次）")
+        obj.change_type = req.change_type
+        obj.change_reason = req.change_reason
+        obj.original_content = req.original_content
+        obj.new_content = req.new_content
+        obj.status = CHANGE_STATUS_PENDING
+        obj.reject_reason = None
+        obj.submit_time = datetime.now()
+        # 改后重提占用「当前阶段」名额（原记录所属阶段随之更新）
+        obj.project_status_at_submit = project.status
         db.commit()
         db.refresh(obj)
         return ChangeService._to_item(obj)

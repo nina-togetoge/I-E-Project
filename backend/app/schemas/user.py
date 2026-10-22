@@ -98,6 +98,12 @@ class UserBase(BaseModel):
     avatar: Optional[str] = Field(default=None, description="头像URL或base64")
     status: int = Field(default=1, ge=0, le=1, description="状态 0-禁用 1-启用")
 
+    @field_validator("email", "phone", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v):
+        """前端表单留空时传空串，需归一为 None，否则会触发格式校验 422"""
+        return None if isinstance(v, str) and v.strip() == "" else v
+
 
 class UserCreate(UserBase):
     """创建用户请求 — 初始密码强制6位纯数字"""
@@ -117,6 +123,11 @@ class UserUpdate(BaseModel):
     status: Optional[int] = Field(default=None, ge=0, le=1)
     password: Optional[str] = Field(default=None, pattern=PASSWORD_PATTERN, min_length=6, max_length=6, description="非空则重置密码（6位纯数字）")
 
+    @field_validator("email", "phone", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v):
+        return None if isinstance(v, str) and v.strip() == "" else v
+
 
 class UserProfileUpdate(BaseModel):
     """用户自助更新个人信息
@@ -128,6 +139,11 @@ class UserProfileUpdate(BaseModel):
     avatar: Optional[str] = Field(default=None, description="头像URL或base64")
     old_password: Optional[str] = Field(default=None, pattern=PASSWORD_PATTERN, min_length=6, max_length=6, description="修改密码时需提供原密码（6位纯数字）")
     new_password: Optional[str] = Field(default=None, pattern=PASSWORD_PATTERN, min_length=6, max_length=6, description="新密码（6位纯数字）")
+
+    @field_validator("email", "phone", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v):
+        return None if isinstance(v, str) and v.strip() == "" else v
 
     @field_validator("new_password")
     @classmethod
@@ -150,6 +166,7 @@ class UserInfo(BaseModel):
     role_name: str = ""  # 由业务层赋值
     college_id: Optional[int]
     college_name: Optional[str] = None  # 关联查询后赋值
+    grade: Optional[str] = None  # 年级（仅学生有值，如 2023）
     school_name: str = ""  # 学校名称（系统管理员无学院时显示）
     avatar: Optional[str]
     status: int
@@ -177,6 +194,7 @@ class UserSafeListItem(BaseModel):
     role_name: str = ""
     college_id: Optional[int]
     college_name: Optional[str] = None
+    grade: Optional[str] = None  # 年级（选团队成员时用于自动填充）
     avatar: Optional[str]
 
 
@@ -225,6 +243,11 @@ class OperationLogQueryParams(BaseModel):
     user_id: Optional[int] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    # 高级筛选（前端多选，逗号分隔）
+    modules: Optional[str] = Field(default=None, description="模块名多选，逗号分隔")
+    operation_types: Optional[str] = Field(default=None, description="操作类型多选，逗号分隔")
+    user_roles: Optional[str] = Field(default=None, description="操作人角色多选，逗号分隔")
+    statuses: Optional[str] = Field(default=None, description="结果多选(success/fail)，逗号分隔")
 
 
 class OperationLogItem(BaseModel):

@@ -1,12 +1,28 @@
 <!--
-  数据统计看板（管理员端）
-  ECharts 多维度图表：申报趋势折线图、学院立项率柱状图、类别饼图、经费仪表盘
-  支持时间/学院/类别筛选，一键导出Excel
+  数据统计看板（管理员端）—— 深色「数据大屏」风格
+  ECharts 多维度图表：申报趋势、学院立项率、雷达图、经费分布、类别/状态分布、经费仪表盘、桑基图、热力图
+  支持时间/学院/类别筛选，一键导出 Excel
 -->
 <template>
-  <div class="page-container">
+  <div class="big-screen">
+    <!-- 顶部：标题 + 时钟 + 导出 -->
+    <div class="screen-header">
+      <div class="screen-title">
+        <span class="title-bar"></span>
+        <span class="title-text">创新创业项目 · 数据大屏</span>
+        <span class="title-sub">Data Overview</span>
+      </div>
+      <div class="screen-tools">
+        <div class="screen-clock">
+          <span class="clock-date">{{ nowDate }}</span>
+          <span class="clock-time">{{ nowTime }}</span>
+        </div>
+        <el-button type="primary" :icon="Download" @click="handleExport">导出 Excel</el-button>
+      </div>
+    </div>
+
     <!-- 筛选栏 -->
-    <el-card shadow="never" class="filter-card">
+    <div class="filter-bar">
       <el-form :inline="true" :model="filterForm">
         <el-form-item label="时间范围">
           <el-date-picker
@@ -14,9 +30,10 @@
             type="daterange"
             start-placeholder="开始日期"
             end-placeholder="结束日期"
+            range-separator="至"
             format="YYYY-MM-DD"
             value-format="YYYY-MM-DD"
-            style="width: 240px"
+            style="width: 260px"
           />
         </el-form-item>
         <el-form-item label="学院">
@@ -39,106 +56,103 @@
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :icon="Search" @click="loadData">查询</el-button>
-          <el-button :icon="Download" @click="handleExport">导出 Excel</el-button>
         </el-form-item>
       </el-form>
-    </el-card>
+    </div>
 
     <!-- 核心指标卡片 -->
-    <el-row :gutter="20" class="stat-row">
-      <el-col :span="6" v-for="card in statCards" :key="card.label">
-        <el-card shadow="hover">
-          <div class="stat-card">
-            <div class="stat-icon" :style="{ background: card.color }">
-              <el-icon :size="28"><component :is="card.icon" /></el-icon>
-            </div>
-            <div class="stat-info">
-              <p class="stat-value"><CountNumber :value="card.value" /></p>
-              <p class="stat-label">{{ card.label }}</p>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
+    <div class="kpi-row">
+      <div v-for="card in statCards" :key="card.label" class="kpi-card">
+        <div class="kpi-icon" :style="{ background: `linear-gradient(135deg, ${card.from}, ${card.to})` }">
+          <el-icon :size="26"><component :is="card.icon" /></el-icon>
+        </div>
+        <div class="kpi-info">
+          <p class="kpi-label">{{ card.label }}</p>
+          <p class="kpi-value"><CountNumber :value="card.value" /></p>
+        </div>
+        <span class="kpi-deco"></span>
+      </div>
+    </div>
 
-    <!-- 图表区 第1行：趋势图 + 学院图 -->
+    <!-- 图表区 第1行：趋势 + 学院 -->
     <el-row :gutter="20">
       <el-col :span="12">
-        <el-card shadow="never">
-          <template #header><span>年度申报趋势</span></template>
-          <EChart :option="trendOption" height="350px" />
-        </el-card>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">年度申报趋势</span></div>
+          <EChart :option="trendOption" height="300px" />
+        </div>
       </el-col>
       <el-col :span="12">
-        <el-card shadow="never">
-          <template #header><span>各学院立项率</span></template>
-          <EChart :option="collegeOption" height="350px" />
-        </el-card>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">各学院立项率</span></div>
+          <EChart :option="collegeOption" height="300px" />
+        </div>
       </el-col>
     </el-row>
 
-    <!-- 图表区 新增行：U6雷达图 + U8图表下钻占位 -->
-    <el-row :gutter="20" style="margin-top: 20px;">
+    <!-- 图表区 第2行：雷达 + 经费分布 -->
+    <el-row :gutter="20">
       <el-col :span="12">
-        <el-card shadow="never">
-          <template #header><span>学院5维能力雷达图</span></template>
-          <EChart :option="radarOption" height="350px" />
-        </el-card>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">学院 5 维能力雷达图</span></div>
+          <EChart :option="radarOption" height="300px" />
+        </div>
       </el-col>
       <el-col :span="12">
-        <el-card shadow="never">
-          <template #header><span>项目经费使用分布</span></template>
-          <EChart :option="budgetDistOption" height="350px" />
-        </el-card>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">项目经费使用分布</span></div>
+          <EChart :option="budgetDistOption" height="300px" />
+        </div>
       </el-col>
     </el-row>
 
-    <!-- 图表区 第3行：类别+预算+状态 -->
-    <el-row :gutter="20" style="margin-top: 20px;">
+    <!-- 图表区 第3行：类别 + 经费仪表盘 + 状态 -->
+    <el-row :gutter="20">
       <el-col :span="8">
-        <el-card shadow="never">
-          <template #header><span>项目类别分布</span></template>
-          <EChart :option="categoryOption" :clickable="true" @click="handleChartDrill" height="300px" />
-        </el-card>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">项目类别分布</span></div>
+          <EChart :option="categoryOption" :clickable="true" @click="handleChartDrill" height="280px" />
+        </div>
       </el-col>
       <el-col :span="8">
-        <el-card shadow="never">
-          <template #header><span>经费使用率</span></template>
-          <EChart :option="budgetOption" height="300px" />
-        </el-card>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">经费使用率</span></div>
+          <EChart :option="budgetOption" height="280px" />
+        </div>
       </el-col>
       <el-col :span="8">
-        <el-card shadow="never">
-          <template #header><span>项目状态分布</span></template>
-          <EChart :option="statusOption" :clickable="true" @click="handleChartDrill" height="300px" />
-        </el-card>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">项目状态分布</span></div>
+          <EChart :option="statusOption" :clickable="true" @click="handleChartDrill" height="280px" />
+        </div>
       </el-col>
     </el-row>
 
-    <!-- 图表区 新增行：U5桑基图 -->
-    <el-row :gutter="20" style="margin-top: 20px;">
+    <!-- 图表区 第4行：桑基图 -->
+    <el-row :gutter="20">
       <el-col :span="24">
-        <el-card shadow="never">
-          <template #header><span>项目全流程转化漏斗（桑基图）</span></template>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">项目全流程转化漏斗（桑基图）</span></div>
           <EChart :option="sankeyOption" height="420px" />
-        </el-card>
+        </div>
       </el-col>
     </el-row>
 
-    <!-- 图表区 新增行：F17学院综合实力热力图 -->
-    <el-row :gutter="20" style="margin-top: 20px;">
+    <!-- 图表区 第5行：热力图 -->
+    <el-row :gutter="20">
       <el-col :span="24">
-        <el-card shadow="never">
-          <template #header><span>学院综合实力热力图</span></template>
+        <div class="panel">
+          <div class="panel-head"><span class="panel-title">学院综合实力热力图</span></div>
           <EChart :option="heatmapOption" height="480px" />
-        </el-card>
+        </div>
       </el-col>
     </el-row>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, computed } from 'vue'
+import * as echarts from 'echarts'
 import type { EChartsOption } from 'echarts'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -155,6 +169,39 @@ import { useUserStore } from '@/store/user'
 const router = useRouter()
 const appearanceStore = useAppearanceStore()
 const userStore = useUserStore()
+
+// ==================== 深色主题常量 ====================
+const PALETTE = ['#22d3ee', '#3b82f6', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#f87171', '#38bdf8', '#4ade80', '#fb923c']
+const TEXT_MAIN = '#1e293b'
+const TEXT_LABEL = '#64748b'
+const AXIS_LINE = 'rgba(100,116,139,0.3)'
+const SPLIT_LINE = 'rgba(148,163,184,0.2)'
+const TOOLTIP = {
+  backgroundColor: 'rgba(30,41,59,0.9)',
+  borderColor: 'rgba(59,130,246,0.4)',
+  textStyle: { color: '#f1f5f9' },
+}
+
+function linearGradient(from: string, to: string, dir: 'v' | 'h' = 'v') {
+  return new echarts.graphic.LinearGradient(0, 0, dir === 'h' ? 1 : 0, dir === 'v' ? 1 : 0, [
+    { offset: 0, color: from },
+    { offset: 1, color: to },
+  ])
+}
+
+// ==================== 时钟 ====================
+const nowDate = ref('')
+const nowTime = ref('')
+let clockTimer: number
+function updateClock() {
+  const n = new Date()
+  const days = ['日', '一', '二', '三', '四', '五', '六']
+  nowDate.value = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')} 星期${days[n.getDay()]}`
+  nowTime.value = `${String(n.getHours()).padStart(2, '0')}:${String(n.getMinutes()).padStart(2, '0')}:${String(n.getSeconds()).padStart(2, '0')}`
+}
+updateClock()
+clockTimer = window.setInterval(updateClock, 1000)
+onBeforeUnmount(() => clearInterval(clockTimer))
 
 // ==================== 筛选 ====================
 const filterForm = reactive({
@@ -176,43 +223,60 @@ const stats = ref({
   approval_rate: 0,
 })
 
-// 趋势数据（单独接口）
 const trendData = ref<{ period: string; apply_count: number; approved_count: number }[]>([])
-
-// 各学院统计数据（雷达图/热力图/学院立项率）
 const collegeStats = ref<any[]>([])
-
-// 后端返回的真实分布数据
 const categoryDist = ref<{ name: string; value: number }[]>([])
 const statusDist = ref<{ name: string; value: number; status: number }[]>([])
 const budgetByCategory = ref<{ name: string; amount: number }[]>([])
 
 const statCards = computed(() => [
-  { label: '申报总数', value: stats.value.total_projects, icon: Files, color: '#409EFF' },
-  { label: '待审核', value: stats.value.pending_review, icon: Document, color: '#E6A23C' },
-  { label: '已立项', value: stats.value.approved_projects, icon: Box, color: '#67C23A' },
-  { label: '经费总额(¥)', value: Number(stats.value.total_budget || 0).toLocaleString(), icon: Wallet, color: '#F56C6C' },
+  { label: '申报总数', value: stats.value.total_projects, icon: Files, from: '#3b82f6', to: '#22d3ee' },
+  { label: '待审核', value: stats.value.pending_review, icon: Document, from: '#f59e0b', to: '#fbbf24' },
+  { label: '已立项', value: stats.value.approved_projects, icon: Box, from: '#22c55e', to: '#4ade80' },
+  { label: '经费总额(¥)', value: Number(stats.value.total_budget || 0).toLocaleString(), icon: Wallet, from: '#ef4444', to: '#f472b6' },
 ])
 
 // ==================== 图表配置 ====================
 const trendOption = computed((): EChartsOption => ({
-  tooltip: { trigger: 'axis' },
-  xAxis: { type: 'category', data: (trendData.value || []).map((d) => d.period) },
-  yAxis: { type: 'value' },
+  tooltip: { ...TOOLTIP, trigger: 'axis' },
+  legend: { top: 0, textStyle: { color: TEXT_LABEL } },
+  grid: { left: '3%', right: '4%', bottom: '3%', top: 40, containLabel: true },
+  xAxis: {
+    type: 'category',
+    boundaryGap: false,
+    data: (trendData.value || []).map((d) => d.period),
+    axisLabel: { color: TEXT_LABEL },
+    axisLine: { lineStyle: { color: AXIS_LINE } },
+    axisTick: { show: false },
+  },
+  yAxis: {
+    type: 'value',
+    axisLabel: { color: TEXT_LABEL },
+    splitLine: { lineStyle: { color: SPLIT_LINE } },
+    axisLine: { show: false },
+  },
   series: [
     {
       name: '申报数',
       type: 'line',
       data: (trendData.value || []).map((d) => d.apply_count),
       smooth: true,
-      itemStyle: { color: '#409EFF' },
+      symbol: 'circle',
+      symbolSize: 6,
+      lineStyle: { width: 3, color: '#3b82f6', shadowColor: 'rgba(59,130,246,0.45)', shadowBlur: 6 },
+      itemStyle: { color: '#3b82f6', borderColor: '#fff', borderWidth: 1 },
+      areaStyle: { color: linearGradient('rgba(59,130,246,0.18)', 'rgba(59,130,246,0)') },
     },
     {
       name: '立项数',
       type: 'line',
       data: (trendData.value || []).map((d) => d.approved_count),
       smooth: true,
-      itemStyle: { color: '#67C23A' },
+      symbol: 'circle',
+      symbolSize: 6,
+      lineStyle: { width: 3, color: '#22c55e', shadowColor: 'rgba(34,197,94,0.45)', shadowBlur: 6 },
+      itemStyle: { color: '#22c55e', borderColor: '#fff', borderWidth: 1 },
+      areaStyle: { color: linearGradient('rgba(34,197,94,0.16)', 'rgba(34,197,94,0)') },
     },
   ],
 }))
@@ -220,19 +284,37 @@ const trendOption = computed((): EChartsOption => ({
 const collegeOption = computed((): EChartsOption => {
   const colleges = collegeStats.value || []
   return {
-    tooltip: { trigger: 'axis', formatter: '{b}: {c}%' },
-    xAxis: { type: 'category', data: colleges.map((c) => c.college_name), axisLabel: { rotate: 30, fontSize: 11 } },
-    yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%' } },
+    tooltip: { ...TOOLTIP, trigger: 'axis', formatter: '{b}: {c}%' },
+    grid: { left: '3%', right: '4%', bottom: '3%', top: 20, containLabel: true },
+    xAxis: {
+      type: 'category',
+      data: colleges.map((c) => c.college_name),
+      axisLabel: { color: TEXT_LABEL, rotate: 30, fontSize: 11 },
+      axisLine: { lineStyle: { color: AXIS_LINE } },
+      axisTick: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      max: 100,
+      axisLabel: { color: TEXT_LABEL, formatter: '{value}%' },
+      splitLine: { lineStyle: { color: SPLIT_LINE } },
+    },
     series: [{
       type: 'bar',
       data: colleges.map((c) => Math.round(c.approval_rate || 0)),
-      itemStyle: { color: '#67C23A' },
-      label: { show: true, position: 'top', formatter: '{c}%' },
+      barMaxWidth: 36,
+      itemStyle: {
+        color: linearGradient('rgba(34,211,238,0.95)', 'rgba(59,130,246,0.15)'),
+        borderRadius: [4, 4, 0, 0],
+        shadowColor: 'rgba(34,211,238,0.4)',
+        shadowBlur: 8,
+      },
+      label: { show: true, position: 'top', formatter: '{c}%', color: TEXT_MAIN },
     }],
   }
 })
 
-// U6 学院5维能力雷达图（真实数据：取项目数前5的学院）
+// U6 学院5维能力雷达图
 const radarOption = computed((): EChartsOption => {
   const themeColor = appearanceStore.themeColor
   const colors = [themeColor, '#67C23A', '#E6A23C', '#F56C6C', '#909399']
@@ -240,12 +322,11 @@ const radarOption = computed((): EChartsOption => {
     .sort((a, b) => b.total_projects - a.total_projects)
     .slice(0, 5)
   return {
-    tooltip: {},
-    legend: {
-      data: topColleges.map((c) => c.college_name),
-      bottom: 0,
-    },
+    tooltip: { ...TOOLTIP },
+    legend: { bottom: 0, textStyle: { color: TEXT_LABEL } },
     radar: {
+      radius: '62%',
+      splitNumber: 4,
       indicator: [
         { name: '申报数量', max: Math.max(10, ...topColleges.map((c) => c.total_projects || 0)) },
         { name: '立项率(%)', max: 100 },
@@ -253,11 +334,10 @@ const radarOption = computed((): EChartsOption => {
         { name: '经费(万)', max: Math.max(10, ...topColleges.map((c) => Number(c.total_budget || 0) / 10000)) },
         { name: '成果数', max: Math.max(1, ...topColleges.map((c) => c.achievements || 0)) },
       ],
-      splitArea: {
-        areaStyle: {
-          color: ['rgba(64,158,255,0.02)', 'rgba(64,158,255,0.05)'],
-        },
-      },
+      axisName: { color: TEXT_LABEL },
+      axisLine: { lineStyle: { color: AXIS_LINE } },
+      splitLine: { lineStyle: { color: AXIS_LINE } },
+      splitArea: { areaStyle: { color: ['rgba(59,130,246,0.03)', 'rgba(59,130,246,0.09)'] } },
     },
     series: [{
       type: 'radar',
@@ -271,73 +351,98 @@ const radarOption = computed((): EChartsOption => {
         ],
         name: c.college_name,
         itemStyle: { color: colors[i % colors.length] },
-        areaStyle: { opacity: 0.2 },
+        lineStyle: { width: 2 },
+        areaStyle: { opacity: 0.18 },
       })),
     }],
   }
 })
 
-// 经费使用分布图（真实数据：按预算科目汇总已使用金额）
+// 经费使用分布（按预算科目）
 const budgetDistOption = computed((): EChartsOption => {
   const items = budgetByCategory.value || []
-  const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#722ED1']
-  const periods = (trendData.value || []).map((d) => d.period)
+  const colors = PALETTE
   return {
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    legend: { data: items.map((i) => i.name), bottom: 0 },
-    xAxis: { type: 'category', data: periods.length ? periods : ['累计'] },
-    yAxis: { type: 'value', name: '金额(元)' },
-    series: items.map((item, idx) => ({
-      name: item.name,
+    tooltip: { ...TOOLTIP, trigger: 'axis', axisPointer: { type: 'shadow' } },
+    grid: { left: '3%', right: '8%', bottom: '3%', top: 10, containLabel: true },
+    xAxis: { type: 'value', axisLabel: { color: TEXT_LABEL }, splitLine: { lineStyle: { color: SPLIT_LINE } } },
+    yAxis: {
+      type: 'category',
+      data: items.map((i) => i.name),
+      axisLabel: { color: TEXT_MAIN },
+      axisLine: { lineStyle: { color: AXIS_LINE } },
+      axisTick: { show: false },
+    },
+    series: [{
       type: 'bar',
-      stack: 'total',
-      data: periods.length
-        ? periods.map(() => 0)
-        : [Math.round(item.amount || 0)],
-      itemStyle: { color: colors[idx % colors.length] },
-    })),
+      barWidth: 16,
+      data: items.map((i, idx) => ({
+        value: Math.round(i.amount || 0),
+        itemStyle: {
+          color: linearGradient(colors[idx % colors.length], 'rgba(59,130,246,0.08)', 'h'),
+          borderRadius: [0, 4, 4, 0],
+        },
+      })),
+      label: { show: true, position: 'right', color: TEXT_MAIN },
+    }],
   }
 })
 
 const categoryOption = computed((): EChartsOption => ({
-  tooltip: { trigger: 'item' },
-  legend: { bottom: 0 },
+  tooltip: { ...TOOLTIP, trigger: 'item' },
+  legend: { bottom: 0, textStyle: { color: TEXT_LABEL } },
+  color: PALETTE,
   series: [{
     type: 'pie',
-    radius: ['40%', '70%'],
+    radius: ['45%', '72%'],
+    center: ['50%', '46%'],
+    itemStyle: { borderRadius: 6, borderColor: '#ffffff', borderWidth: 2 },
+    label: { color: TEXT_MAIN, formatter: '{b}\n{d}%' },
+    labelLine: { lineStyle: { color: 'rgba(159,185,217,0.4)' } },
     data: (categoryDist.value || []).map((c) => ({ name: c.name, value: c.value })),
-    itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 2 },
-    label: { formatter: '{b}: {d}%' },
   }],
 }))
 
 const budgetOption = computed((): EChartsOption => ({
   series: [{
     type: 'gauge',
-    progress: { show: true, width: 18 },
-    axisLine: { lineStyle: { width: 18 } },
-    detail: { formatter: '{value}%', fontSize: 24, offsetCenter: [0, '70%'] },
-    data: [{ value: Math.round(stats.value.approval_rate || 0), name: '立项率' }],
+    startAngle: 210,
+    endAngle: -30,
+    min: 0,
+    max: 100,
+    radius: '100%',
+    axisLine: { lineStyle: { width: 14, color: [[1, 'rgba(59,130,246,0.15)']] } },
+    progress: { show: true, width: 14, itemStyle: { color: linearGradient('#22d3ee', '#3b82f6', 'h'), shadowColor: 'rgba(34,211,238,0.5)', shadowBlur: 10 } },
+    axisTick: { show: false },
+    splitLine: { length: 10, lineStyle: { width: 2, color: 'rgba(159,185,217,0.25)' } },
+    axisLabel: { distance: 22, color: TEXT_LABEL, fontSize: 10 },
+    pointer: { itemStyle: { color: '#22d3ee' } },
+    anchor: { show: true, itemStyle: { color: '#22d3ee' } },
+    detail: { valueAnimation: true, formatter: '{value}%', color: TEXT_MAIN, fontSize: 28, offsetCenter: [0, '70%'] },
+    title: { show: false },
+    data: [{ value: Math.round(stats.value.approval_rate || 0) }],
   }],
 }))
 
 const statusOption = computed((): EChartsOption => ({
-  tooltip: { trigger: 'item' },
-  legend: { type: 'scroll', bottom: 0 },
+  tooltip: { ...TOOLTIP, trigger: 'item' },
+  legend: { type: 'scroll', bottom: 0, textStyle: { color: TEXT_LABEL } },
+  color: PALETTE,
   series: [{
     type: 'pie',
-    radius: '60%',
+    radius: ['40%', '68%'],
+    center: ['50%', '46%'],
+    itemStyle: { borderRadius: 6, borderColor: '#ffffff', borderWidth: 2 },
+    label: { color: TEXT_MAIN, formatter: '{b}\n{d}%' },
+    labelLine: { lineStyle: { color: 'rgba(159,185,217,0.4)' } },
     data: (statusDist.value || []).map((s) => ({ name: s.name, value: s.value })),
-    itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
   }],
 }))
 
-// U5 桑基图（真实数据：按项目状态分布构建流转）
+// U5 桑基图
 const sankeyOption = computed((): EChartsOption => {
   const primary = appearanceStore.themeColor
   const statusData = statusDist.value || []
-  const total = statusData.reduce((sum, s) => sum + (s.value || 0), 0) || 1
-
   const statusColorMap: Record<number, string> = {
     0: '#909399', 12: '#E6A23C', 1: '#F56C6C', 2: '#409EFF',
     3: '#E6A23C', 4: '#409EFF', 5: '#9B59B6', 6: '#67C23A',
@@ -359,20 +464,20 @@ const sankeyOption = computed((): EChartsOption => {
   }))
 
   return {
-    tooltip: { trigger: 'item', triggerOn: 'mousemove' },
+    tooltip: { ...TOOLTIP, trigger: 'item', triggerOn: 'mousemove' },
     series: [{
       type: 'sankey',
       emphasis: { focus: 'adjacency' },
       nodeAlign: 'left',
       data: nodes,
       links: links,
-      lineStyle: { color: 'gradient' as any, curveness: 0.5, opacity: 0.6 },
-      label: { color: 'inherit' },
+      lineStyle: { color: 'gradient' as any, curveness: 0.5, opacity: 0.5 },
+      label: { color: TEXT_MAIN },
     }],
   }
 })
 
-// F17 学院综合实力热力图（真实数据）
+// F17 学院综合实力热力图
 const heatmapOption = computed((): EChartsOption => {
   const colleges = (collegeStats.value || []).map((c) => c.college_name)
   const dimensions = ['申报数', '立项数', '结题数', '经费(万)', '成果数', '平均评分']
@@ -390,39 +495,24 @@ const heatmapOption = computed((): EChartsOption => {
       data.push([xIdx, yIdx, row[xIdx]])
     })
   })
-  // 计算各维度最大值用于归一化显示（热力图颜色）
-  const dimMax = dimensions.map((_, xIdx) =>
-    Math.max(1, ...(collegeStats.value || []).map((c) => {
-      const vals = [c.total_projects, c.approved_projects, c.finished_projects,
-        Math.round(Number(c.total_budget || 0) / 10000), c.achievements, Math.round(c.avg_score || 0)]
-      return vals[xIdx] || 0
-    }))
-  )
   return {
     tooltip: {
+      ...TOOLTIP,
       position: 'top',
-      formatter: (params: any) => {
-        const yIdx = params.value[1]
-        const xIdx = params.value[0]
-        return `${colleges[yIdx]}<br/>${dimensions[xIdx]}: ${params.value[2]}`
-      }
+      formatter: (params: any) => `${colleges[params.value[1]]}<br/>${dimensions[params.value[0]]}: ${params.value[2]}`,
     },
-    grid: {
-      left: '18%',
-      right: '10%',
-      top: '8%',
-      bottom: '15%'
-    },
+    grid: { left: '18%', right: '8%', top: '8%', bottom: '16%' },
     xAxis: {
       type: 'category',
       data: dimensions,
-      splitArea: { show: true },
-      axisLabel: { interval: 0, rotate: 0 }
+      axisLabel: { color: TEXT_MAIN },
+      axisLine: { lineStyle: { color: AXIS_LINE } },
     },
     yAxis: {
       type: 'category',
       data: colleges,
-      splitArea: { show: true }
+      axisLabel: { color: TEXT_MAIN },
+      axisLine: { lineStyle: { color: AXIS_LINE } },
     },
     visualMap: {
       min: 0,
@@ -430,27 +520,18 @@ const heatmapOption = computed((): EChartsOption => {
       calculable: true,
       orient: 'horizontal',
       left: 'center',
-      bottom: '0%',
-      inRange: {
-        color: ['#e0f3ff', '#91ccf5', '#409EFF', '#1d6dd8', '#c23531']
-      }
+      bottom: 4,
+      textStyle: { color: TEXT_LABEL },
+      inRange: { color: ['#0b2a5b', '#13408f', '#1f6feb', '#22c55e', '#f59e0b', '#ef4444'] },
     },
     series: [{
       name: '综合实力',
       type: 'heatmap',
       data: data,
-      label: {
-        show: true,
-        color: '#000',
-        fontSize: 12
-      },
-      emphasis: {
-        itemStyle: {
-          shadowBlur: 10,
-          shadowColor: 'rgba(0, 0, 0, 0.5)'
-        }
-      }
-    }]
+      label: { show: true, color: '#fff', fontSize: 12 },
+      itemStyle: { borderColor: 'rgba(255,255,255,0.9)', borderWidth: 2 },
+      emphasis: { itemStyle: { shadowBlur: 12, shadowColor: 'rgba(34,211,238,0.6)' } },
+    }],
   }
 })
 
@@ -492,7 +573,6 @@ async function loadData() {
     stats.value = statsRes.data
     trendData.value = (trendRes.data || []) as any[]
     collegeStats.value = (collegeRes.data || []) as any[]
-    // 真实分布数据
     categoryDist.value = statsRes.data.category_dist || []
     statusDist.value = statsRes.data.status_dist || []
     budgetByCategory.value = statsRes.data.budget_by_category || []
@@ -544,10 +624,185 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.filter-card { margin-bottom: 16px; }
-.stat-row { margin-bottom: 20px; }
-.stat-card { display: flex; align-items: center; gap: 16px; }
-.stat-icon { width: 56px; height: 56px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #fff; }
-.stat-value { font-size: 24px; font-weight: 600; color: #303133; }
-.stat-label { font-size: 13px; color: #909399; margin-top: 4px; }
+.big-screen {
+  position: relative;
+  min-height: calc(100vh - 120px);
+  padding: 24px 24px 32px;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 85% 10%, rgba(59, 130, 246, 0.10), transparent 45%),
+    radial-gradient(circle at 10% 92%, rgba(34, 211, 238, 0.10), transparent 40%),
+    linear-gradient(160deg, #eef4ff 0%, #e7f0ff 45%, #ecf3ff 100%);
+  box-shadow: 0 0 0 1px rgba(120, 170, 255, 0.20), 0 20px 50px rgba(15, 40, 90, 0.10);
+  overflow: hidden;
+}
+
+/* 顶部 */
+.screen-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.screen-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.title-bar {
+  width: 6px;
+  height: 28px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #22d3ee, #3b82f6);
+  box-shadow: 0 0 12px rgba(34, 211, 238, 0.8);
+}
+.title-text {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  background: linear-gradient(90deg, #22d3ee, #3b82f6, #22d3ee);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.title-sub {
+  font-size: 12px;
+  letter-spacing: 3px;
+  color: #64748b;
+  text-transform: uppercase;
+}
+.screen-tools {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.screen-clock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+.clock-time {
+  font-size: 26px;
+  font-weight: 700;
+  color: #0ea5e9;
+  letter-spacing: 1px;
+  text-shadow: 0 0 12px rgba(14, 165, 233, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+.clock-date {
+  font-size: 12px;
+  color: #64748b;
+}
+
+/* 筛选栏 */
+.filter-bar {
+  padding: 14px 18px 2px;
+  margin-bottom: 20px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(120, 170, 255, 0.28);
+  backdrop-filter: blur(6px);
+}
+
+/* KPI 卡片 */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.kpi-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 20px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.80);
+  border: 1px solid rgba(120, 170, 255, 0.28);
+  overflow: hidden;
+  transition: transform 0.25s, box-shadow 0.25s;
+}
+.kpi-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(34, 211, 238, 0.18);
+}
+.kpi-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+  box-shadow: 0 6px 16px rgba(15, 40, 90, 0.15);
+}
+.kpi-info {
+  min-width: 0;
+}
+.kpi-label {
+  font-size: 13px;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+.kpi-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: #1e293b;
+  letter-spacing: 0.5px;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-deco {
+  position: absolute;
+  right: -30px;
+  bottom: -30px;
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(34, 211, 238, 0.12), transparent 70%);
+  pointer-events: none;
+}
+
+/* 图表面板 */
+.el-row {
+  margin-bottom: 20px;
+}
+.panel {
+  position: relative;
+  padding: 14px 16px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(120, 170, 255, 0.28);
+  box-shadow: 0 4px 16px rgba(15, 40, 90, 0.06);
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.panel-title {
+  position: relative;
+  padding-left: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1e293b;
+}
+.panel-title::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #22d3ee, #3b82f6);
+  box-shadow: 0 0 8px rgba(34, 211, 238, 0.8);
+}
+
+/* 筛选栏文字（浅色主题） */
+.big-screen :deep(.el-form-item__label) { color: #475569; }
 </style>

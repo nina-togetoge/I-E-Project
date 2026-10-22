@@ -1,7 +1,7 @@
 /**
  * 系统公告接口
  */
-import { get, post, put, del, patch } from '@/utils/request'
+import { get, post, put, del } from '@/utils/request'
 import type { PageResult } from '@/utils/request'
 
 /** 公告列表项 */
@@ -67,9 +67,4 @@ export function updateAnnouncement(id: number, data: Partial<AnnouncementForm>) 
 /** 删除公告 */
 export function deleteAnnouncement(id: number) {
   return del(`/api/announcements/${id}`)
-}
-
-/** 修改公告状态 */
-export function updateAnnouncementStatus(id: number, status: number) {
-  return patch<AnnouncementDetail>(`/api/announcements/${id}/status`, { status })
 }

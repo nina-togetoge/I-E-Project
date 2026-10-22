@@ -59,10 +59,8 @@ services:
       #   env_file 会从 backend/.env 注入：DB_PASSWORD / REDIS_PASSWORD / JWT_SECRET_KEY
       # ---- 文件上传 ----
       UPLOAD_DIR: "static/uploads"
-      MAX_UPLOAD_SIZE: "52428800"
+      MAX_UPLOAD_SIZE: "209715200"
       ALLOWED_EXTENSIONS: ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.zip,.rar"
-      # ---- 全文检索 ----
-      WHOOSH_INDEX_DIR: "static/whoosh_index"
       # ---- 火山引擎 Ark (豆包) AI ----
       # ARK_API_KEY 不在此硬编码，统一从 backend/.env 注入（避免密钥进入版本库）
       ARK_MODEL_ID: "doubao-seed-2-0-lite-260428"
@@ -77,8 +75,6 @@ services:
       - ./backend/main.py:/app/main.py
       # 附件持久化
       - app_uploads:/app/static/uploads
-      # 索引持久化
-      - app_index:/app/static/whoosh_index
     extra_hosts:
       # 确保容器内可以解析 host.docker.internal（访问宿主机 MySQL / Redis）
       - "host.docker.internal:host-gateway"
@@ -156,8 +152,6 @@ services:
 # ============================================================
 volumes:
   app_uploads:
-    driver: local
-  app_index:
     driver: local
   # 前端 dev 模式：容器内 node_modules 持久化缓存（重装/重启容器不丢依赖）
   frontend_node_modules:

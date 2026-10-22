@@ -8,7 +8,6 @@ __pycache__/
 .env
 *.md
 static/uploads/*
-static/whoosh_index/*
 alembic/versions/*
 Dockerfile
 docker-compose.yml

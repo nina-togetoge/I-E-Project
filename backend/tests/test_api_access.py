@@ -1,7 +1,7 @@
 """API 层行为测试（FastAPI TestClient）。
 
 断言针对响应体的业务 ``code``：全局异常处理器把业务/校验异常包装为 HTTP 200 + code。
-覆盖：搜索草稿隔离、附件下载/预览/列表/上传权限、自助改密旁路、邮箱校验、
+覆盖：附件下载/预览/列表/上传权限、自助改密旁路、邮箱校验、
      通用审核 expert 阶段旁路修复、审核流程可见性、中期/变更负责人校验、结项-专家验收状态流转。
 """
 import os
@@ -13,33 +13,7 @@ from app.core.config import settings
 
 
 # ====================================================================
-# 1. 全文检索：匿名 401；登录后不含草稿
-# ====================================================================
-def test_search_projects_anonymous_401_and_hides_drafts(client, seed, auth_headers):
-    college = seed.college()
-    leader = seed.user(1, college.id)
-    draft = seed.project(college.id, leader.id, status=0, name="量子计算检索关键字Draft")
-    submitted = seed.project(college.id, leader.id, status=1, name="量子计算检索关键字Sub")
-
-    # 匿名：未登录
-    r = client.get("/api/search/projects", params={"keyword": "量子计算检索关键字"})
-    assert r.status_code == 200
-    assert r.json()["code"] == 401
-
-    # 登录：结果不含草稿
-    r = client.get("/api/search/projects", params={"keyword": "量子计算检索关键字"},
-                   headers=auth_headers(leader))
-    body = r.json()
-    assert body["code"] == 200
-    items = body["data"]["items"]
-    ids = {it["project_id"] for it in items}
-    assert submitted.id in ids
-    assert draft.id not in ids
-    assert all(it["status_name"] != "草稿" for it in items)
-
-
-# ====================================================================
-# 2. 附件下载/预览：无关用户 403，负责人 200
+# 1. 附件下载/预览：无关用户 403，负责人 200
 # ====================================================================
 def test_attachment_download_and_preview_permission(client, seed, auth_headers, tmp_path):
     college = seed.college()
@@ -240,3 +214,51 @@ def test_submit_final_keeps_status_then_expert_finalizes(client, seed, auth_head
                     headers=auth_headers(expert))
     assert r.json()["code"] == 200
     assert seed.reload(M.ProjProject, project.id).status == 9
+
+
+# ====================================================================
+# 12. 附件删除：非上传者 403；上传者 200 且软删除后不可下载
+# ====================================================================
+def test_attachment_delete_permission_and_soft_delete(client, seed, auth_headers, tmp_path):
+    college = seed.college()
+    leader = seed.user(1, college.id)
+    outsider = seed.user(1, college.id)
+    project = seed.project(college.id, leader.id, status=0)  # 草稿，可编辑
+
+    f = tmp_path / "report.pdf"
+    f.write_bytes(b"%PDF-1.4 test content")
+    att = seed.attachment("project", project.id, uploader_id=leader.id, file_path=str(f))
+
+    # 非上传者：拒绝
+    r = client.delete(f"/api/files/{att.id}", headers=auth_headers(outsider))
+    assert r.json()["code"] == 403
+
+    # 上传者：成功
+    r = client.delete(f"/api/files/{att.id}", headers=auth_headers(leader))
+    body = r.json()
+    assert body["code"] == 200
+    assert body["data"]["id"] == att.id
+
+    # 软删除后：不可下载/预览
+    r = client.get(f"/api/files/download/{att.id}", headers=auth_headers(leader))
+    assert r.json()["code"] == 404
+
+
+# ====================================================================
+# 13. 附件删除：项目处于不可编辑状态时被拦截
+# ====================================================================
+def test_attachment_delete_blocked_when_project_not_editable(client, seed, auth_headers, tmp_path):
+    college = seed.college()
+    leader = seed.user(1, college.id)
+    project = seed.project(college.id, leader.id, status=1)  # 待学院初审，不可编辑
+
+    f = tmp_path / "report.pdf"
+    f.write_bytes(b"%PDF-1.4 test content")
+    att = seed.attachment("project", project.id, uploader_id=leader.id, file_path=str(f))
+
+    r = client.delete(f"/api/files/{att.id}", headers=auth_headers(leader))
+    body = r.json()
+    assert body["code"] != 200
+    assert "不可删除" in body["message"]
+    # 记录未被软删除
+    assert seed.reload(M.SysAttachment, att.id).is_deleted == 0

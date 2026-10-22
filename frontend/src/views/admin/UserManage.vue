@@ -50,6 +50,12 @@
       <el-button type="warning" :icon="Delete" :disabled="selection.length === 0" @click="handleBatchDelete">
         批量删除
       </el-button>
+      <el-button type="success" :icon="Check" :disabled="selection.length === 0" @click="handleBatchStatus(1)">
+        批量启用
+      </el-button>
+      <el-button type="info" :icon="Close" :disabled="selection.length === 0" @click="handleBatchStatus(0)">
+        批量禁用
+      </el-button>
     </div>
 
     <!-- 表格 -->
@@ -230,13 +236,13 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules, type UploadUserFile } from 'element-plus'
-import { Search, Refresh, Plus, Upload, Download, Delete } from '@element-plus/icons-vue'
+import { Search, Refresh, Plus, Upload, Download, Delete, Check, Close } from '@element-plus/icons-vue'
 import PaginationTable from '@/components/PaginationTable.vue'
 import EmptyIllustration from '@/components/EmptyIllustration.vue'
 import PasswordStrength from '@/components/PasswordStrength.vue'
 import type { TableColumn } from '@/components/PaginationTable.vue'
 import {
-  getUserList, createUser, updateUser, deleteUser
+  getUserList, createUser, updateUser, deleteUser, batchUpdateUserStatus
 } from '@/api/user'
 import { getColleges } from '@/api/auth'
 import { ROLE_LABELS, ROLES } from '@/api/types'
@@ -435,18 +441,37 @@ async function handleSubmit() {
 }
 
 async function handleDelete(row: any) {
-  await ElMessageBox.confirm(`确定删除用户「${row.real_name}」吗？`, '提示', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm(`确定删除用户「${row.real_name}」吗？`, '提示', { type: 'warning' })
+  } catch { return }
   await deleteUser(row.id)
   ElMessage.success('删除成功')
   loadData()
 }
 
 async function handleBatchDelete() {
-  await ElMessageBox.confirm(`确定删除选中的 ${selection.value.length} 个用户吗？`, '提示', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm(`确定删除选中的 ${selection.value.length} 个用户吗？`, '提示', { type: 'warning' })
+  } catch { return }
   for (const user of selection.value) {
     await deleteUser(user.id)
   }
   ElMessage.success(`已删除 ${selection.value.length} 个用户`)
+  selection.value = []
+  loadData()
+}
+
+// 批量启用/禁用（后端 PATCH /api/users/batch/status）
+async function handleBatchStatus(status: number) {
+  const n = selection.value.length
+  if (n === 0) return
+  const action = status === 1 ? '启用' : '禁用'
+  try {
+    await ElMessageBox.confirm(`确定${action}选中的 ${n} 个用户吗？`, '提示', { type: 'warning' })
+  } catch { return }
+  const res: any = await batchUpdateUserStatus(selection.value.map((u: any) => u.id), status)
+  ElMessage.success(`已${action} ${res?.data?.updated_count ?? n} 个用户`)
+  selection.value = []
   loadData()
 }
 

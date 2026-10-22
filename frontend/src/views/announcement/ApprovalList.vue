@@ -71,9 +71,9 @@
             {{ Number(row.budget_amount || 0).toLocaleString() }}
           </template>
         </el-table-column>
-        <el-table-column prop="submit_time" label="立项时间" width="170">
+        <el-table-column prop="approval_time" label="立项时间" width="170">
           <template #default="{ row }">
-            {{ formatDate(row.submit_time) }}
+            {{ formatDate(row.approval_time) }}
           </template>
         </el-table-column>
       </el-table>
@@ -173,7 +173,7 @@ function formatDate(s: string | null) {
 onMounted(async () => {
   initYears()
   try {
-    colleges.value = (await getColleges()) || []
+    colleges.value = (await getColleges()).data || []
   } catch {}
   loadData()
 })

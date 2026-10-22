@@ -36,6 +36,9 @@
                 <el-form-item label="用户名">
                   <el-input :value="userStore.userInfo?.username" disabled />
                 </el-form-item>
+                <el-form-item v-if="userStore.isStudent" label="年级">
+                  <el-input :value="userStore.userInfo?.grade || '—'" disabled />
+                </el-form-item>
                 <el-form-item label="姓名" prop="real_name">
                   <el-input v-model="infoForm.real_name" maxlength="64" show-word-limit />
                 </el-form-item>
@@ -105,7 +108,7 @@ async function handleAvatarSuccess(dataUrl: string) {
   // 先更新前端展示，保证即时反馈
   if (userStore.userInfo) {
     userStore.userInfo.avatar = dataUrl
-    localStorage.setItem('user_info', JSON.stringify(userStore.userInfo))
+    sessionStorage.setItem('user_info', JSON.stringify(userStore.userInfo))
   }
   try {
     await patch('/api/users/me/profile', { avatar: dataUrl })

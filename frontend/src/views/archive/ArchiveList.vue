@@ -38,7 +38,8 @@
           <el-select v-model="searchForm.project_level" placeholder="全部级别" clearable style="width: 140px">
             <el-option label="院级" :value="1" />
             <el-option label="校级" :value="2" />
-            <el-option label="省部级" :value="3" />
+            <el-option label="省级" :value="3" />
+            <el-option label="国家级" :value="4" />
           </el-select>
         </el-form-item>
         <el-form-item label="获奖情况">
@@ -136,7 +137,6 @@ const searchForm = reactive({
 })
 
 const rawData = ref<any[]>([])
-const tableData = ref<any[]>([])
 const total = ref(0)
 const loading = ref(false)
 const page = ref(1)
@@ -162,11 +162,11 @@ function projectTypeLabel(t: number): string {
 }
 
 function projectLevelLabel(l: number): string {
-  return { 1: '院级', 2: '校级', 3: '省部级' }[l] || '-'
+  return { 1: '院级', 2: '校级', 3: '省级', 4: '国家级' }[l] || '-'
 }
 
 function levelTagType(l: number): string {
-  return { 1: 'info', 2: '', 3: 'success' }[l] || 'info'
+  return { 1: 'info', 2: '', 3: 'success', 4: 'danger' }[l] || 'info'
 }
 
 function projectYearOf(d: any): number {
@@ -240,9 +240,9 @@ const displayTotal = computed(() => {
 })
 
 const displayData = computed(() => {
-  if (!searched.value) return tableData.value
+  const source = searched.value ? filteredData.value : rawData.value
   const start = (page.value - 1) * pageSize.value
-  return filteredData.value.slice(start, start + pageSize.value)
+  return source.slice(start, start + pageSize.value)
 })
 
 const filterSummary = computed(() => {
@@ -269,10 +269,9 @@ async function loadData() {
     if (searchForm.project_level != null) params.project_level = searchForm.project_level
     if (searchForm.year != null) params.year = searchForm.year
     const res = await getProjectList(params)
-    const items: any[] = res.data.items || []
-    rawData.value = items
-    tableData.value = items.slice(0, pageSize.value)
-    total.value = res.data.total || items.length
+    rawData.value = res.data.items || []
+    // 一次取回后在前端本地分页，故总数以实际取回的条数为准
+    total.value = rawData.value.length
   } finally {
     loading.value = false
   }
@@ -295,11 +294,9 @@ function handleReset() {
 }
 
 function handlePageChange(p: number, ps: number) {
+  // 数据已在本地，翻页仅切换显示切片，无需重新请求
   page.value = p
   pageSize.value = ps
-  if (!searched.value) {
-    loadData()
-  }
 }
 
 onMounted(() => loadData())

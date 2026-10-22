@@ -5,7 +5,7 @@
 from datetime import datetime, date
 from typing import Optional, List
 from decimal import Decimal
-from sqlalchemy import Column, String, BigInteger, SmallInteger, DateTime, Integer, Text, ForeignKey, Index, Date, Numeric
+from sqlalchemy import Column, String, BigInteger, SmallInteger, DateTime, Integer, Text, ForeignKey, Index, Date, Numeric, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -19,12 +19,13 @@ class ProjProject(BaseModel):
     project_name: Mapped[str] = mapped_column(String(255), nullable=False, comment="项目名称")
     # 项目类型: 1-创新训练 2-创业训练 3-创业实践
     project_type: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, comment="项目类型")
-    # 项目级别: 1-校级 2-省级 3-国家级
+    # 项目级别: 1-院级 2-校级 3-省级 4-国家级
     project_level: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, comment="项目级别")
     college_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_college.id"), nullable=False, comment="申报学院ID")
     leader_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("sys_user.id"), nullable=False, comment="项目负责人ID")
     teacher_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("sys_user.id"), nullable=True, comment="指导教师ID")
     competition_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("biz_competition.id"), nullable=True, comment="参赛比赛ID")
+    competition_session: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, comment="参赛比赛届次(冗余,如 2026届)")
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, comment="立项开始日期")
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, comment="计划结束日期")
     budget_amount: Mapped[Decimal] = mapped_column(
@@ -43,7 +44,7 @@ class ProjProject(BaseModel):
     innovation_points: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="创新点")
     expected_results: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="预期成果")
     # 项目状态机: 0-草稿 1-待学院初审 2-学院初审通过 3-待校级复审 4-校级复审通过
-    # 5-待专家评审 6-已立项 7-中期检查 8-待结题 9-已结题 10-已驳回 11-已撤销
+    # 5-待专家评审 13-待分配评审专家 6-已立项 7-中期检查 8-待结题 9-已结题 10-已驳回 11-已撤销
     status: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, comment="项目状态")
     submit_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="正式提交时间")
     approval_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="最终立项审批时间")
@@ -164,6 +165,7 @@ class ProjReview(BaseModel):
     # 审核结果: 1-通过 2-驳回 3-修改后重提
     review_result: Mapped[int] = mapped_column(SmallInteger, nullable=False, comment="审核结果")
     score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True, comment="评分(百分制)")
+    dim_scores: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, comment="分项评分明细(JSON:创新性/可行性/团队/应用价值)")
     review_comment: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True, comment="评审意见")
     review_time: Mapped[datetime] = mapped_column(
         DateTime,
@@ -266,6 +268,7 @@ class ProjMidtermCheck(BaseModel):
     remaining_tasks: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="剩余任务计划")
     problems: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="存在问题")
     next_plan: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="下一步计划")
+    report: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="中期报告")
     budget_usage: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True, comment="已使用经费")
     # 状态: 0-草稿 1-待审核 2-审核通过 3-需修改 4-已驳回
     status: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, comment="状态")
@@ -299,6 +302,9 @@ class ProjChangeRequest(BaseModel):
     reject_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, comment="驳回原因")
     submit_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="提交时间")
     approval_time: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, comment="审批时间")
+    # 提交时项目所处状态：用于「每阶段限 1 次」配额（待学院初审/待校级复审各 1 次，累计 2 次）
+    project_status_at_submit: Mapped[Optional[int]] = mapped_column(
+        SmallInteger, nullable=True, comment="提交时项目状态")
 
     # 关联关系
     project: Mapped["ProjProject"] = relationship("ProjProject", back_populates="change_requests")

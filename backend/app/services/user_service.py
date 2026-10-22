@@ -26,7 +26,7 @@ from app.schemas.user import (
 )
 from app.crud.user import UserCRUD, CollegeCRUD, OperationLogCRUD
 from app.models import SysUser, SysCollege
-from app.utils.redis_cache import TokenBlacklist
+from app.utils.redis_cache import TokenBlacklist, redis_client, CacheKeys
 
 
 class AuthService:
@@ -362,7 +362,8 @@ class UserService:
                 raise ResourceNotFoundException(message="用户不存在")
             if target.role == RoleEnum.ADMIN:
                 raise PermissionDeniedException(message="无权限删除系统管理员账号")
-            if operator.college_id and target.college_id and target.college_id != operator.college_id:
+            # 学院管理员严格限定本院：未绑定学院的用户不归任何学院管理员管辖
+            if not operator.college_id or not target.college_id or target.college_id != operator.college_id:
                 raise PermissionDeniedException(message="仅可删除本院用户")
         else:
             raise PermissionDeniedException(message="仅管理员可删除用户")
@@ -381,7 +382,7 @@ class UserService:
             for t in targets:
                 if t.role == RoleEnum.ADMIN:
                     raise PermissionDeniedException(message=f"用户 [{t.username}] 是系统管理员，学院管理员无权修改状态")
-                if operator.college_id and t.college_id and t.college_id != operator.college_id:
+                if not operator.college_id or not t.college_id or t.college_id != operator.college_id:
                     raise PermissionDeniedException(message=f"用户 [{t.username}] 不属于本院，学院管理员无权修改状态")
         else:
             raise PermissionDeniedException(message="仅管理员可批量修改用户状态")
@@ -408,6 +409,7 @@ class CollegeService:
         college = CollegeCRUD.create(db, req.model_dump())
         db.commit()
         db.refresh(college)
+        CollegeService._clear_cache()
         return CollegeResponse.model_validate(college)
 
     @staticmethod
@@ -421,7 +423,16 @@ class CollegeService:
         obj = CollegeCRUD.update(db, obj, req.model_dump(exclude_unset=True))
         db.commit()
         db.refresh(obj)
+        CollegeService._clear_cache()
         return CollegeResponse.model_validate(obj)
+
+    @staticmethod
+    def _clear_cache() -> None:
+        """学院变动后清除缓存，避免 /api/common/colleges 返回陈旧数据"""
+        try:
+            redis_client.delete(CacheKeys.COLLEGE_LIST)
+        except Exception:
+            pass
 
 
 class OperationLogService:
@@ -432,6 +443,8 @@ class OperationLogService:
                  operator: SysUser):
         if operator.role != RoleEnum.ADMIN:
             raise PermissionDeniedException(message="仅管理员可查看操作日志")
+        # 数据范围：真超级管理员看全部日志；学院管理员仅看本院用户日志
+        college_id = None if is_super_admin(operator) else operator.college_id
         items, total = OperationLogCRUD.paginate(
             db,
             offset=pager.offset,
@@ -440,8 +453,13 @@ class OperationLogService:
             module_name=params.module_name,
             operation_type=params.operation_type,
             user_id=params.user_id,
+            college_id=college_id,
             start_time=params.start_time,
             end_time=params.end_time,
+            modules=params.modules,
+            operation_types=params.operation_types,
+            user_roles=params.user_roles,
+            statuses=params.statuses,
             order_dir=pager.order_dir,
         )
         return items, total

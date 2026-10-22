@@ -8,26 +8,26 @@
     <el-row :gutter="20" class="stat-row">
       <el-col :span="6">
         <el-card shadow="hover"><div class="stat-card">
+          <p class="stat-value">{{ Number(summary.total_count || 0) }}</p>
+          <p class="stat-label">报销单数</p>
+        </div></el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="hover"><div class="stat-card">
           <p class="stat-value">¥ {{ Number(summary.total_amount || 0).toFixed(2) }}</p>
-          <p class="stat-label">总预算</p>
+          <p class="stat-label">报销总额</p>
         </div></el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover"><div class="stat-card">
-          <p class="stat-value">¥ {{ Number(summary.total_expensed || 0).toFixed(2) }}</p>
-          <p class="stat-label">已使用</p>
+          <p class="stat-value">¥ {{ Number(summary.approved_amount || 0).toFixed(2) }}</p>
+          <p class="stat-label">已报销</p>
         </div></el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover"><div class="stat-card">
-          <p class="stat-value">¥ {{ Number(summary.total_remaining || 0).toFixed(2) }}</p>
-          <p class="stat-label">剩余</p>
-        </div></el-card>
-      </el-col>
-      <el-col :span="6">
-        <el-card shadow="hover"><div class="stat-card">
-          <p class="stat-value">{{ summary.execution_rate || 0 }}%</p>
-          <p class="stat-label">执行率</p>
+          <p class="stat-value">{{ Number(summary.pending_count || 0) }}</p>
+          <p class="stat-label">待处理</p>
         </div></el-card>
       </el-col>
     </el-row>

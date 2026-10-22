@@ -197,8 +197,13 @@ class OperationLogCRUD:
         module_name: Optional[str] = None,
         operation_type: Optional[str] = None,
         user_id: Optional[int] = None,
+        college_id: Optional[int] = None,
         start_time: Optional = None,
         end_time: Optional = None,
+        modules: Optional[str] = None,
+        operation_types: Optional[str] = None,
+        user_roles: Optional[str] = None,
+        statuses: Optional[str] = None,
         order_dir: str = "desc",
     ) -> Tuple[List[SysOperationLog], int]:
         q = db.query(SysOperationLog)
@@ -213,10 +218,39 @@ class OperationLogCRUD:
             ))
         if module_name:
             q = q.filter(SysOperationLog.module_name == module_name)
+        if modules:
+            vals = [m.strip() for m in modules.split(",") if m.strip()]
+            if vals:
+                q = q.filter(SysOperationLog.module_name.in_(vals))
         if operation_type:
             q = q.filter(SysOperationLog.operation_type == operation_type)
+        if operation_types:
+            vals = [t.strip() for t in operation_types.split(",") if t.strip()]
+            if vals:
+                q = q.filter(SysOperationLog.operation_type.in_(vals))
         if user_id:
             q = q.filter(SysOperationLog.user_id == user_id)
+        if user_roles:
+            vals = [int(r) for r in user_roles.split(",") if r.strip().isdigit()]
+            if vals:
+                q = q.filter(SysOperationLog.user_role.in_(vals))
+        if statuses:
+            vals = [s.strip() for s in statuses.split(",") if s.strip()]
+            only_success = "success" in vals and "fail" not in vals
+            only_fail = "fail" in vals and "success" not in vals
+            if only_success:
+                q = q.filter(SysOperationLog.response_code >= 200, SysOperationLog.response_code < 300)
+            elif only_fail:
+                q = q.filter(or_(
+                    SysOperationLog.response_code.is_(None),
+                    SysOperationLog.response_code < 200,
+                    SysOperationLog.response_code >= 300,
+                ))
+        if college_id is not None:
+            # 学院管理员数据范围：仅本院用户产生的日志（经 sys_user 关联所属学院）
+            q = q.join(SysUser, SysOperationLog.user_id == SysUser.id).filter(
+                SysUser.college_id == college_id
+            )
         if start_time:
             q = q.filter(SysOperationLog.operation_time >= start_time)
         if end_time:

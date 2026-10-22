@@ -17,6 +17,7 @@ PROJECT_STATUS_COLLEGE_PASSED = 2   # 学院初审通过
 PROJECT_STATUS_PENDING_UNIVERSITY = 3  # 待校级复审
 PROJECT_STATUS_UNIVERSITY_PASSED = 4   # 校级复审通过
 PROJECT_STATUS_PENDING_EXPERT = 5      # 待专家评审
+PROJECT_STATUS_PENDING_EXPERT_ASSIGN = 13  # 待分配评审专家
 PROJECT_STATUS_APPROVED = 6            # 已立项
 PROJECT_STATUS_MIDTERM = 7              # 中期检查阶段
 PROJECT_STATUS_PENDING_FINAL = 8        # 待结题
@@ -26,7 +27,7 @@ PROJECT_STATUS_CANCELLED = 11           # 已撤销
 
 PROJECT_STATUS_NAME = {
     0: "草稿", 12: "待指导教师确认", 1: "待学院初审", 2: "学院初审通过", 3: "待校级复审",
-    4: "校级复审通过", 5: "待专家评审", 6: "已立项", 7: "中期检查中",
+    4: "校级复审通过", 5: "待专家评审", 13: "待分配评审专家", 6: "已立项", 7: "中期检查中",
     8: "待结题", 9: "已结题", 10: "已驳回", 11: "已撤销",
 }
 
@@ -81,7 +82,7 @@ class ProjectCreate(BaseModel):
     """创建/草稿保存"""
     project_name: str = Field(..., min_length=2, max_length=255)
     project_type: int = Field(..., ge=1, le=3)
-    project_level: int = Field(..., ge=1, le=3)
+    project_level: int = Field(..., ge=1, le=4)
     college_id: int
     leader_id: Optional[int] = Field(default=None, description="负责人ID（管理员创建时必填）")
     teacher_id: Optional[int] = None
@@ -106,7 +107,7 @@ class ProjectUpdate(BaseModel):
     """更新项目信息"""
     project_name: Optional[str] = Field(default=None, min_length=2, max_length=255)
     project_type: Optional[int] = Field(default=None, ge=1, le=3)
-    project_level: Optional[int] = Field(default=None, ge=1, le=3)
+    project_level: Optional[int] = Field(default=None, ge=1, le=4)
     teacher_id: Optional[int] = None
     competition_id: Optional[int] = None
     start_date: Optional[date] = None
@@ -118,12 +119,19 @@ class ProjectUpdate(BaseModel):
     budgets: Optional[List[BudgetItemCreate]] = None
     attachment_ids: Optional[List[int]] = Field(default=None, description="上传时 biz_id=0 的临时附件IDs，更新后关联到项目")
 
+    @model_validator(mode="after")
+    def check_dates(self):
+        """同时提交起止日期时校验先后顺序（仅提交一端时由 Service 与库中值合并校验）"""
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            raise ValueError("开始日期不能晚于结束日期")
+        return self
+
 
 class ProjectQueryParams(BaseModel):
     """项目列表查询筛选条件"""
     keyword: Optional[str] = Field(default=None, max_length=128, description="项目名称/编号/简介关键词")
     project_type: Optional[int] = None
-    project_level: Optional[int] = None
+    project_level: Optional[int] = Field(default=None, ge=1, le=4)
     college_id: Optional[int] = None
     leader_id: Optional[int] = None
     teacher_id: Optional[int] = None
@@ -150,6 +158,7 @@ class ProjectListItem(BaseModel):
     teacher_name: Optional[str] = None
     competition_id: Optional[int] = None
     competition_name: Optional[str] = None
+    competition_session: Optional[str] = None
     start_date: Optional[date]
     end_date: Optional[date]
     budget_amount: Decimal
@@ -157,7 +166,11 @@ class ProjectListItem(BaseModel):
     status: int
     status_name: str = ""
     assigned_expert_count: int = Field(default=0, description="已分配专家数量")
+    reviewed_expert_count: int = Field(default=0, description="已提交评审的专家数量（>0 时不可再调整专家名单）")
+    award_count: int = Field(default=0, description="竞赛获奖成果数量（成果类型=4 且未删除）")
+    resubmittable: bool = Field(default=False, description="是否可修改后重新提交（仅「指导教师驳回」为 True；学院/校级/专家驳回即落选）")
     submit_time: Optional[datetime]
+    approval_time: Optional[datetime] = None
     created_at: datetime
 
 
@@ -166,7 +179,12 @@ class ProjectDetailResponse(ProjectListItem):
     innovation_points: Optional[str] = None
     expected_results: Optional[str] = None
     reject_reason: Optional[str] = None
-    approval_time: Optional[datetime] = None
+    final_report_submitted: bool = Field(default=False, description="是否已提交结项验收报告（待结题阶段）")
+    # 流程截止日（截止日驱动锁定）
+    change_deadline: Optional[date] = Field(default=None, description="变更/延期申请锁死日（当前阶段审核日）")
+    change_locked: bool = Field(default=False, description="是否已超过当前阶段审核日，变更/延期已锁定")
+    midterm_deadline: Optional[date] = Field(default=None, description="中期报告提交截止日")
+    final_deadline: Optional[date] = Field(default=None, description="结题报告提交截止日")
     team_members: List[TeamMemberResponse] = Field(default_factory=list)
     budgets: List[BudgetItemResponse] = Field(default_factory=list)
     attachments: List[dict] = Field(default_factory=list, description="项目附件列表")
@@ -192,13 +210,13 @@ class FinalSubmitRequest(BaseModel):
 class AchievementCreate(BaseModel):
     project_id: int
     achievement_type: int = Field(..., ge=1, le=6, description="成果类型:1论文2专利3软著4竞赛5创业6其他")
-    title: str = Field(..., max_length=255)
-    author: Optional[str] = None
+    title: str = Field(..., min_length=1, max_length=255)
+    author: Optional[str] = Field(default=None, max_length=255)
     publish_date: Optional[date] = None
-    publisher: Optional[str] = None
-    achievement_no: Optional[str] = None
+    publisher: Optional[str] = Field(default=None, max_length=255)
+    achievement_no: Optional[str] = Field(default=None, max_length=128)
     level: Optional[int] = Field(default=None, ge=1, le=4)
-    award_level: Optional[str] = None
+    award_level: Optional[str] = Field(default=None, max_length=64)
     summary: Optional[str] = None
 
 

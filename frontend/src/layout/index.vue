@@ -17,7 +17,7 @@
         :background-color="sidebarBg"
         text-color="#bfcbd9"
         :active-text-color="appearanceStore.themeColor"
-        router
+        @select="handleMenuSelect"
       >
         <template v-for="group in groupedRoutes" :key="group.key">
           <el-sub-menu :index="group.key">
@@ -36,15 +36,16 @@
               <template #title>{{ route.meta?.title }}</template>
             </el-menu-item>
             <!-- 流程阶段（归入对应分组） -->
-            <div
+            <el-menu-item
               v-for="item in stagesOfGroup(group.key)"
               :key="item.key"
-              class="el-menu-item stage-menu-item"
+              :index="'stage-' + item.key"
+              class="stage-menu-item"
               :class="{ 'is-active': item.isActive, 'is-done': item.isDone }"
-              @click="handleStageClick(item.key)"
             >
-              <span>{{ item.label }}</span>
-            </div>
+              <el-icon v-if="item.icon"><component :is="item.icon" /></el-icon>
+              <span class="stage-item-inner">{{ item.label }}</span>
+            </el-menu-item>
           </el-sub-menu>
         </template>
       </el-menu>
@@ -72,7 +73,6 @@
           :background-color="sidebarBg"
           text-color="#bfcbd9"
           :active-text-color="appearanceStore.themeColor"
-          router
           @select="handleMenuSelect"
         >
           <template v-for="group in groupedRoutes" :key="`m-${group.key}`">
@@ -92,15 +92,16 @@
                 <template #title>{{ route.meta?.title }}</template>
               </el-menu-item>
               <!-- 流程阶段（归入对应分组） -->
-              <div
+              <el-menu-item
                 v-for="item in stagesOfGroup(group.key)"
                 :key="item.key"
-                class="el-menu-item stage-menu-item"
+                :index="'stage-' + item.key"
+                class="stage-menu-item"
                 :class="{ 'is-active': item.isActive, 'is-done': item.isDone }"
-                @click="handleStageClick(item.key)"
               >
-                <span>{{ item.label }}</span>
-              </div>
+                <el-icon v-if="item.icon"><component :is="item.icon" /></el-icon>
+                <span class="stage-item-inner">{{ item.label }}</span>
+              </el-menu-item>
             </el-sub-menu>
           </template>
         </el-menu>
@@ -183,7 +184,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import {
   Fold, Expand, FullScreen, User, SwitchButton, View, Hide,
-  Monitor, Folder, Bell, Setting, Box, Trophy
+  Monitor, Folder, Bell, Setting, Box, Trophy,
+  EditPen, OfficeBuilding, School, Star, CircleCheck, Calendar, Medal, Checked, CircleCheckFilled
 } from '@element-plus/icons-vue'
 import { useUserStore } from '@/store/user'
 import { useAppearanceStore } from '@/store/appearance'
@@ -202,27 +204,30 @@ const userStore = useUserStore()
 const appearanceStore = useAppearanceStore()
 const processStore = useProcessStore()
 
-// 项目申报后流程阶段定义
+// 项目流程轴（两段式）：
+//   审批段：项目申报 → 指导教师确认 → 学院初审 → 校级复审 → 专家评审 →（结论：立项 / 落选）
+//   执行段：立项 → 中期检查 → 成果登记 → 结项验收 → 已结题
+// 其中「项目立项」是两段的分界结论：审批通过即进入执行段，故归入执行段作为起点。
 const PROCESS_STAGES = [
-  { key: 'declare', label: '项目申报', status: 0 },
-  { key: 'teacher', label: '指导教师确认', status: 12 },
-  { key: 'college', label: '学院初审', status: 1 },
-  { key: 'university', label: '校级复审', status: 3 },
-  { key: 'expert', label: '专家评审', status: 5 },
-  { key: 'approved', label: '项目立项', status: 6 },
-  { key: 'midterm', label: '中期检查', status: 7 },
-  { key: 'achievement', label: '成果登记', status: 6 },
-  { key: 'final', label: '结项验收', status: 8 },
+  // —— 审批段 ——
+  { key: 'declare', label: '项目申报', status: 0, segment: 'approval', icon: 'EditPen' },
+  { key: 'teacher', label: '指导教师确认', status: 12, segment: 'approval', icon: 'User' },
+  { key: 'college', label: '学院初审', status: 1, segment: 'approval', icon: 'OfficeBuilding' },
+  { key: 'university', label: '校级复审', status: 3, segment: 'approval', icon: 'School' },
+  { key: 'expert', label: '专家评审', status: 5, segment: 'approval', icon: 'Star' },
+  // —— 执行段 ——
+  { key: 'approved', label: '项目立项', status: 6, segment: 'exec', icon: 'CircleCheck' },
+  { key: 'midterm', label: '中期检查', status: 7, segment: 'exec', icon: 'Calendar' },
+  { key: 'achievement', label: '成果登记', status: 6, segment: 'exec', icon: 'Medal' },
+  { key: 'final', label: '结项验收', status: 8, segment: 'exec', icon: 'Checked' },
+  { key: 'finished', label: '已结题', status: 9, segment: 'exec', icon: 'CircleCheckFilled' },
 ]
 
-// 阶段按功能归入侧边栏分组
-// 冗余清理：中期检查/成果登记/结项验收均跳转 /projects（=我的项目），
-//           项目立项跳转 /announcement/approval（=立项结果公示），
-//           项目申报仅对学生是唯一入口（/projects/create），其他角色与我的项目重复。
-//           因此侧边栏仅保留学生的"项目申报"阶段入口。
+// 阶段按功能归入侧边栏分组：执行段归「项目管理」，审批段归「审核中心」。
+// 展示时机：项目申报仅对学生显示；其余流程阶段常驻侧边栏展示。
 const STAGE_GROUP_MAP: Record<string, string[]> = {
-  project: ['declare'],
-  review: [],
+  project: ['declare', 'midterm', 'achievement', 'final'],
+  review: ['teacher', 'college', 'expert'],
 }
 
 // 取某分组下的阶段列表（带序号偏移，保持全局编号连续）
@@ -234,6 +239,14 @@ function stagesOfGroup(groupKey: string) {
     .filter((s) => {
       // 项目申报仅对学生显示（教师/管理员跳转目标与"我的项目"重复）
       if (s!.key === 'declare') return userStore.role === ROLES.STUDENT
+      // 审批段各阶段按「谁可审核」过滤：后端待审队列按角色固定到唯一状态
+      // （教师→12/学院管理员→1/超管→3），若展示无关阶段，点击只会落到本角色
+      // 自己的队列，甚至 403。故每人仅保留自己可审核的那个阶段。
+      if (s!.key === 'teacher') return userStore.isTeacher
+      if (s!.key === 'college') return userStore.isCollegeAdmin
+      if (s!.key === 'university') return userStore.isSuperAdmin
+      if (s!.key === 'expert') return userStore.isExpert
+      // 执行段阶段（项目立项/中期检查/成果登记/结项验收/已结题）常驻侧边栏展示
       return true
     })
     .map((s) => {
@@ -250,23 +263,41 @@ const processStages = computed(() => {
     return PROCESS_STAGES.map((s) => ({ ...s, isActive: false, isDone: false }))
   }
   const isRejected = cur === 10 || cur === 11
-  // 找到当前状态对应的阶段索引
-  const curIdx = PROCESS_STAGES.findIndex((s) => {
-    if (s.key === 'final') return cur === 8 || cur >= 9
-    if (s.key === 'achievement') return cur >= 6
-    if (cur === 2) return s.key === 'college'
-    if (cur === 4) return s.key === 'university'
-    return s.status === cur
-  })
-  return PROCESS_STAGES.map((s, idx) => {
-    // 成果登记：立项后即可登记，标记为已完成
-    if (s.key === 'achievement') {
-      return { ...s, isActive: false, isDone: !isRejected && cur >= 6 }
-    }
-    const isDone = !isRejected && curIdx >= 0 && idx < curIdx
-    const isActive = !isRejected && idx === curIdx
-    return { ...s, isActive, isDone }
-  })
+  const inFlow = (arr: number[]) => !isRejected && arr.includes(cur)
+  // 审批段：指导教师确认(12)→学院初审(1/2)→校级复审(3/4)→专家评审(5)
+  // 执行段：立项(6)→中期检查(7)→成果登记→结项验收(8)→已结题(9)
+  // 成果登记为执行段的并行节点：立项后即可登记，中期检查通过（待结题8）后方视为完成。
+  const DONE: Record<string, boolean> = {
+    declare: true,
+    teacher: inFlow([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+    college: inFlow([2, 3, 4, 5, 6, 7, 8, 9]),
+    university: inFlow([4, 5, 6, 7, 8, 9]),
+    expert: inFlow([6, 7, 8, 9]),
+    approved: inFlow([6, 7, 8, 9]),
+    midterm: inFlow([8, 9]),
+    achievement: inFlow([8, 9]),
+    final: inFlow([9]),
+    finished: inFlow([9]),
+  }
+  const ACTIVE: Record<string, boolean> = {
+    declare: cur === 0,
+    teacher: cur === 12,
+    college: cur === 1 || cur === 2,
+    university: cur === 3 || cur === 4,
+    expert: cur === 5,
+    approved: false,
+    midterm: cur === 7,
+    // 成果登记为执行段并行节点（立项后即可登记），不作为"当前阶段"高亮，
+    // 避免与「项目立项」「中期检查」同时亮起造成误导。
+    achievement: false,
+    final: cur === 8,
+    finished: false,
+  }
+  return PROCESS_STAGES.map((s) => ({
+    ...s,
+    isDone: !!DONE[s.key],
+    isActive: !!ACTIVE[s.key],
+  }))
 })
 
 // 阶段 → 对应页面路由（非详情页点击时跳转，按角色适配）
@@ -277,27 +308,31 @@ function stageRoute(key: string): string {
       // 学生进申报页，其他角色看项目列表
       return role === 1 ? '/projects/create' : '/projects'
     case 'midterm':
+      return '/projects?status=7'
     case 'achievement':
+      return '/projects?status=6'
     case 'final':
-      return '/projects'
+      return '/projects?status=8'
     case 'teacher':
     case 'college':
     case 'university':
-      return '/review/pending'
+      return '/review'
     case 'expert':
       // 专家进待评审，其他角色看待审核
-      return role === 3 ? '/expert/pending' : '/review/pending'
-    case 'approved':
-      return '/announcement/approval'
+      return role === 3 ? '/expert/pending' : '/review'
     default:
       return '/projects'
   }
 }
 
 function handleStageClick(key: string) {
-  // 已在项目详情页：中期检查/成果登记跳转独立页面，其余滚动到对应区域
+  // 已在项目上下文页面（详情页 / 中期检查 / 成果登记）
   if (route.path.startsWith('/projects/')) {
     const projectId = route.params.id
+    if (!projectId) {
+      router.push(stageRoute(key))
+      return
+    }
     if (key === 'midterm') {
       router.push(`/projects/${projectId}/midterm`)
       return
@@ -306,10 +341,23 @@ function handleStageClick(key: string) {
       router.push(`/projects/${projectId}/achievements`)
       return
     }
+    if (key === 'final') {
+      router.push(`/projects/${projectId}/final`)
+      return
+    }
+    // 其余阶段（项目立项/已结题等）只在项目详情页内以区域展示：
+    // 当前若处于独立子页（中期检查/成果登记），需先跳回详情页再滚动定位，
+    // 否则 requestScroll 无人监听、点击无响应。
+    const inSubPage = route.path.endsWith('/midterm') || route.path.endsWith('/achievements')
+    if (inSubPage) {
+      router.push({ path: `/projects/${projectId}`, query: { scroll: key } })
+      return
+    }
+    // 已在详情页：直接滚动到对应区域
     processStore.requestScroll(key)
     return
   }
-  // 非详情页：跳转到该阶段对应的功能页面
+  // 非项目上下文：跳转到该阶段对应的功能页面
   router.push(stageRoute(key))
 }
 
@@ -324,7 +372,13 @@ function checkMobile() {
   }
 }
 
-function handleMenuSelect() {
+function handleMenuSelect(index: string) {
+  // 流程阶段：交给统一阶段导航处理（index 形如 'stage-declare'）
+  if (index.startsWith('stage-')) {
+    handleStageClick(index.slice('stage-'.length))
+  } else {
+    router.push(index)
+  }
   if (isMobile.value) {
     drawerVisible.value = false
   }
@@ -348,7 +402,7 @@ function scrollActiveIntoView() {
       // 激活项在折叠的子菜单内 → 先展开
       const parentSub = active.closest('.el-sub-menu:not(.is-opened)') as HTMLElement | null
       if (parentSub) {
-        parentSub.querySelector('.el-sub-menu__title')?.click()
+        (parentSub.querySelector('.el-sub-menu__title') as HTMLElement | null)?.click()
         allVisible = false
         return
       }
@@ -419,7 +473,26 @@ const sidebarBg = computed(() =>
   appearanceStore.isDark ? '#0a0a0a' : '#001529'
 )
 
-const activeMenu = computed(() => route.path)
+// 侧边栏高亮：普通菜单项按路由路径高亮；
+// 当「我的项目」列表带阶段状态筛选（/projects?status=X）时，高亮对应的流程阶段项，避免与「我的项目」重复高亮
+const activeMenu = computed(() => {
+  if (route.path === '/projects') {
+    const statusMap: Record<string, string> = {
+      '6': 'stage-achievement',
+      '7': 'stage-midterm',
+      '8': 'stage-final',
+    }
+    const q = route.query.status
+    if (typeof q === 'string' && statusMap[q]) {
+      return statusMap[q]
+    }
+  }
+  // 「项目申报」高亮对应的流程阶段项（新建/编辑均走该路由）
+  if (route.path === '/projects/create') {
+    return 'stage-declare'
+  }
+  return route.path
+})
 
 const filteredRoutes = computed(() => {
   const children = router.options.routes.find((r) => r.path === '/')?.children || []

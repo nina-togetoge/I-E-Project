@@ -21,12 +21,17 @@ export interface ProjectListItem {
   teacher_name: string | null
   competition_id: number | null
   competition_name: string | null
+  competition_session: string | null
   start_date: string | null
   end_date: string | null
   budget_amount: number
   used_amount: number
   status: number
   status_name: string
+  /** 竞赛获奖成果数量 */
+  award_count?: number
+  /** 是否可修改后重新提交（仅「指导教师驳回」为 true；学院/校级/专家驳回即落选） */
+  resubmittable?: boolean
   submit_time: string | null
   created_at: string
 }
@@ -37,8 +42,14 @@ export interface ProjectDetail extends ProjectListItem {
   innovation_points: string | null
   expected_results: string | null
   reject_reason: string | null
+  final_report_submitted?: boolean
+  change_deadline?: string | null
+  change_locked?: boolean
+  midterm_deadline?: string | null
+  final_deadline?: string | null
   team_members?: any[]
   budgets?: any[]
+  attachments?: any[]
 }
 
 /** 项目统计 */
@@ -117,6 +128,11 @@ export function submitFinal(id: number, data: { final_report: string; attachment
   return post(`/api/projects/${id}/submit-final`, data)
 }
 
+/** 撤回结项验收报告提交（项目仍停留待结题，可修改后重新提交） */
+export function withdrawFinal(id: number) {
+  return post(`/api/projects/${id}/withdraw-final`)
+}
+
 /** 删除项目 */
 export function deleteProject(id: number) {
   return del(`/api/projects/${id}`)
@@ -143,17 +159,6 @@ export function getTrend(params: {
 /** 各学院统计数据（雷达图/热力图/学院立项率） */
 export function getCollegeBreakdown() {
   return get('/api/statistics/college-breakdown')
-}
-
-/** 导出项目列表 */
-export function exportProjects(params: {
-  keyword?: string
-  status?: number
-  project_type?: number
-  project_level?: number
-  college_id?: number
-}) {
-  return get('/api/excel/export/projects', params, { responseType: 'blob' })
 }
 
 // ========== 项目成果 ==========

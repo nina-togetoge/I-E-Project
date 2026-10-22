@@ -67,3 +67,19 @@ img {
 .mb-10 { margin-bottom: 10px; }
 .mb-20 { margin-bottom: 20px; }
 .page-container { padding: 20px; }
+
+/* ============================================================
+ * Element Plus 反馈层（Message / Notification / MessageBox）层级修复
+ * ------------------------------------------------------------
+ * 项目内的自定义悬浮窗（“项目详情”窗口）与部分 el-dialog 使用了
+ * 3000 / 4000 的固定 z-index，而 Element 的 Message / Notification /
+ * MessageBox 采用自动递增的 z-index（约 2000 起），导致提示信息被
+ * 弹窗遮挡。这里统一把反馈层提升到弹窗之上；!important 用于覆盖
+ * Element 写入元素的内联 z-index。
+ * ============================================================ */
+.el-message,
+.el-notification,
+.el-message-box__wrapper,
+.el-overlay.is-message-box {
+  z-index: 10000 !important;
+}

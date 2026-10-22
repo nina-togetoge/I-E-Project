@@ -1,5 +1,5 @@
 """
-通用接口路由：附件上传/下载、Excel导入导出模板、全文检索、字典、健康检查
+通用接口路由：附件上传/下载、Excel导入导出模板、字典、健康检查
 """
 import os
 import uuid
@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.deps import PaginationParams, OperationContext, DataScope
 from app.core.security import (
     get_current_user, require_login, require_admin, RequireRole, RoleEnum, ROLE_NAME_MAP,
+    is_super_admin,
 )
 from app.core.response import ResponseModel, success, PageResult
 from app.core.exceptions import ResourceNotFoundException, ParamValidateException, PermissionDeniedException
@@ -25,7 +26,6 @@ from app.models import SysUser, SysAttachment, ProjProject
 from app.utils.excel_helper import (
     ExcelHelper, ExportTemplates, USER_IMPORT_COLUMNS, PROJECT_IMPORT_COLUMNS,
 )
-from app.utils.search_engine import search_engine
 from app.utils.redis_cache import redis_client, CacheKeys
 from app.crud.user import CollegeCRUD, UserCRUD, OperationLogCRUD
 from app.crud.project import ProjectCRUD
@@ -35,7 +35,6 @@ from app.schemas.project import ProjectQueryParams
 
 router_common = APIRouter(prefix="/common", tags=["通用工具"])
 router_upload = APIRouter(prefix="/files", tags=["附件管理"])
-router_search = APIRouter(prefix="/search", tags=["全文检索"])
 router_excel = APIRouter(prefix="/excel", tags=["Excel导入导出"])
 router_health = APIRouter(tags=["系统"])
 
@@ -157,7 +156,15 @@ def _ensure_biz_access(db: Session, biz_type: str, biz_id: int, user: SysUser,
     报销场景下额外的报销申请人或本院教师、学院管理员。其余一律拒绝。
     """
     if user.role == RoleEnum.ADMIN:
-        return
+        # 真超级管理员（无学院归属）放行全部；学院管理员仅限本院项目附件
+        if not user.college_id:
+            return
+        if allow_uploader_id is not None and allow_uploader_id == user.id:
+            return
+        project = _resolve_biz_project(db, biz_type, biz_id)
+        if project is not None and project.college_id == user.college_id:
+            return
+        raise PermissionDeniedException(message="学院管理员仅可访问本院业务文件")
     if allow_uploader_id is not None and allow_uploader_id == user.id:
         return
     project = _resolve_biz_project(db, biz_type, biz_id)
@@ -312,6 +319,33 @@ def api_attachment_list(
     return success(data=data)
 
 
+@router_upload.delete("/{att_id}", response_model=ResponseModel, summary="删除附件（软删除）")
+def api_delete_attachment(
+    att_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = require_login,
+    ctx: OperationContext = Depends(),
+):
+    att = db.query(SysAttachment).filter(
+        SysAttachment.id == att_id, SysAttachment.is_deleted == 0
+    ).first()
+    if not att:
+        raise ResourceNotFoundException(message="文件不存在")
+    # 权限：仅上传者本人或系统管理员可删除
+    if current_user.role != RoleEnum.ADMIN and att.uploader_id != current_user.id:
+        raise PermissionDeniedException(message="无权删除该附件")
+    # 已绑定项目的附件：仅当项目处于可编辑状态（草稿/已驳回）时允许删除，与编辑弹窗保持一致
+    if att.biz_type == "project" and att.biz_id and att.biz_id > 0:
+        project = _resolve_biz_project(db, att.biz_type, att.biz_id)
+        if project is not None and project.status not in (0, 10):
+            raise ParamValidateException(message="当前项目状态不可删除附件")
+    att.is_deleted = 1
+    db.commit()
+    with ctx:
+        ctx.set_desc(f"删除附件[{att.file_name}]")
+    return success(data={"id": att_id})
+
+
 # ====================================================================
 # Excel 导入导出
 # ====================================================================
@@ -382,13 +416,20 @@ def api_export_logs(
     keyword: Optional[str] = None, module_name: Optional[str] = None,
     operation_type: Optional[str] = None, user_id: Optional[int] = None,
     start_time: Optional[datetime] = None, end_time: Optional[datetime] = None,
+    modules: Optional[str] = None, operation_types: Optional[str] = None,
+    user_roles: Optional[str] = None, statuses: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: SysUser = require_admin,
 ):
+    # 数据范围与列表接口一致：真超级管理员导全部；学院管理员仅导本院用户日志
+    college_id = None if is_super_admin(current_user) else current_user.college_id
     rows_orm = OperationLogCRUD.list_all_for_export(
         db, keyword=keyword, module_name=module_name,
         operation_type=operation_type, user_id=user_id,
+        college_id=college_id,
         start_time=start_time, end_time=end_time,
+        modules=modules, operation_types=operation_types,
+        user_roles=user_roles, statuses=statuses,
     )
     from app.schemas.user import OperationLogItem
     rows = [OperationLogItem.model_validate(o).model_dump(mode="python") for o in rows_orm]
@@ -398,44 +439,3 @@ def api_export_logs(
         iter([xlsx]), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers=headers
     )
-
-
-# ====================================================================
-# 全文检索接口
-# ====================================================================
-@router_search.get("/projects", response_model=ResponseModel, summary="全文检索-项目")
-def api_search_projects(
-    keyword: str = Query(..., min_length=1, max_length=128, description="关键词"),
-    page: int = Query(default=1, ge=1),
-    # [P1-7] 搜索页大小上限从无限制 → 50，防止单页拉爆Whoosh索引
-    page_size: int = Query(default=20, ge=1, le=50, description="每页条数(最大50)"),
-    college_id: Optional[int] = None,
-    status: Optional[int] = None,
-    db: Session = Depends(get_db),
-    data_scope: DataScope = Depends(),
-    current_user: SysUser = require_login,
-):
-    """Whoosh+Jieba 全文检索，返回含相关性得分与HTML高亮片段（需登录，草稿不可检索）
-    结果严格按调用者行级数据权限过滤，避免通过检索绕过项目列表的范围限制。"""
-    if status == 0:
-        raise ParamValidateException(message="不支持按草稿状态检索")
-    # 计算调用者可见的项目ID集合；超管(scope.all)不限制
-    filter_project_ids = None
-    if not data_scope.scope.get("all"):
-        allowed = ProjectService._apply_scope_to_query(db, db.query(ProjProject.id), data_scope).all()
-        filter_project_ids = [row[0] for row in allowed]
-    results, total = search_engine.search(
-        keyword=keyword, page=page, page_size=page_size,
-        filter_college_id=college_id, filter_status=status,
-        filter_project_ids=filter_project_ids,
-    )
-    return success(data=PageResult.create(results, total, page, page_size))
-
-
-@router_search.post("/rebuild-index", response_model=ResponseModel, summary="重建全文索引(管理员)")
-def api_rebuild_index(current_user: SysUser = require_admin, ctx: OperationContext = Depends()):
-    with ctx:
-        ctx.set_desc("重建全文检索索引")
-        total, ok = search_engine.rebuild_all()
-        return success(data={"total_projects": total, "indexed": ok},
-                       message=f"索引重建完成：共{total}条，成功{ok}条")

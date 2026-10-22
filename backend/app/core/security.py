@@ -249,21 +249,16 @@ class RequireRole:
         self.allowed_roles: Set[int] = set(allowed_roles)
 
     def __call__(self, current_user: SysUser = Depends(get_current_user)) -> SysUser:
-        # 系统管理员拥有所有接口权限
-        if RoleEnum.ADMIN in self.allowed_roles or current_user.role == RoleEnum.ADMIN:
-            if current_user.role in self.allowed_roles or current_user.role == RoleEnum.ADMIN:
-                return current_user
-        if current_user.role not in self.allowed_roles:
-            allowed_names = [ROLE_NAME_MAP.get(r, str(r)) for r in self.allowed_roles]
-            raise PermissionDeniedException(
-                message=f"无权限访问，仅以下角色可操作：{' / '.join(allowed_names)}"
-            )
-        return current_user
+        # 系统管理员(ADMIN)是平台超级操作者，路由级守卫对其放行；
+        # 各角色的精细权限（如"学院管理员仅限本院"）统一由 service 层校验。
+        if current_user.role == RoleEnum.ADMIN or current_user.role in self.allowed_roles:
+            return current_user
+        allowed_names = [ROLE_NAME_MAP.get(r, str(r)) for r in self.allowed_roles]
+        raise PermissionDeniedException(
+            message=f"无权限访问，仅以下角色可操作：{' / '.join(allowed_names)}"
+        )
 
 
 # 常用权限依赖快捷变量
 require_admin = Depends(RequireRole(RoleEnum.ADMIN))
-require_teacher_or_admin = Depends(RequireRole(RoleEnum.TEACHER, RoleEnum.ADMIN))
-require_expert_or_admin = Depends(RequireRole(RoleEnum.EXPERT, RoleEnum.ADMIN))
-require_student = Depends(RequireRole(RoleEnum.STUDENT))
 require_login = Depends(get_current_user)

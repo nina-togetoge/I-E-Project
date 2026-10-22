@@ -4,20 +4,16 @@
 -->
 <template>
   <div class="page-container" v-loading="loading">
-    <div class="back-bar">
-      <el-button text @click="goBack">
-        <el-icon><ArrowLeft /></el-icon> 返回项目详情
-      </el-button>
-    </div>
-
     <template v-if="project">
       <div class="page-header">
         <div class="header-row">
           <div>
             <h2 class="page-title">项目成果</h2>
-            <div class="page-subtitle">{{ project.project_name }}</div>
           </div>
-          <el-button type="primary" @click="showDialog = true">登记成果</el-button>
+          <div class="header-actions">
+            <ProjectSwitcher :current-id="pid" suffix="achievements" />
+            <el-button v-if="canRegister" type="primary" @click="showDialog = true">登记成果</el-button>
+          </div>
         </div>
       </div>
 
@@ -29,6 +25,8 @@
               <th style="width:100px">类型</th>
               <th>标题</th>
               <th style="width:130px">作者</th>
+              <th style="width:90px">级别</th>
+              <th style="width:110px">获奖等级</th>
               <th style="width:110px">日期</th>
               <th style="width:70px">操作</th>
             </tr>
@@ -39,9 +37,12 @@
               <td>{{ achievementTypeMap[a.achievement_type] }}</td>
               <td>{{ a.title }}</td>
               <td>{{ a.author }}</td>
+              <td align="center">{{ achievementLevelMap[a.level] || '—' }}</td>
+              <td align="center">{{ a.award_level || '—' }}</td>
               <td>{{ formatDate(a.publish_date) }}</td>
               <td align="center">
-                <el-button link type="danger" size="small" @click="handleDelete(a)">删除</el-button>
+                <el-button v-if="canDelete" link type="danger" size="small" @click="handleDelete(a)">删除</el-button>
+                <span v-else>—</span>
               </td>
             </tr>
           </tbody>
@@ -54,26 +55,26 @@
     <el-dialog center v-model="showDialog" title="登记项目成果" width="600px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-form-item label="成果类型" prop="achievement_type">
-          <el-select v-model="form.achievement_type" placeholder="请选择" style="width: 100%">
+          <el-select v-model="form.achievement_type" placeholder="请选择" style="width: 100%" @change="onTypeChange">
             <el-option v-for="item in typeOptions" :key="item.value" :label="item.label" :value="item.value" />
           </el-select>
         </el-form-item>
         <el-form-item label="标题" prop="title">
           <el-input v-model="form.title" placeholder="成果标题/名称" maxlength="255" show-word-limit />
         </el-form-item>
-        <el-form-item label="作者">
-          <el-input v-model="form.author" placeholder="作者/发明人" maxlength="255" />
+        <el-form-item v-if="isFieldVisible('author')" :label="labelOf('author')">
+          <el-input v-model="form.author" :placeholder="labelOf('author')" maxlength="255" />
         </el-form-item>
-        <el-form-item label="发表日期">
+        <el-form-item v-if="isFieldVisible('publish_date')" :label="labelOf('publish_date')">
           <el-date-picker v-model="form.publish_date" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
         </el-form-item>
-        <el-form-item label="发表刊物">
-          <el-input v-model="form.publisher" placeholder="发表刊物/授权机构" maxlength="255" />
+        <el-form-item v-if="isFieldVisible('publisher')" :label="labelOf('publisher')">
+          <el-input v-model="form.publisher" :placeholder="labelOf('publisher')" maxlength="255" />
         </el-form-item>
-        <el-form-item label="编号">
-          <el-input v-model="form.achievement_no" placeholder="专利号/论文编号等" maxlength="128" />
+        <el-form-item v-if="isFieldVisible('achievement_no')" :label="labelOf('achievement_no')" prop="achievement_no">
+          <el-input v-model="form.achievement_no" :placeholder="labelOf('achievement_no')" maxlength="128" />
         </el-form-item>
-        <el-form-item label="级别">
+        <el-form-item v-if="isFieldVisible('level')" :label="labelOf('level')" prop="level">
           <el-select v-model="form.level" placeholder="请选择" clearable style="width: 100%">
             <el-option label="校级" :value="1" />
             <el-option label="省级" :value="2" />
@@ -81,11 +82,13 @@
             <el-option label="国际级" :value="4" />
           </el-select>
         </el-form-item>
-        <el-form-item label="获奖等级">
-          <el-input v-model="form.award_level" placeholder="如：一等奖" maxlength="64" />
+        <el-form-item v-if="isFieldVisible('award_level')" :label="labelOf('award_level')" prop="award_level">
+          <el-select v-model="form.award_level" placeholder="请选择获奖等级" clearable filterable style="width: 100%">
+            <el-option v-for="a in awardLevelOptions" :key="a.value" :label="a.label" :value="a.value" />
+          </el-select>
         </el-form-item>
         <el-form-item label="成果简介">
-          <el-input v-model="form.summary" type="textarea" :rows="3" placeholder="成果简介" />
+          <el-input v-model="form.summary" type="textarea" :rows="3" placeholder="成果简介（选填）" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -97,20 +100,37 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { ArrowLeft } from '@element-plus/icons-vue'
 import { getProjectDetail, listAchievements, createAchievement, deleteAchievement } from '@/api/project'
+import ProjectSwitcher from '@/components/ProjectSwitcher.vue'
 import { formatDate } from '@/utils/format'
 import { useProcessStore } from '@/store/process'
+import { useUserStore } from '@/store/user'
 
 const route = useRoute()
-const router = useRouter()
 const processStore = useProcessStore()
+const userStore = useUserStore()
 const pid = computed(() => Number(route.params.id))
 
 const project = ref<any>(null)
+
+// 权限判定（与后端 AchievementService.create/delete 保持一致）
+const isLeader = computed(() => !!project.value && Number(project.value.leader_id) === Number(userStore.userInfo?.id))
+const isProjectTeacher = computed(() => userStore.isTeacher && !!project.value && Number(project.value.teacher_id) === Number(userStore.userInfo?.id))
+const isProjectAdmin = computed(() => {
+  if (userStore.isSuperAdmin) return true
+  if (userStore.isCollegeAdmin) return !!project.value && Number(project.value.college_id) === Number(userStore.collegeId)
+  return false
+})
+
+// 成果登记仅在「已立项及之后」阶段（6/7/8/9）且具备权限时可用
+const REGISTER_STATUS = [6, 7, 8, 9]
+const canRegister = computed(() => !!project.value && REGISTER_STATUS.includes(Number(project.value.status))
+  && (isLeader.value || isProjectTeacher.value || isProjectAdmin.value))
+// 删除成果：仅项目负责人或管理员（后端 delete 不允许指导教师删除）
+const canDelete = computed(() => isLeader.value || isProjectAdmin.value)
 const achievements = ref<any[]>([])
 const loading = ref(true)
 const showDialog = ref(false)
@@ -130,17 +150,88 @@ const form = reactive({
 const achievementTypeMap: Record<number, string> = {
   1: '论文', 2: '专利', 3: '软件著作权', 4: '竞赛获奖', 5: '创业成果', 6: '其他',
 }
+// 获奖级别（与成果登记弹窗、后端 AchievementCreate.level 保持一致）
+const achievementLevelMap: Record<number, string> = {
+  1: '校级', 2: '省级', 3: '国家级', 4: '国际级',
+}
 const typeOptions = Object.entries(achievementTypeMap).map(([key, label]) => ({
   value: Number(key), label,
 }))
-const rules: FormRules = {
-  achievement_type: [{ required: true, message: '请选择成果类型', trigger: 'change' }],
-  title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
+interface TypeFieldConfig {
+  fields: string[]
+  required: string[]
+  labels: Record<string, string>
 }
-
-function goBack() {
-  router.push(`/projects/${pid.value}`)
+// 成果类型 → 字段显隐 + 文案 + 必填规则（让表单随类型自适应，避免平铺无关注字段）
+const ACHIEVEMENT_TYPE_CONFIG: Record<number, TypeFieldConfig> = {
+  1: { // 论文
+    fields: ['author', 'publish_date', 'publisher', 'achievement_no', 'level'],
+    required: [],
+    labels: { publisher: '发表刊物', achievement_no: '论文编号/DOI', publish_date: '发表日期' },
+  },
+  2: { // 专利
+    fields: ['author', 'publish_date', 'publisher', 'achievement_no', 'level'],
+    required: ['achievement_no'],
+    labels: { author: '发明人', publisher: '授权机构', achievement_no: '专利号', publish_date: '授权日期' },
+  },
+  3: { // 软件著作权
+    fields: ['author', 'publish_date', 'publisher', 'achievement_no', 'level'],
+    required: ['achievement_no'],
+    labels: { author: '著作权人', publisher: '登记机构', achievement_no: '登记号', publish_date: '登记日期' },
+  },
+  4: { // 竞赛获奖
+    fields: ['author', 'publish_date', 'level', 'award_level'],
+    required: ['level', 'award_level'],
+    labels: { author: '参赛团队', publish_date: '获奖日期', level: '竞赛级别' },
+  },
+  5: { // 创业成果
+    fields: ['author', 'publish_date', 'achievement_no', 'level'],
+    required: [],
+    labels: { author: '负责人', achievement_no: '注册/登记号' },
+  },
+  6: { // 其他
+    fields: ['author', 'publish_date', 'level'],
+    required: [],
+    labels: {},
+  },
 }
+const DEFAULT_FIELD_LABELS: Record<string, string> = {
+  author: '作者', publish_date: '日期', publisher: '发表刊物',
+  achievement_no: '编号', level: '级别', award_level: '获奖等级',
+}
+const awardLevelOptions = ['特等奖', '一等奖', '二等奖', '三等奖', '优秀奖'].map((v) => ({ value: v, label: v }))
+const currentTypeConfig = computed<TypeFieldConfig>(() => {
+  const t = form.achievement_type
+  if (t == null) return { fields: [], required: [], labels: {} }
+  return ACHIEVEMENT_TYPE_CONFIG[t] || { fields: [], required: [], labels: {} }
+})
+function isFieldVisible(key: string) {
+  return currentTypeConfig.value.fields.includes(key)
+}
+function labelOf(key: string) {
+  return currentTypeConfig.value.labels[key] || DEFAULT_FIELD_LABELS[key] || ''
+}
+function onTypeChange() {
+  const cfg = currentTypeConfig.value
+  if (!cfg.fields.includes('author')) form.author = ''
+  if (!cfg.fields.includes('publish_date')) form.publish_date = ''
+  if (!cfg.fields.includes('publisher')) form.publisher = ''
+  if (!cfg.fields.includes('achievement_no')) form.achievement_no = ''
+  if (!cfg.fields.includes('level')) form.level = undefined
+  if (!cfg.fields.includes('award_level')) form.award_level = ''
+  formRef.value?.clearValidate()
+}
+const rules = computed<FormRules>(() => {
+  const cfg = currentTypeConfig.value
+  const r: FormRules = {
+    achievement_type: [{ required: true, message: '请选择成果类型', trigger: 'change' }],
+    title: [{ required: true, message: '请输入标题', trigger: 'blur' }],
+  }
+  if (cfg.required.includes('achievement_no')) r.achievement_no = [{ required: true, message: '请输入编号', trigger: 'blur' }]
+  if (cfg.required.includes('level')) r.level = [{ required: true, message: '请选择级别', trigger: 'change' }]
+  if (cfg.required.includes('award_level')) r.award_level = [{ required: true, message: '请选择获奖等级', trigger: 'change' }]
+  return r
+})
 
 async function loadData() {
   loading.value = true
@@ -161,30 +252,31 @@ async function loadData() {
 
 async function handleSubmit() {
   if (!formRef.value) return
-  await formRef.value.validate(async (valid) => {
-    if (!valid) return
-    submitting.value = true
-    try {
-      await createAchievement({
-        project_id: pid.value,
-        achievement_type: form.achievement_type!,
-        title: form.title,
-        author: form.author || undefined,
-        publish_date: form.publish_date || undefined,
-        publisher: form.publisher || undefined,
-        achievement_no: form.achievement_no || undefined,
-        level: form.level,
-        award_level: form.award_level || undefined,
-        summary: form.summary || undefined,
-      })
-      ElMessage.success('成果登记成功')
-      showDialog.value = false
-      formRef.value?.resetFields()
-      loadData()
-    } finally {
-      submitting.value = false
-    }
-  })
+  const valid = await formRef.value.validate().catch(() => false)
+  if (!valid) return
+  submitting.value = true
+  try {
+    await createAchievement({
+      project_id: pid.value,
+      achievement_type: form.achievement_type!,
+      title: form.title,
+      author: form.author || undefined,
+      publish_date: form.publish_date || undefined,
+      publisher: form.publisher || undefined,
+      achievement_no: form.achievement_no || undefined,
+      level: form.level,
+      award_level: form.award_level || undefined,
+      summary: form.summary || undefined,
+    })
+    ElMessage.success('成果登记成功')
+    showDialog.value = false
+    formRef.value?.resetFields()
+    loadData()
+  } catch {
+    // 错误已由全局请求拦截器统一提示，此处仅兜底避免未捕获异常
+  } finally {
+    submitting.value = false
+  }
 }
 
 async function handleDelete(row: any) {
@@ -195,28 +287,29 @@ async function handleDelete(row: any) {
 }
 
 onMounted(() => loadData())
+onBeforeUnmount(() => processStore.reset())
 </script>
 
 <style scoped>
-.back-bar {
-  margin-bottom: 12px;
-}
 .page-header {
   margin-bottom: 20px;
 }
 .header-row {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
+  gap: 16px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 .page-title {
   font-size: 20px;
   font-weight: 600;
-  margin: 0 0 6px 0;
-}
-.page-subtitle {
-  color: #909399;
-  font-size: 13px;
+  margin: 0;
+  white-space: nowrap;
 }
 .table-wrap {
   overflow-x: auto;

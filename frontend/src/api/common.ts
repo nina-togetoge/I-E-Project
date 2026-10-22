@@ -1,7 +1,7 @@
 /**
  * 公共接口：文件上传下载、日志、搜索等
  */
-import { get, post } from '@/utils/request'
+import { get, post, del } from '@/utils/request'
 import type { PageResult } from '@/utils/request'
 
 /** 上传文件（与后端对齐：biz_type 业务类型 + biz_id 业务ID + 单个 file） */
@@ -34,6 +34,11 @@ export function listAttachments(bizType: string, bizId: number) {
   }>>(`/api/files/list/${bizType}/${bizId}`)
 }
 
+/** 删除附件（软删除，仅上传者或管理员可操作） */
+export function deleteAttachment(fileId: number) {
+  return del(`/api/files/${fileId}`)
+}
+
 /** 下载项目导入模板 */
 export function downloadProjectTemplate() {
   return get('/api/excel/template/project', {}, { responseType: 'blob' })
@@ -48,22 +53,12 @@ export function getOperationLogs(params: {
   operation_type?: string
   start_time?: string
   end_time?: string
+  modules?: string
+  operation_types?: string
+  user_roles?: string
+  statuses?: string
 }) {
   return get<PageResult>('/api/logs', params)
-}
-
-/** 全文检索 */
-export function fullTextSearch(params: {
-  keyword: string
-  page?: number
-  page_size?: number
-}) {
-  return get('/api/search/projects', params)
-}
-
-/** 重建索引 */
-export function rebuildSearchIndex() {
-  return post('/api/search/rebuild-index')
 }
 
 /** 健康检查 */

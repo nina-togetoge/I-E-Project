@@ -94,10 +94,21 @@ def register_exception_handlers(app) -> None:
             errors.append(f"{loc}: {msg}" if loc else msg)
         detail = "; ".join(errors) if errors else "参数格式不正确"
 
+        # 仅保留可序列化字段（loc/msg/type），剔除 ctx/input 等可能含异常对象的原始值，
+        # 否则 model_validator 抛出 ValueError 时 ctx 会携带异常实例导致序列化失败（500）。
+        raw_errors = [
+            {
+                "loc": [str(x) for x in err.get("loc", [])],
+                "msg": err.get("msg", ""),
+                "type": err.get("type", ""),
+            }
+            for err in exc.errors()
+        ]
+
         resp = ResponseModel(
             code=422,
             message=f"请求参数校验失败: {detail}",
-            data={"raw_errors": exc.errors()}
+            data={"raw_errors": raw_errors}
         )
         return JSONResponse(status_code=200, content=resp.model_dump(mode="json"))
 

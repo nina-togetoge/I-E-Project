@@ -3,6 +3,7 @@
 """
 from typing import Optional, List, Tuple, Dict, Any
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import or_, and_, func, extract, desc, asc
 from sqlalchemy.orm import Session, aliased, joinedload
@@ -20,7 +21,7 @@ class ProjectCRUD:
     """项目CRUD封装"""
 
     PROJECT_TYPE_NAME = {1: "创新训练", 2: "创业训练", 3: "创业实践"}
-    PROJECT_LEVEL_NAME = {1: "校级", 2: "省级", 3: "国家级"}
+    PROJECT_LEVEL_NAME = {1: "院级", 2: "校级", 3: "省级", 4: "国家级"}
     # 状态名称统一引用 schemas 中的定义，避免多处漂移（含状态 12 待指导教师确认）
     STATUS_NAME = PROJECT_STATUS_NAME
 
@@ -101,15 +102,26 @@ class ProjectCRUD:
         if data_scope and data_scope.role != 1:
             q = q.filter(ProjProject.status != 0)
 
+        # ---- 已驳回项目不在管理员项目列表中展示 ----
+        # 管理员管理页只关注在办项目；已驳回项目由学生修改重提、指导教师继续指导
+        if data_scope and data_scope.role == 4:
+            q = q.filter(ProjProject.status != 10)
+
         # ---- 筛选 ----
         if keyword:
             kw = f"%{keyword}%"
+            # 成果标题也纳入关键词检索（归档页标注支持按「成果」搜索）
+            achievement_pids = db.query(ProjAchievement.project_id).filter(
+                ProjAchievement.is_deleted == 0,
+                ProjAchievement.title.like(kw),
+            )
             q = q.filter(or_(
                 ProjProject.project_name.like(kw),
                 ProjProject.project_no.like(kw),
                 ProjProject.project_summary.like(kw),
                 LeaderUser.real_name.like(kw),
                 TeacherUser.real_name.like(kw),
+                ProjProject.id.in_(achievement_pids),
             ))
         if project_type is not None:
             q = q.filter(ProjProject.project_type == project_type)
@@ -154,10 +166,10 @@ class ProjectCRUD:
         # 写团队成员
         for tm in team_members_data:
             db.add(ProjTeamMember(project_id=obj.id, **tm))
-        # 写预算
-        total_budget = 0
+        # 写预算（金额用 Decimal 累加，避免 float 精度误差）
+        total_budget = Decimal("0")
         for bg in budgets_data:
-            total_budget += float(bg.get("budget_amount", 0) or 0)
+            total_budget += Decimal(str(bg.get("budget_amount") or 0))
             db.add(ProjBudget(project_id=obj.id, **bg))
         obj.budget_amount = total_budget
         db.flush()
@@ -177,33 +189,53 @@ class ProjectCRUD:
             )
             for tm in team_members_data:
                 db.add(ProjTeamMember(project_id=obj.id, **tm))
-        # 替换预算
+        # 更新预算：同名科目就地更新（保留行 id 与已使用金额），新科目新增，消失科目删除。
+        # 原实现"整表删除重建"会重置 used_amount 并使报销单 budget_item_id 悬空。
         if budgets_data is not None:
-            db.query(ProjBudget).filter(ProjBudget.project_id == obj.id).delete(
-                synchronize_session=False
-            )
-            total_budget = 0
+            existing: Dict[str, List[ProjBudget]] = {}
+            for b in db.query(ProjBudget).filter(ProjBudget.project_id == obj.id).all():
+                existing.setdefault(b.budget_item, []).append(b)
+            total_budget = Decimal("0")
             for bg in budgets_data:
-                total_budget += float(bg.get("budget_amount", 0) or 0)
-                db.add(ProjBudget(project_id=obj.id, **bg))
+                total_budget += Decimal(str(bg.get("budget_amount") or 0))
+                rows = existing.get(bg.get("budget_item")) or []
+                if rows:
+                    b = rows.pop(0)
+                    b.budget_amount = bg.get("budget_amount") or 0
+                    b.remark = bg.get("remark")
+                else:
+                    db.add(ProjBudget(project_id=obj.id, **bg))
+            for rows in existing.values():
+                for b in rows:
+                    db.delete(b)
             obj.budget_amount = total_budget
         db.flush()
         return obj
 
     @staticmethod
     def generate_project_no(db: Session, year: int) -> str:
-        """生成项目编号：IE{year}{6位自增序号}"""
+        """生成项目编号：IE{year}{6位自增序号}
+        基于当年最大编号 +1；并发写入可能撞唯一键，调用方需配合重试（见 bump_project_no）"""
         prefix = f"IE{year}"
         max_no = db.query(func.max(ProjProject.project_no)).filter(
             ProjProject.project_no.like(f"{prefix}%")
         ).scalar()
         seq = 1
-        if max_no and len(max_no) >= 12:
+        if max_no and len(max_no) >= len(prefix) + 6:
             try:
                 seq = int(max_no[-6:]) + 1
             except ValueError:
                 seq = 1
         return f"{prefix}{seq:06d}"
+
+    @staticmethod
+    def bump_project_no(project_no: str, step: int = 1) -> str:
+        """把项目编号末尾 6 位序号 +step，用于唯一键冲突后的重试"""
+        prefix, seq = project_no[:-6], project_no[-6:]
+        try:
+            return f"{prefix}{int(seq) + step:06d}"
+        except ValueError:
+            return project_no
 
 
 class AchievementCRUD:

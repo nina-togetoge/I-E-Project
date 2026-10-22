@@ -61,7 +61,9 @@
       </el-table-column>
 
       <template #empty>
-        <EmptyIllustration type="default" description="暂无数据" />
+        <slot name="empty">
+          <EmptyIllustration type="default" description="暂无数据" />
+        </slot>
       </template>
     </el-table>
 
@@ -111,6 +113,7 @@ export interface TableColumn {
   align?: 'left' | 'center' | 'right'
   slot?: string
   tagType?: 'status' | string
+  showOverflowTooltip?: boolean
   formatter?: (value: any, row: any) => string
 }
 

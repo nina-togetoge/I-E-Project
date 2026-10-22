@@ -50,7 +50,8 @@
             <el-select v-model="formData.project_level" placeholder="请选择级别" style="width: 100%">
               <el-option label="院级" :value="1" />
               <el-option label="校级" :value="2" />
-              <el-option label="省部级" :value="3" />
+              <el-option label="省级" :value="3" />
+              <el-option label="国家级" :value="4" />
             </el-select>
           </el-form-item>
           <el-form-item label="所属学院" prop="college_id">
@@ -58,9 +59,9 @@
               <el-option v-for="c in collegeOptions" :key="c.id" :label="c.college_name" :value="c.id" />
             </el-select>
           </el-form-item>
-          <el-form-item label="参赛比赛" prop="competition_id">
-            <el-select v-model="formData.competition_id" filterable placeholder="请选择参加的比赛（可选）" clearable style="width: 100%">
-              <el-option v-for="c in competitionOptions" :key="c.id" :label="c.title" :value="c.id" />
+          <el-form-item label="参赛比赛" prop="competition_id" required>
+            <el-select v-model="formData.competition_id" filterable placeholder="请选择参加的比赛" clearable style="width: 100%">
+              <el-option v-for="c in competitionOptions" :key="c.id" :label="competitionLabel(c)" :value="c.id" />
             </el-select>
           </el-form-item>
           <el-form-item label="摘要" prop="project_summary">
@@ -106,7 +107,7 @@
           </el-table-column>
           <el-table-column label="年级" width="100">
             <template #default="{ row }">
-              <el-input v-model="row.grade" placeholder="如:2023级" />
+              <el-input v-model="row.grade" placeholder="如:2023" />
             </template>
           </el-table-column>
           <el-table-column label="团队角色">
@@ -233,8 +234,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { useProcessStore } from '@/store/process'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import FileUpload from '@/components/FileUpload.vue'
@@ -242,7 +244,7 @@ import ProjectAttachmentList from '@/components/ProjectAttachmentList.vue'
 import { createProject, createAndSubmitProject, updateProject, getProjectDetail } from '@/api/project'
 import { getUserList } from '@/api/user'
 import { getColleges } from '@/api/auth'
-import { getCompetitionList } from '@/api/competition'
+import { getCompetitionList, competitionLabel, isCompetitionSelectable } from '@/api/competition'
 import { useAutoSaveDraft } from '@/composables/useAutoSaveDraft'
 import ProjectTemplatePicker from '@/components/ProjectTemplatePicker.vue'
 import RichEditor from '@/components/RichEditor.vue'
@@ -257,6 +259,7 @@ const disabledDate = (date: Date) => {
 
 const router = useRouter()
 const route = useRoute()
+const processStore = useProcessStore()
 const currentStep = ref(0)
 const isEditMode = computed(() => !!route.query.id)
 const editingId = computed(() => Number(route.query.id))
@@ -326,6 +329,7 @@ const form1Rules: FormRules = {
   project_type: [{ required: true, message: '请选择项目类别', trigger: 'change' }],
   project_level: [{ required: true, message: '请选择项目级别', trigger: 'change' }],
   college_id: [{ required: true, message: '请选择所属学院', trigger: 'change' }],
+  competition_id: [{ required: true, message: '请选择参加的比赛', trigger: 'change' }],
   project_summary: [{ required: true, message: '请输入项目摘要', trigger: 'blur' }],
   dateRange: [{ required: true, message: '请选择起止时间', trigger: 'change' }],
 }
@@ -398,6 +402,7 @@ async function searchStudent(row: any, _index: number) {
     row.student_id = 0
     row.student_name = ''
     row.major = ''
+    row.grade = ''
     return
   }
   try {
@@ -407,13 +412,15 @@ async function searchStudent(row: any, _index: number) {
       const s = items[0]
       row.student_id = s.id
       row.student_name = s.real_name || s.username
-      row.major = s.college_name || ''
+      // 用户信息中无「专业」字段，专业由用户手动填写，此处不回填
+      row.grade = s.grade || ''
       ElMessage.success(`已自动填充：${row.student_name}`)
     } else if (items.length > 1) {
       ElMessage.warning(`找到 ${items.length} 个匹配学生，请精确输入学号`)
     } else {
       ElMessage.warning('未找到该学号的学生，请手动填写')
       row.student_id = 0
+      row.grade = ''
     }
   } catch (_) {
     ElMessage.error('学生搜索失败，请手动填写')
@@ -456,7 +463,7 @@ onMounted(async () => {
   // 加载可报名的比赛（状态为报名中/进行中）
   try {
     const compRes = await getCompetitionList({ page: 1, page_size: 100 })
-    competitionOptions.value = (compRes.data.items || []).filter((c: any) => [1, 2].includes(c.status))
+    competitionOptions.value = (compRes.data.items || []).filter(isCompetitionSelectable)
   } catch (_) {}
 
   if (isEditMode.value) {
@@ -496,6 +503,8 @@ onMounted(async () => {
     }
   }
 })
+
+onBeforeUnmount(() => processStore.reset())
 
 async function searchTeacher(query: string) {
   if (!query) {
@@ -583,6 +592,10 @@ async function handleSaveDraft() {
 }
 
 async function handleSubmit() {
+  if (!formData.competition_id) {
+    ElMessage.warning('请选择参加的比赛')
+    return
+  }
   if (formData.budgets.length === 0) {
     ElMessage.warning('请至少添加一项预算')
     return

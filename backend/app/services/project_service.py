@@ -2,11 +2,12 @@
 项目申报与审核 业务逻辑层(Service)
 """
 from typing import List, Tuple, Dict, Any, Optional
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract, case
+from sqlalchemy.exc import IntegrityError
 
 from app.core.security import RoleEnum, ROLE_NAME_MAP, is_super_admin, is_college_admin
 from app.core.exceptions import (
@@ -17,23 +18,143 @@ from app.core.deps import PaginationParams, DataScope
 from app.crud.user import CollegeCRUD, UserCRUD
 from app.crud.project import ProjectCRUD, AchievementCRUD
 from app.crud.review import ReviewCRUD, MidtermCRUD
-from app.schemas.review import REVIEW_STAGE_COLLEGE, REVIEW_STAGE_TEACHER, REVIEW_STAGE_FINAL
+from app.schemas.review import (
+    REVIEW_STAGE_COLLEGE, REVIEW_STAGE_TEACHER, REVIEW_STAGE_UNIVERSITY, REVIEW_STAGE_EXPERT,
+    REVIEW_STAGE_FINAL, REVIEW_RESULT_REJECT, REVIEW_RESULT_MODIFY,
+)
 from app.models import (
     ProjProject, SysUser, ProjAchievement, ProjBudget, ProjReview, ProjExpense,
+    ProjChangeRequest, Competition,
 )
 from app.schemas.project import (
     ProjectCreate, ProjectUpdate, ProjectQueryParams,
     ProjectListItem, ProjectDetailResponse, ProjectSubmitResponse,
     AchievementCreate, AchievementResponse, ProjectStatisticsResponse,
     StatisticsTrendItem, CollegeStatisticsItem, PROJECT_STATUS_DRAFT, PROJECT_STATUS_PENDING_COLLEGE,
-    PROJECT_STATUS_PENDING_TEACHER,
-    PROJECT_STATUS_NAME,
+    PROJECT_STATUS_PENDING_TEACHER, PROJECT_STATUS_PENDING_UNIVERSITY, PROJECT_STATUS_PENDING_EXPERT,
+    PROJECT_STATUS_PENDING_EXPERT_ASSIGN,
+    PROJECT_STATUS_APPROVED, PROJECT_STATUS_MIDTERM, PROJECT_STATUS_PENDING_FINAL,
+    PROJECT_STATUS_REJECTED, PROJECT_STATUS_NAME,
     EXPENSE_STATUS_COMPLETED, EXPENSE_STATUS_REJECTED,
+)
+from app.schemas.review import (
+    CHANGE_STATUS_PENDING, CHANGE_STATUS_EXPIRED,
 )
 
 
 class ProjectService:
     """项目申报业务服务"""
+
+    # 可提交变更/延期申请的项目阶段：仅「待校级复审」「待专家评审」两个审核段
+    CHANGE_WINDOW_STATUSES = {
+        PROJECT_STATUS_PENDING_UNIVERSITY, PROJECT_STATUS_PENDING_EXPERT,
+    }
+
+    # ================= 流程截止日（截止日驱动锁定） =================
+    @staticmethod
+    def _get_competition(db: Session, project: ProjProject) -> Optional[Competition]:
+        """项目所关联的比赛（时间表来源）；未关联返回 None"""
+        if not project or not project.competition_id:
+            return None
+        return db.query(Competition).filter(Competition.id == project.competition_id).first()
+
+    @staticmethod
+    def is_past_deadline(deadline: Optional[date]) -> bool:
+        """是否已过截止日（截止日当天仍可用）；未配置(None)视为不锁"""
+        if deadline is None:
+            return False
+        return date.today() > deadline
+
+    @staticmethod
+    def get_change_deadline_for_status(db: Session, project: ProjProject, status: Optional[int]) -> Optional[date]:
+        """指定审核段的变更/延期锁死日（比赛未配置时间表则不锁）"""
+        comp = ProjectService._get_competition(db, project)
+        if not comp:
+            return None
+        return {
+            PROJECT_STATUS_PENDING_UNIVERSITY: comp.university_review_date,  # 待校级复审
+            PROJECT_STATUS_PENDING_EXPERT: comp.expert_review_date,          # 待专家评审
+        }.get(status)
+
+    @staticmethod
+    def get_change_deadline(db: Session, project: ProjProject) -> Optional[date]:
+        """项目『当前阶段审核日』= 变更/延期申请的锁死日（比赛未配置时间表则不锁）"""
+        return ProjectService.get_change_deadline_for_status(db, project, project.status)
+
+    @staticmethod
+    def get_teacher_confirm_deadline(db: Session, project: ProjProject) -> Optional[date]:
+        """指导教师确认截止日 = 学院初审审核日"""
+        comp = ProjectService._get_competition(db, project)
+        return comp.college_review_date if comp else None
+
+    @staticmethod
+    def get_midterm_deadline(db: Session, project: ProjProject) -> Optional[date]:
+        """中期报告提交/审核截止日"""
+        comp = ProjectService._get_competition(db, project)
+        return comp.midterm_deadline if comp else None
+
+    @staticmethod
+    def get_final_deadline(db: Session, project: ProjProject) -> Optional[date]:
+        """结题报告提交/审核截止日"""
+        comp = ProjectService._get_competition(db, project)
+        return comp.final_deadline if comp else None
+
+    # ================= 超期自动作废清扫（读列表/详情时顺带执行） =================
+    @staticmethod
+    def sweep_expired_change_requests(db: Session, project_ids: Optional[List[int]] = None) -> int:
+        """把已过『审核日 + 1 天缓冲期』仍待审核的变更/延期申请置为『已作废』；记录保留以便追责"""
+        q = db.query(ProjChangeRequest).filter(
+            ProjChangeRequest.is_deleted == 0,
+            ProjChangeRequest.status == CHANGE_STATUS_PENDING,
+        )
+        if project_ids is not None:
+            if not project_ids:
+                return 0
+            q = q.filter(ProjChangeRequest.project_id.in_(project_ids))
+        voided = 0
+        for obj in q.all():
+            project = ProjectCRUD.get_by_id(db, obj.project_id)
+            # 以提交时所属审核段的审核日为准，避免项目已推进导致缓冲期被放宽
+            deadline = ProjectService.get_change_deadline_for_status(
+                db, project, obj.project_status_at_submit or project.status
+            ) if project else None
+            if deadline is not None and date.today() > deadline + timedelta(days=1):
+                obj.status = CHANGE_STATUS_EXPIRED
+                obj.reject_reason = "超过审批缓冲期自动作废"
+                voided += 1
+        if voided:
+            db.commit()
+        return voided
+
+    @staticmethod
+    def sweep_expired_midterm(db: Session, project_id: int) -> None:
+        """中期检查待审核报告超过『中期报告提交截止日』仍未审完 → 置为『已作废』（留档）"""
+        midterm = MidtermCRUD.get_by_project(db, project_id)
+        if not midterm or midterm.status != 1:
+            return
+        project = ProjectCRUD.get_by_id(db, project_id)
+        deadline = ProjectService.get_midterm_deadline(db, project) if project else None
+        if deadline is not None and date.today() > deadline:
+            midterm.status = 5  # 已作废
+            midterm.review_comment = "超过中期报告审核截止日自动作废"
+            db.commit()
+
+    @staticmethod
+    def sweep_expired_final(db: Session, project_id: int) -> None:
+        """结项验收报告占位超过『结题报告提交截止日』仍未被验收 → 软删留档（项目退回未提交报告）"""
+        placeholder = db.query(ProjReview).filter(
+            ProjReview.project_id == project_id,
+            ProjReview.review_stage == REVIEW_STAGE_FINAL,
+            ProjReview.review_result == 99,
+            ProjReview.is_deleted == 0,
+        ).first()
+        if not placeholder:
+            return
+        project = ProjectCRUD.get_by_id(db, project_id)
+        deadline = ProjectService.get_final_deadline(db, project) if project else None
+        if deadline is not None and date.today() > deadline:
+            placeholder.is_deleted = 1  # 软删留档（记录仍在库中，便于追责）
+            db.commit()
 
     @staticmethod
     def _to_list_item(obj: ProjProject) -> ProjectListItem:
@@ -71,6 +192,32 @@ class ProjectService:
         college = CollegeCRUD.get_by_id(db, obj.college_id)
         if college:
             item.college_name = college.college_name
+        # 是否「可修改后重新提交」：仅「指导教师驳回」允许；学院/校级/专家驳回即落选（终局）
+        item.resubmittable = (
+            item.status == PROJECT_STATUS_REJECTED
+            and not ProjectService._is_eliminated(db, obj)
+        )
+        # 是否已提交结项验收报告（占位记录：阶段=结题验收4、结果=99），供前端「撤回报告提交」判定
+        item.final_report_submitted = db.query(ProjReview).filter(
+            ProjReview.project_id == obj.id,
+            ProjReview.review_stage == REVIEW_STAGE_FINAL,
+            ProjReview.review_result == 99,
+            ProjReview.is_deleted == 0,
+        ).first() is not None
+        # 流程截止日（截止日驱动锁定）：变更/延期锁死日 = 当前阶段审核日
+        item.change_deadline = ProjectService.get_change_deadline(db, obj)
+        item.change_locked = (
+            obj.status not in ProjectService.CHANGE_WINDOW_STATUSES
+            or ProjectService.is_past_deadline(item.change_deadline)
+        )
+        item.midterm_deadline = ProjectService.get_midterm_deadline(db, obj)
+        item.final_deadline = ProjectService.get_final_deadline(db, obj)
+        # 竞赛获奖成果数量
+        item.award_count = db.query(func.count(ProjAchievement.id)).filter(
+            ProjAchievement.project_id == obj.id,
+            ProjAchievement.achievement_type == 4,
+            ProjAchievement.is_deleted == 0,
+        ).scalar() or 0
         # 加载项目附件
         from app.models.user import SysAttachment
         atts = db.query(SysAttachment).filter(
@@ -88,11 +235,92 @@ class ProjectService:
         return item
 
     @staticmethod
-    def _check_edit_permission(project: ProjProject, operator: SysUser) -> None:
+    def _assign_project_no(db: Session, obj: ProjProject) -> None:
+        """分配唯一项目编号：先按当年最大编号+1，撞唯一键时序号递增重试（最多5次）。
+        在 SAVEPOINT 内 flush，冲突回滚到保存点后仅重试编号，不影响已构建的其他待写数据。"""
+        year = date.today().year
+        candidate = ProjectCRUD.generate_project_no(db, year)
+        for _ in range(5):
+            obj.project_no = candidate
+            try:
+                with db.begin_nested():
+                    db.flush()
+                return
+            except IntegrityError:
+                candidate = ProjectCRUD.bump_project_no(candidate)
+        raise DataConflictException(message="项目编号生成冲突，请重试")
+
+    @staticmethod
+    def _sync_current_approver(db: Session, project: ProjProject) -> None:
+        """根据项目阶段刷新"当前审批人"字段（供项目详情展示审批进度）：
+        - 待指导教师确认(12)：指导教师
+        - 待学院初审(1) / 待分配评审专家(13)：该学院的管理员
+        - 其他阶段（待校级复审/专家评审/已立项及之后）：无单一审批人，置空
+        """
+        if project.status == PROJECT_STATUS_PENDING_TEACHER:
+            project.current_approver_id = project.teacher_id
+        elif project.status in (PROJECT_STATUS_PENDING_COLLEGE, PROJECT_STATUS_PENDING_EXPERT_ASSIGN):
+            admin = db.query(SysUser).filter(
+                SysUser.role == RoleEnum.ADMIN,
+                SysUser.college_id == project.college_id,
+                SysUser.is_deleted == 0,
+            ).order_by(SysUser.id).first()
+            project.current_approver_id = admin.id if admin else None
+        else:
+            project.current_approver_id = None
+
+    @staticmethod
+    def _derive_competition_session(db: Session, data: Dict[str, Any]) -> None:
+        """根据所选比赛回填/刷新「参赛届次」（冗余存储，便于比赛下架后仍可追溯届次）。
+        仅当 data 中显式含 competition_id 时处理；未选择比赛则置空。"""
+        if "competition_id" not in data:
+            return
+        cid = data.get("competition_id")
+        if not cid:
+            data["competition_session"] = None
+            return
+        from app.models import Competition
+        comp = db.query(Competition).filter(
+            Competition.id == cid, Competition.is_deleted == 0
+        ).first()
+        data["competition_session"] = comp.session if comp else None
+
+    @staticmethod
+    def _assert_competition_submittable(db: Session, competition_id: Optional[int]) -> None:
+        """提交审核前校验参赛比赛：必须存在且处于报名中/进行中"""
+        from app.models import Competition
+        comp = db.query(Competition).filter(
+            Competition.id == competition_id, Competition.is_deleted == 0
+        ).first()
+        if not comp:
+            raise ParamValidateException(message="所选比赛不存在或已被删除，请重新选择")
+        if comp.status not in (1, 2):
+            raise ParamValidateException(message="所选比赛已结束或未开放报名，请重新选择")
+
+    @staticmethod
+    def _is_eliminated(db: Session, project: ProjProject) -> bool:
+        """是否「落选」：在指导教师确认之后的环节（学院/校级/专家）被驳回。
+        这类驳回为终局，任何角色都不得再修改或重新提交；
+        仅「指导教师驳回」允许学生改后重提。"""
+        return db.query(ProjReview.id).filter(
+            ProjReview.project_id == project.id,
+            ProjReview.review_stage.in_(
+                (REVIEW_STAGE_COLLEGE, REVIEW_STAGE_UNIVERSITY, REVIEW_STAGE_EXPERT)
+            ),
+            ProjReview.review_result.in_((REVIEW_RESULT_REJECT, REVIEW_RESULT_MODIFY)),
+            ProjReview.is_deleted == 0,
+        ).first() is not None
+
+    @staticmethod
+    def _check_edit_permission(db: Session, project: ProjProject, operator: SysUser) -> None:
         """编辑权限：
         - 草稿状态(0)：仅项目负责人(学生)可编辑
-        - 已驳回状态(10)：项目负责人或指导教师可编辑
-        - 真超级管理员可编辑全校项目；学院管理员仅可编辑本院已驳回项目"""
+        - 已驳回状态(10)：仅项目负责人可编辑（指导教师驳回后由学生修改重提）；「落选」项目不可编辑
+        - 真超级管理员可编辑全校项目；学院管理员仅可编辑本院已驳回项目
+        - 指导教师、专家不可编辑项目"""
+        # 落选（学院/校级/专家驳回）为终局，任何角色不可再修改
+        if project.status == PROJECT_STATUS_REJECTED and ProjectService._is_eliminated(db, project):
+            raise PermissionDeniedException(message="该项目已落选，不可再修改")
         # 分级判断
         if is_super_admin(operator):
             # 超级管理员也不允许编辑草稿（草稿仅学生可见可编辑）
@@ -108,18 +336,11 @@ class ProjectService:
             if project.status != 10:
                 raise PermissionDeniedException(message="当前状态不可修改，如有需要请先撤回")
             return
-        # 普通教师 / 学生
+        # 普通教师 / 学生：仅项目负责人本人可编辑
         if project.status not in (PROJECT_STATUS_DRAFT, 10):
             raise PermissionDeniedException(message="当前状态不可修改，如有需要请先撤回")
-        if operator.role == RoleEnum.STUDENT:
-            if project.leader_id != operator.id:
-                raise PermissionDeniedException(message="仅项目负责人可编辑本项目")
-        elif operator.role == RoleEnum.TEACHER:
-            # 教师仅可编辑已驳回项目，不可编辑草稿
-            if project.status == PROJECT_STATUS_DRAFT:
-                raise PermissionDeniedException(message="草稿项目仅项目负责人可编辑")
-            if project.teacher_id != operator.id and project.leader_id != operator.id:
-                raise PermissionDeniedException(message="仅指导教师或负责人可编辑")
+        if project.leader_id != operator.id:
+            raise PermissionDeniedException(message="仅项目负责人可编辑本项目")
 
     # ========== 列表 / 详情 ==========
     @staticmethod
@@ -176,8 +397,48 @@ class ProjectService:
                 ProjReview.is_deleted == 0,
             ).group_by(ProjReview.project_id).all()
             cnt_map = {c.project_id: c.cnt for c in counts}
+            # 已提交评审的专家数（>0 时专家名单锁定，前端据此禁用分配弹窗）
+            reviewed_counts = db.query(
+                ProjReview.project_id,
+                func.count(ProjReview.id).label("cnt")
+            ).filter(
+                ProjReview.project_id.in_(project_ids),
+                ProjReview.review_stage == 3,
+                ProjReview.review_result != 99,
+                ProjReview.is_deleted == 0,
+            ).group_by(ProjReview.project_id).all()
+            reviewed_map = {c.project_id: c.cnt for c in reviewed_counts}
+            # 批量查竞赛获奖成果数（归档页「获奖」列与筛选依赖）
+            award_counts = db.query(
+                ProjAchievement.project_id,
+                func.count(ProjAchievement.id).label("cnt")
+            ).filter(
+                ProjAchievement.project_id.in_(project_ids),
+                ProjAchievement.achievement_type == 4,
+                ProjAchievement.is_deleted == 0,
+            ).group_by(ProjAchievement.project_id).all()
+            award_map = {c.project_id: c.cnt for c in award_counts}
             for it in result:
                 it.assigned_expert_count = cnt_map.get(it.id, 0)
+                it.reviewed_expert_count = reviewed_map.get(it.id, 0)
+                it.award_count = award_map.get(it.id, 0)
+            # 批量标记「落选」（状态10 且在指导教师之后的环节被驳回 → 不可修改重提）
+            rejected_ids = [it.id for it in result if it.status == PROJECT_STATUS_REJECTED]
+            eliminated_ids = set()
+            if rejected_ids:
+                elim_rows = db.query(ProjReview.project_id).filter(
+                    ProjReview.project_id.in_(rejected_ids),
+                    ProjReview.review_stage.in_(
+                        (REVIEW_STAGE_COLLEGE, REVIEW_STAGE_UNIVERSITY, REVIEW_STAGE_EXPERT)
+                    ),
+                    ProjReview.review_result.in_((REVIEW_RESULT_REJECT, REVIEW_RESULT_MODIFY)),
+                    ProjReview.is_deleted == 0,
+                ).distinct().all()
+                eliminated_ids = {r[0] for r in elim_rows}
+            for it in result:
+                it.resubmittable = (
+                    it.status == PROJECT_STATUS_REJECTED and it.id not in eliminated_ids
+                )
         return result, total
 
     @staticmethod
@@ -217,6 +478,10 @@ class ProjectService:
 
     @staticmethod
     def get_detail(db: Session, project_id: int, operator: SysUser) -> ProjectDetailResponse:
+        # 顺带清扫超期未审的变更申请 / 中期报告 / 结项报告（自动作废，留档）
+        ProjectService.sweep_expired_change_requests(db, [project_id])
+        ProjectService.sweep_expired_midterm(db, project_id)
+        ProjectService.sweep_expired_final(db, project_id)
         obj = ProjectCRUD.get_by_id(db, project_id)
         if not obj:
             raise ResourceNotFoundException(message="项目不存在")
@@ -253,7 +518,8 @@ class ProjectService:
             from app.models import ProjReview
             ok = db.query(ProjReview).filter(
                 ProjReview.project_id == project_id,
-                ProjReview.reviewer_id == operator.id
+                ProjReview.reviewer_id == operator.id,
+                ProjReview.is_deleted == 0,  # 已取消的分配记录不再授予可见性
             ).first() is not None
         if not ok:
             raise PermissionDeniedException(message="无权查看该项目")
@@ -298,6 +564,12 @@ class ProjectService:
         elif "leader_id" not in data or not data.get("leader_id"):
             raise ParamValidateException(message="管理员创建需额外指定负责人（通过扩展字段，此示例暂不支持）")
 
+        # 指导教师须属于该项目所在学院（真超级管理员可跨院指定，用于演示代录）
+        if data.get("teacher_id") and not is_super_admin(operator):
+            t = UserCRUD.get_by_id(db, data["teacher_id"])
+            if t and t.college_id != data.get("college_id"):
+                raise ParamValidateException(message="指导教师不属于该项目所在学院")
+
         # 直接提交时，必须先校验必填项（与 submit 方法保持一致）
         if not as_draft:
             missing = []
@@ -309,19 +581,23 @@ class ProjectService:
                 missing.append("团队成员(至少1人)")
             if not req.budgets or len(req.budgets) == 0:
                 missing.append("预算明细")
+            if not req.competition_id:
+                missing.append("参赛比赛")
             if missing:
                 raise ParamValidateException(message="提交前请完善以下必填项：" + "、".join(missing))
+            ProjectService._assert_competition_submittable(db, req.competition_id)
 
         data["status"] = PROJECT_STATUS_DRAFT if as_draft else PROJECT_STATUS_PENDING_TEACHER
         if not as_draft:
             data["submit_time"] = datetime.now()
+        # 根据所选比赛回填参赛届次
+        ProjectService._derive_competition_session(db, data)
 
         obj = ProjectCRUD.create(db, data)
-        # 提交时自动生成编号
+        # 提交时自动生成编号（唯一键冲突自动递增重试）
         if not as_draft:
-            year = date.today().year
-            obj.project_no = ProjectCRUD.generate_project_no(db, year)
-            db.flush()
+            ProjectService._assign_project_no(db, obj)
+            ProjectService._sync_current_approver(db, obj)
             # 创建指导教师确认占位审核记录
             if obj.teacher_id and not ReviewCRUD.exist_by_project_stage_reviewer(
                 db, obj.id, REVIEW_STAGE_TEACHER, obj.teacher_id
@@ -357,13 +633,23 @@ class ProjectService:
         obj = ProjectCRUD.get_by_id(db, project_id)
         if not obj:
             raise ResourceNotFoundException(message="项目不存在")
-        ProjectService._check_edit_permission(obj, operator)
+        ProjectService._check_edit_permission(db, obj, operator)
         data = req.model_dump(exclude_unset=True)
+        # 起止日期顺序校验：仅更新一端时，与库中另一端合并后再判断
+        new_start = data.get("start_date", obj.start_date)
+        new_end = data.get("end_date", obj.end_date)
+        if new_start and new_end and new_start > new_end:
+            raise ParamValidateException(message="开始日期不能晚于结束日期")
+        # 若变更了参赛比赛，同步刷新参赛届次
+        ProjectService._derive_competition_session(db, data)
         # 如果包含 teacher_id，校验
         if req.teacher_id:
             t = UserCRUD.get_by_id(db, req.teacher_id)
             if not t or t.role not in (RoleEnum.TEACHER, RoleEnum.ADMIN):
                 raise ParamValidateException(message="指导教师无效")
+            # 指导教师须属于该项目所在学院（真超级管理员可跨院指定，用于演示代录）
+            if not is_super_admin(operator) and t.college_id != data.get("college_id", obj.college_id):
+                raise ParamValidateException(message="指导教师不属于该项目所在学院")
         # attachment_ids 不直接写入项目表，单独处理附件关联
         attachment_ids = data.pop("attachment_ids", None)
         obj = ProjectCRUD.update(db, obj, data)
@@ -383,11 +669,17 @@ class ProjectService:
 
     @staticmethod
     def submit(db: Session, project_id: int, operator: SysUser) -> ProjectSubmitResponse:
-        """草稿 -> 提交进入学院初审"""
+        """草稿/已驳回 -> 提交审核。
+
+        规则：
+          - 首次提交、或「指导教师驳回」后重提：从「待指导教师确认」重走；
+          - 指导教师确认之后的环节（学院/校级/专家）驳回即「落选」，不可重提。
+        """
         obj = ProjectCRUD.get_by_id(db, project_id)
         if not obj:
             raise ResourceNotFoundException(message="项目不存在")
-        ProjectService._check_edit_permission(obj, operator)
+        # 落选项目在 _check_edit_permission 中即被拒绝
+        ProjectService._check_edit_permission(db, obj, operator)
         if obj.status != PROJECT_STATUS_DRAFT and obj.status != 10:
             raise ParamValidateException(message="当前项目状态不可提交审核")
         # 必填校验
@@ -400,20 +692,30 @@ class ProjectService:
             missing.append("团队成员(至少1人)")
         if not obj.budgets or len(obj.budgets) == 0:
             missing.append("预算明细")
+        if not obj.competition_id:
+            missing.append("参赛比赛")
         if missing:
             raise ParamValidateException(message="提交前请完善以下必填项：" + "、".join(missing))
+        ProjectService._assert_competition_submittable(db, obj.competition_id)
 
-        obj.status = PROJECT_STATUS_PENDING_TEACHER
         obj.submit_time = datetime.now()
-        if not obj.project_no:
-            year = date.today().year
-            obj.project_no = ProjectCRUD.generate_project_no(db, year)
-        # 清除上一轮审核记录（含退回修改后重提），使各环节可重新审核
+        # 重提清除上一轮驳回原因，避免旧状态残留
+        obj.reject_reason = None
+        # 整条流程从「待指导教师确认」重走，清空上一轮审核记录
+        obj.status = PROJECT_STATUS_PENDING_TEACHER
         db.query(ProjReview).filter(
             ProjReview.project_id == obj.id,
             ProjReview.is_deleted == 0,
         ).update({ProjReview.is_deleted: 1}, synchronize_session=False)
-        db.flush()
+
+        # 刷新当前审批人（随目标状态：待学院初审→学院管理员；待校级复审/待专家评审→清空等）
+        ProjectService._sync_current_approver(db, obj)
+
+        # 首次提交时生成项目编号（唯一键冲突自动递增重试）
+        if obj.project_no:
+            db.flush()
+        else:
+            ProjectService._assign_project_no(db, obj)
 
         # 创建指导教师确认占位审核记录，使指导教师在待审核列表中看到该项目
         if obj.teacher_id and not ReviewCRUD.exist_by_project_stage_reviewer(
@@ -431,11 +733,12 @@ class ProjectService:
             })
 
         db.commit()
+        status_name = PROJECT_STATUS_NAME.get(obj.status, "")
         return ProjectSubmitResponse(
             project_id=obj.id,
             status=obj.status,
-            status_name=PROJECT_STATUS_NAME.get(obj.status, ""),
-            message=f"已提交，等待指导教师确认，项目编号：{obj.project_no}"
+            status_name=status_name,
+            message=f"已提交，等待指导教师确认，项目编号：{obj.project_no}",
         )
 
     @staticmethod
@@ -484,6 +787,8 @@ class ProjectService:
             raise PermissionDeniedException(message="仅项目负责人可提交结项报告")
         if obj.status != 8:
             raise ParamValidateException(message="仅待结题状态可提交结项验收报告")
+        if ProjectService.is_past_deadline(ProjectService.get_final_deadline(db, obj)):
+            raise ParamValidateException(message="已超过结题报告提交截止日，无法提交结项验收报告")
         if not final_report or not final_report.strip():
             raise ParamValidateException(message="请填写结项验收报告")
 
@@ -529,6 +834,39 @@ class ProjectService:
         )
 
     @staticmethod
+    def withdraw_final(db: Session, project_id: int, operator: SysUser) -> ProjectSubmitResponse:
+        """撤回结项验收报告提交：仅项目负责人本人（真超级管理员可代操作）。
+        撤回后删除报告占位记录，项目仍停留在「待结题(8)」，可修改后重新提交。"""
+        from app.models import ProjReview
+        obj = ProjectCRUD.get_by_id(db, project_id)
+        if not obj:
+            raise ResourceNotFoundException(message="项目不存在")
+        if not is_super_admin(operator) and obj.leader_id != operator.id:
+            raise PermissionDeniedException(message="仅项目负责人可撤回结项报告提交")
+        if obj.status != 8:
+            raise ParamValidateException(message="仅待结题状态可撤回结项报告提交")
+        # 截止日校验：超过结题报告截止日不允许撤回，否则撤回后将无法再次提交而卡死流程
+        if ProjectService.is_past_deadline(ProjectService.get_final_deadline(db, obj)):
+            raise ParamValidateException(message="已超过结题报告提交截止日，无法撤回结项验收报告")
+        placeholder = db.query(ProjReview).filter(
+            ProjReview.project_id == obj.id,
+            ProjReview.review_stage == REVIEW_STAGE_FINAL,
+            ProjReview.review_result == 99,  # 占位=报告已提交待验收
+            ProjReview.is_deleted == 0,
+        ).first()
+        if not placeholder:
+            raise ParamValidateException(message="尚未提交结项验收报告，无需撤回")
+        # 删除报告占位记录：专家结题验收前须存在该记录，撤回后需重新提交
+        db.delete(placeholder)
+        db.commit()
+        return ProjectSubmitResponse(
+            project_id=obj.id,
+            status=obj.status,
+            status_name=PROJECT_STATUS_NAME.get(obj.status, ""),
+            message="结项验收报告已撤回，可修改后重新提交"
+        )
+
+    @staticmethod
     def withdraw(db: Session, project_id: int, operator: SysUser) -> None:
         """学生/负责人撤回项目（状态->草稿）"""
         obj = ProjectCRUD.get_by_id(db, project_id)
@@ -545,14 +883,18 @@ class ProjectService:
                 raise PermissionDeniedException(message="仅负责人可撤回")
         else:
             raise PermissionDeniedException(message="无权限撤回该项目")
-        if obj.status not in (PROJECT_STATUS_PENDING_TEACHER, PROJECT_STATUS_PENDING_COLLEGE, 2, 3):
-            raise ParamValidateException(message="仅待审核/学院通过状态可撤回")
+        # 仅在「待指导教师确认」阶段可撤回；进入学院初审(1)/校级复审(3)等后续环节后不可撤回
+        if obj.status != PROJECT_STATUS_PENDING_TEACHER:
+            raise ParamValidateException(message="仅『待指导教师确认』阶段可撤回，进入学院初审后不可撤回")
         # 清除该项目已产生的审核记录，使重新提交后可再次审核
         db.query(ProjReview).filter(
             ProjReview.project_id == obj.id,
             ProjReview.is_deleted == 0,
         ).update({ProjReview.is_deleted: 1}, synchronize_session=False)
         obj.status = PROJECT_STATUS_DRAFT
+        # 撤回后清空驳回原因与当前审批人，回到干净的草稿态
+        obj.reject_reason = None
+        obj.current_approver_id = None
         db.commit()
 
     @staticmethod
@@ -577,6 +919,13 @@ class ProjectService:
                 raise PermissionDeniedException(message="仅负责人可删除草稿")
         else:
             raise PermissionDeniedException(message="无权限删除该项目")
+        # 级联软删除所有子数据，避免报销/成果/预算/审核记录在列表与统计中残留
+        from app.models import ProjTeamMember, ProjMidtermCheck, ProjChangeRequest
+        for model in (ProjTeamMember, ProjReview, ProjBudget, ProjExpense,
+                      ProjAchievement, ProjMidtermCheck, ProjChangeRequest):
+            db.query(model).filter(
+                model.project_id == obj.id, model.is_deleted == 0
+            ).update({model.is_deleted: 1}, synchronize_session=False)
         obj.is_deleted = 1
         db.commit()
 
@@ -598,7 +947,11 @@ class ProjectService:
         elif scope.get("teacher_user_ids"):
             q_pending = q.filter(ProjProject.status == 12, ProjProject.teacher_id == data_scope.user_id)
         elif scope.get("is_college_admin"):
-            q_pending = q.filter(ProjProject.status == 1, ProjProject.college_id == data_scope.college_id)
+            # 学院初审 + 本院项目的专家分配（待分配评审专家 13 同样需要管理员处理）
+            q_pending = q.filter(
+                ProjProject.status.in_([PROJECT_STATUS_PENDING_COLLEGE, PROJECT_STATUS_PENDING_EXPERT_ASSIGN]),
+                ProjProject.college_id == data_scope.college_id,
+            )
         elif scope.get("expert_user_id"):
             assigned_ids = db.query(ProjReview.project_id).filter(
                 ProjReview.reviewer_id == data_scope.user_id,
@@ -607,7 +960,10 @@ class ProjectService:
             ).distinct()
             q_pending = q.filter(ProjProject.status == 5, ProjProject.id.in_(assigned_ids))
         else:
-            q_pending = q.filter(ProjProject.status == 3)
+            # 超管：待校级复审 + 待分配评审专家（两项都是超管的待办）
+            q_pending = q.filter(
+                ProjProject.status.in_([PROJECT_STATUS_PENDING_UNIVERSITY, PROJECT_STATUS_PENDING_EXPERT_ASSIGN])
+            )
         q_approved = q.filter(ProjProject.status.in_([6, 7, 8, 9]))
         q_finished = q.filter(ProjProject.status == 9)
 
@@ -779,7 +1135,11 @@ class ProjectService:
             # 成果数
             achievements = db.query(func.count(ProjAchievement.id)).join(
                 ProjProject, ProjAchievement.project_id == ProjProject.id
-            ).filter(ProjProject.college_id == col.id, ProjProject.is_deleted == 0).scalar() or 0
+            ).filter(
+                ProjProject.college_id == col.id,
+                ProjProject.is_deleted == 0,
+                ProjAchievement.is_deleted == 0,
+            ).scalar() or 0
 
             # 专家评审平均分
             avg_score_row = db.query(func.avg(ProjReview.score)).join(
@@ -847,7 +1207,9 @@ class AchievementService:
     @staticmethod
     def delete(db: Session, pk: int, operator: SysUser) -> None:
         from app.models import ProjAchievement
-        ach = db.query(ProjAchievement).filter(ProjAchievement.id == pk).first()
+        ach = db.query(ProjAchievement).filter(
+            ProjAchievement.id == pk, ProjAchievement.is_deleted == 0
+        ).first()
         if not ach:
             raise ResourceNotFoundException(message="成果不存在")
         if not is_super_admin(operator):

@@ -34,6 +34,9 @@ def test_get_stage_from_status():
 
 
 def test_non_flow_status_has_no_stage():
-    """驳回(10)/撤销(11)等非流程态不应落入任何审核阶段"""
-    assert ReviewService._get_stage_from_status(10) == 0
-    assert ReviewService._get_stage_from_status(11) == 0
+    """驳回(10)/撤销(11)/草稿(0)/已立项(6)/已结题(9) 等非流程态不应落入任何审核阶段，返回 -1"""
+    assert ReviewService._get_stage_from_status(10) == -1
+    assert ReviewService._get_stage_from_status(11) == -1
+    assert ReviewService._get_stage_from_status(0) == -1
+    assert ReviewService._get_stage_from_status(6) == -1
+    assert ReviewService._get_stage_from_status(9) == -1

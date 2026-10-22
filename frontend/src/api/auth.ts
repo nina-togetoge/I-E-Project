@@ -1,7 +1,7 @@
 /**
  * 认证相关接口
  */
-import { get, post } from '@/utils/request'
+import { get, post, put } from '@/utils/request'
 import type { UserInfo } from '@/store/user'
 
 export function login(username: string, password: string) {
@@ -21,8 +21,30 @@ export function refreshToken(refresh_token: string) {
   }>('/api/auth/refresh', { refresh_token })
 }
 
-export function getColleges() {
-  return get('/api/colleges')
+export function getColleges(params?: { include_disabled?: boolean }) {
+  return get('/api/colleges', params)
+}
+
+/** 新增学院（仅超级管理员） */
+export function createCollege(data: {
+  college_code: string
+  college_name: string
+  dean_id?: number
+  sort_order?: number
+  status?: number
+}) {
+  return post('/api/colleges', data)
+}
+
+/** 修改学院（仅超级管理员） */
+export function updateCollege(id: number, data: {
+  college_code?: string
+  college_name?: string
+  dean_id?: number
+  sort_order?: number
+  status?: number
+}) {
+  return put(`/api/colleges/${id}`, data)
 }
 
 export function getDictByType(dictType: string) {

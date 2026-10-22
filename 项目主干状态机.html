@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>项目主干状态机 · 校园创新创业项目管理平台</title>
+<style>
+  :root{
+    --ink:#1b2430; --ink-2:#4a5768; --ink-3:#7b8798;
+    --line:#dde3ec; --bg:#f5f7fa; --card:#ffffff;
+    --blue:#2f6fed; --blue-bg:#eef3fe;
+    --amber:#b7791f; --amber-bg:#fdf6e7;
+    --green:#1f8a54; --green-bg:#eaf7f0;
+    --red:#c0392b; --red-bg:#fdeeec;
+    --gray:#7b8798; --gray-bg:#f0f2f6;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:40px 32px 64px;
+    background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1320px;margin:0 auto}
+  header{margin-bottom:22px}
+  .eyebrow{font-size:12px;letter-spacing:.16em;color:var(--ink-3);text-transform:uppercase;margin-bottom:8px}
+  h1{font-size:30px;line-height:1.25;margin:0 0 10px;font-weight:700;letter-spacing:-.01em}
+  .sub{color:var(--ink-2);font-size:14px;line-height:1.7;margin:0}
+  .meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+  .chip{
+    font-size:12px;padding:5px 11px;border-radius:999px;background:#fff;border:1px solid var(--line);
+    color:var(--ink-2);
+  }
+  .chip b{color:var(--ink);font-weight:600}
+  .chip.live{border-color:#bfe3cd;background:var(--green-bg);color:var(--green)}
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:22px 24px;margin-top:20px;
+    box-shadow:0 1px 2px rgba(16,24,40,.04),0 8px 24px -16px rgba(16,24,40,.18);
+  }
+  .card h2{font-size:16px;margin:0 0 4px;font-weight:650;letter-spacing:.01em}
+  .card .hint{font-size:12.5px;color:var(--ink-3);margin:0 0 16px}
+  svg{display:block;width:100%;height:auto}
+  /* 窄屏时图表保持最小可读宽度，允许横向滚动而不是整体缩小 */
+  .diagram{overflow-x:auto;overflow-y:hidden;padding-bottom:4px}
+  .diagram svg{width:100%;height:auto;min-width:0}
+  #sm-main{min-width:1000px}
+  .diagram.center{display:flex;justify-content:center}
+  #sm-change{flex:0 0 auto;width:900px;max-width:100%;min-width:720px}
+  .legend{display:flex;flex-wrap:wrap;gap:18px;margin-top:14px;padding-top:14px;border-top:1px dashed var(--line);font-size:12.5px;color:var(--ink-2)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .sw{width:22px;height:0;border-top-width:2px;border-top-style:solid;display:inline-block}
+  .sw.solid-blue{border-color:var(--blue)}
+  .sw.dashed-amber{border-color:var(--amber);border-top-style:dashed}
+  .sw.dashed-gray{border-color:var(--gray);border-top-style:dashed}
+  .grid2{display:grid;grid-template-columns:1.35fr .95fr;gap:20px;align-items:start}
+  table{width:100%;border-collapse:collapse;font-size:12.8px}
+  th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-weight:600;color:var(--ink-3);font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;background:#fbfcfe}
+  tbody tr:last-child td{border-bottom:none}
+  td.num{color:var(--ink-3);font-variant-numeric:tabular-nums;width:34px}
+  .st{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-weight:600}
+  .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+  .code{font-family:"Cascadia Code",Consolas,monospace;font-size:11.5px;color:var(--ink-3);margin-left:2px}
+  .tag{display:inline-block;font-size:11px;padding:2px 7px;border-radius:5px;font-weight:600;white-space:nowrap}
+  .tag.blue{background:var(--blue-bg);color:var(--blue)}
+  .tag.amber{background:var(--amber-bg);color:var(--amber)}
+  .tag.green{background:var(--green-bg);color:var(--green)}
+  .tag.red{background:var(--red-bg);color:var(--red)}
+  .tag.gray{background:var(--gray-bg);color:var(--gray)}
+  ul.notes{margin:0;padding-left:18px;font-size:13px;line-height:1.85;color:var(--ink-2)}
+  ul.notes li::marker{color:var(--ink-3)}
+  ul.notes b{color:var(--ink);font-weight:600}
+  .substate{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:4px}
+  .node-mini{
+    border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fbfcfe;text-align:center;
+  }
+  .node-mini .t{font-size:13px;font-weight:650}
+  .node-mini .d{font-size:11.5px;color:var(--ink-3);margin-top:3px}
+  .arrowline{
+    grid-column:1/-1;display:flex;justify-content:space-around;font-size:11.5px;color:var(--ink-3);
+  }
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .box-note{background:#fbfcfe;border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-size:12.8px;line-height:1.75;color:var(--ink-2)}
+  .box-note .ttl{font-weight:650;color:var(--ink);font-size:13px;margin-bottom:6px}
+  footer{margin-top:26px;font-size:11.5px;color:var(--ink-3);line-height:1.7}
+  @media (max-width:1080px){
+    body{padding:24px 16px 48px}
+    .grid2{grid-template-columns:1fr}
+    .substate{grid-template-columns:1fr 1fr}
+    h1{font-size:24px}
+  }
+  @media print{
+    body{background:#fff;padding:0}
+    .card{box-shadow:none;break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">State Machine · 主干流程</div>
+    <h1>项目主干状态机</h1>
+    <p class="sub">
+      覆盖「申报 → 指导教师确认 → 学院初审 → 校级复审 → 专家评审 → 立项 → 中期 → 结题」全链路，
+      并包含变更/延期申请触发的阶段性退回。状态码与后端 <code>PROJECT_STATUS_*</code> 常量一一对应。
+    </p>
+    <div class="meta">
+      <span class="chip"><b>v2.1</b> · 2026-10-21</span>
+      <span class="chip">依据后端服务代码生成</span>
+      <span class="chip live">新增「待分配评审专家 13」</span>
+      <span class="chip">状态 0 / 1 / 3 / 5 / 6 / 7 / 8 / 9 / 10 / 12 / 13</span>
+    </div>
+  </header>
+
+  <!-- 主图 -->
+  <section class="card">
+    <h2>主干流转图</h2>
+    <p class="hint">蓝色实线＝主流程推进；橙色虚线＝变更申请审批通过后的退回；灰色虚线＝撤回 / 重新提交。驳回统一汇入「已驳回(10)」。</p>
+
+    <div class="diagram">
+    <svg id="sm-main" viewBox="20 0 1260 690" role="img" aria-label="项目主干状态机示意图">
+      <defs>
+        <marker id="ar-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#2f6fed"/>
+        </marker>
+        <marker id="ar-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#b7791f"/>
+        </marker>
+        <marker id="ar-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b8798"/>
+        </marker>
+        <marker id="ar-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#c0392b"/>
+        </marker>
+        <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#101828" flood-opacity="0.10"/>
+        </filter>
+      </defs>
+
+      <!-- ============ 主干第 1 行 ============ -->
+      <!-- 状态节点 -->
+      <g filter="url(#soft)">
+        <rect x="40"   y="110" width="140" height="64" rx="11" fill="#f0f2f6" stroke="#c9d2e0"/>
+        <rect x="215"  y="110" width="140" height="64" rx="11" fill="#fdf6e7" stroke="#e6c88a"/>
+        <rect x="390"  y="110" width="140" height="64" rx="11" fill="#fdf6e7" stroke="#e6c88a"/>
+        <rect x="565"  y="110" width="140" height="64" rx="11" fill="#fdf6e7" stroke="#e6c88a"/>
+        <rect x="740"  y="110" width="140" height="64" rx="11" fill="#fdf6e7" stroke="#e6c88a"/>
+        <rect x="915"  y="110" width="140" height="64" rx="11" fill="#fdf6e7" stroke="#e6c88a"/>
+        <rect x="1090" y="110" width="140" height="64" rx="11" fill="#eaf7f0" stroke="#9fd3b5"/>
+      </g>
+      <text x="110" y="139" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">草稿</text>
+      <text x="110" y="159" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 0</text>
+      <text x="285" y="139" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">待指导教师确认</text>
+      <text x="285" y="159" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 12</text>
+      <text x="460" y="139" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">待学院初审</text>
+      <text x="460" y="159" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 1</text>
+      <text x="635" y="139" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">待校级复审</text>
+      <text x="635" y="159" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 3</text>
+      <text x="810" y="139" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">待分配评审专家</text>
+      <text x="810" y="159" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 13</text>
+      <text x="985" y="139" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">待专家评审</text>
+      <text x="985" y="159" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 5</text>
+      <text x="1160" y="139" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">已立项</text>
+      <text x="1160" y="159" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 6</text>
+
+      <!-- 主干推进箭头 -->
+      <g stroke="#2f6fed" stroke-width="2" fill="none" marker-end="url(#ar-blue)">
+        <line x1="180" y1="142" x2="209" y2="142"/>
+        <line x1="355" y1="142" x2="384" y2="142"/>
+        <line x1="530" y1="142" x2="559" y2="142"/>
+        <line x1="705" y1="142" x2="734" y2="142"/>
+        <line x1="880" y1="142" x2="909" y2="142"/>
+        <line x1="1055" y1="142" x2="1084" y2="142"/>
+        <path d="M1160 174 L1160 264"/>
+      </g>
+      <text x="197" y="102" text-anchor="middle" font-size="12" fill="#2f6fed">提交</text>
+      <text x="370" y="102" text-anchor="middle" font-size="12" fill="#2f6fed">确认通过</text>
+      <text x="545" y="102" text-anchor="middle" font-size="12" fill="#2f6fed">初审通过</text>
+      <text x="720" y="102" text-anchor="middle" font-size="12" fill="#2f6fed">复审通过</text>
+      <text x="895" y="102" text-anchor="middle" font-size="12" fill="#2f6fed">分配专家</text>
+      <text x="1070" y="102" text-anchor="middle" font-size="12" fill="#2f6fed">评审通过</text>
+      <text x="1177" y="228" font-size="12" fill="#2f6fed">提交中期报告</text>
+
+      <!-- 撤回（12 -> 0） -->
+      <path d="M215 166 L193 166" stroke="#7b8798" stroke-width="1.6" stroke-dasharray="5 4" fill="none" marker-end="url(#ar-gray)"/>
+      <text x="222" y="196" text-anchor="middle" font-size="11.5" fill="#7b8798">撤回</text>
+
+      <!-- ============ 主干第 2 行 ============ -->
+      <g filter="url(#soft)">
+        <rect x="1095" y="270" width="130" height="64" rx="11" fill="#fdf6e7" stroke="#e6c88a"/>
+        <rect x="900"  y="270" width="130" height="64" rx="11" fill="#fdf6e7" stroke="#e6c88a"/>
+        <rect x="705"  y="270" width="130" height="64" rx="11" fill="#eaf7f0" stroke="#9fd3b5"/>
+      </g>
+      <text x="1160" y="299" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">中期检查中</text>
+      <text x="1160" y="319" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 7</text>
+      <text x="965" y="299" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">待结题</text>
+      <text x="965" y="319" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 8</text>
+      <text x="770" y="299" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">已结题</text>
+      <text x="770" y="319" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 9</text>
+
+      <g stroke="#2f6fed" stroke-width="2" fill="none" marker-end="url(#ar-blue)">
+        <line x1="1095" y1="302" x2="1036" y2="302"/>
+        <line x1="900" y1="302" x2="841" y2="302"/>
+      </g>
+      <text x="1065" y="292" text-anchor="middle" font-size="11.5" fill="#2f6fed">中期通过</text>
+      <text x="870" y="292" text-anchor="middle" font-size="11.5" fill="#2f6fed">验收通过</text>
+
+      <!-- 结项报告登记（8 -> 8 自环） -->
+      <path d="M930 334 C930 362 990 362 990 338" stroke="#2f6fed" stroke-width="1.6" fill="none" marker-end="url(#ar-blue)"/>
+      <text x="960" y="378" text-anchor="middle" font-size="11.5" fill="#2f6fed">提交结项报告（状态不变）</text>
+
+      <!-- ============ 驳回汇聚 ============ -->
+      <g filter="url(#soft)">
+        <rect x="215" y="470" width="140" height="64" rx="11" fill="#fdeeec" stroke="#e7b3ac"/>
+        <rect x="40"  y="470" width="140" height="64" rx="11" fill="#f0f2f6" stroke="#d5dbe6" stroke-dasharray="6 5"/>
+      </g>
+      <text x="285" y="499" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">已驳回</text>
+      <text x="285" y="519" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 10</text>
+      <text x="110" y="499" text-anchor="middle" font-size="16.5" font-weight="700" fill="#5b6676">已撤销</text>
+      <text x="110" y="519" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 11 · 暂未启用</text>
+
+      <!-- 12 -> 10（直落） -->
+      <path d="M280 174 L280 464" stroke="#c0392b" stroke-width="1.8" fill="none" marker-end="url(#ar-red)"/>
+      <text x="292" y="200" font-size="11.5" fill="#c0392b">驳回</text>
+
+      <!-- 1/3/5 -> 10（沿行间空隙 y=210 汇流，避开第二行节点） -->
+      <g stroke="#c0392b" stroke-width="1.8" fill="none">
+        <path d="M460 174 L460 210 L280 210"/>
+        <path d="M635 174 L635 210 L280 210"/>
+        <path d="M985 174 L985 210 L280 210"/>
+      </g>
+      <text x="470" y="199" font-size="11.5" fill="#c0392b">各审核阶段驳回</text>
+
+      <!-- 10 -> 12 重新提交（走左侧空隙） -->
+      <path d="M215 486 L190 486 L190 160 L209 160" stroke="#7b8798" stroke-width="1.6" stroke-dasharray="5 4" fill="none" marker-end="url(#ar-gray)"/>
+      <text x="175" y="330" text-anchor="middle" font-size="11.5" fill="#7b8798" transform="rotate(-90 175 330)">修改后重新提交</text>
+
+      <!-- ============ 变更申请退回（橙色虚线弧） ============ -->
+      <path d="M610 110 C610 60 470 60 470 110" stroke="#b7791f" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#ar-amber)"/>
+      <text x="540" y="56" text-anchor="middle" font-size="12.5" font-weight="600" fill="#b7791f">变更通过：3 → 1</text>
+
+      <path d="M960 110 C960 22 650 22 650 110" stroke="#b7791f" stroke-width="2" stroke-dasharray="6 4" fill="none" marker-end="url(#ar-amber)"/>
+      <text x="805" y="20" text-anchor="middle" font-size="12.5" font-weight="600" fill="#b7791f">变更通过：5 → 3</text>
+
+      <!-- 瞬时态注释 -->
+      <text x="40" y="654" font-size="12.5" fill="#7b8798">注：2（学院初审通过）、4（校级复审通过）为审核通过瞬间的过渡值，不落库；持久状态直接写入下一待审阶段（3 / 13 / 5）。</text>
+    </svg>
+    </div>
+
+    <div class="legend">
+      <span><i class="sw solid-blue"></i>主流程推进</span>
+      <span><i class="sw dashed-amber"></i>变更申请审批通过后退回</span>
+      <span><i class="sw dashed-gray"></i>撤回 / 重新提交</span>
+      <span><span class="dot" style="background:#c0392b"></span>驳回</span>
+      <span><span class="dot" style="background:#f0f2f6;border:1px solid #d5dbe6"></span>未启用状态</span>
+    </div>
+  </section>
+
+  <div class="grid2">
+    <!-- 流转明细 -->
+    <section class="card">
+      <h2>主干流转明细</h2>
+      <p class="hint">共 20 条有效迁移，触发人均在后端服务层做权限校验。</p>
+      <table>
+        <thead>
+          <tr><th>#</th><th>起始 → 目标</th><th>触发动作</th><th>操作人</th><th>备注</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="num">1</td><td class="st"><span class="dot" style="background:#7b8798"></span>0 <span class="code">草稿</span> → <span class="dot" style="background:#b7791f"></span>12</td><td>提交申报</td><td>学生（负责人）</td><td>必填项校验通过后生成项目编号</td></tr>
+          <tr><td class="num">2</td><td class="st"><span class="dot" style="background:#b7791f"></span>12 → <span class="dot" style="background:#b7791f"></span>1</td><td>指导教师确认通过</td><td>项目指导教师</td><td>创建学院初审占位记录</td></tr>
+          <tr><td class="num">3</td><td class="st"><span class="dot" style="background:#b7791f"></span>12 → <span class="dot" style="background:#7b8798"></span>0</td><td>撤回申报</td><td>学生（负责人）</td><td>清空本轮审核记录</td></tr>
+          <tr><td class="num">4</td><td class="st"><span class="dot" style="background:#b7791f"></span>12 → <span class="dot" style="background:#c0392b"></span>10</td><td>指导教师驳回</td><td>项目指导教师</td><td>记录驳回原因</td></tr>
+          <tr><td class="num">5</td><td class="st"><span class="dot" style="background:#b7791f"></span>1 → <span class="dot" style="background:#b7791f"></span>3</td><td>学院初审通过</td><td>学院管理员 / 超管</td><td>瞬时态 2 不落库</td></tr>
+          <tr><td class="num">6</td><td class="st"><span class="dot" style="background:#b7791f"></span>1 → <span class="dot" style="background:#c0392b"></span>10</td><td>学院初审驳回</td><td>学院管理员 / 超管</td><td>—</td></tr>
+          <tr><td class="num">7</td><td class="st"><span class="dot" style="background:#b7791f"></span>3 → <span class="dot" style="background:#b7791f"></span>13</td><td>校级复审通过</td><td>超级管理员</td><td>瞬时态 4 不落库；进入待分配评审专家</td></tr>
+          <tr><td class="num">8</td><td class="st"><span class="dot" style="background:#b7791f"></span>13 → <span class="dot" style="background:#b7791f"></span>5</td><td>分配评审专家（≥2 位）</td><td>超级管理员 / 学院管理员</td><td>生成专家占位记录，专家可开始评分</td></tr>
+          <tr><td class="num">9</td><td class="st"><span class="dot" style="background:#b7791f"></span>3 → <span class="dot" style="background:#c0392b"></span>10</td><td>校级复审驳回</td><td>超级管理员</td><td>—</td></tr>
+          <tr><td class="num">10</td><td class="st"><span class="dot" style="background:#b7791f"></span>5 → <span class="dot" style="background:#1f8a54"></span>6</td><td>专家评审通过</td><td>被分配专家 / 超管</td><td>写入立项审批时间</td></tr>
+          <tr><td class="num">11</td><td class="st"><span class="dot" style="background:#b7791f"></span>5 → <span class="dot" style="background:#c0392b"></span>10</td><td>专家评审驳回</td><td>被分配专家 / 超管</td><td>—</td></tr>
+          <tr><td class="num">12</td><td class="st"><span class="dot" style="background:#1f8a54"></span>6 → <span class="dot" style="background:#b7791f"></span>7</td><td>提交中期报告</td><td>学生（负责人）</td><td>中期记录置为「待审核」</td></tr>
+          <tr><td class="num">13</td><td class="st"><span class="dot" style="background:#b7791f"></span>7 → <span class="dot" style="background:#b7791f"></span>8</td><td>中期检查通过</td><td>项目指导教师</td><td>项目进入待结题</td></tr>
+          <tr><td class="num">14</td><td class="st"><span class="dot" style="background:#b7791f"></span>7 → 7</td><td>中期驳回 / 需修改</td><td>项目指导教师</td><td>仅中期记录状态变化</td></tr>
+          <tr><td class="num">15</td><td class="st"><span class="dot" style="background:#b7791f"></span>8 → 8</td><td>提交结项验收报告</td><td>学生（负责人）</td><td>登记报告，状态不变</td></tr>
+          <tr><td class="num">16</td><td class="st"><span class="dot" style="background:#b7791f"></span>8 → <span class="dot" style="background:#1f8a54"></span>9</td><td>结题验收通过</td><td>被分配专家 / 超管</td><td>最终结题</td></tr>
+          <tr><td class="num">17</td><td class="st"><span class="dot" style="background:#b7791f"></span>8 → 8</td><td>结题验收驳回</td><td>被分配专家 / 超管</td><td>退回待结题，可再次提交</td></tr>
+          <tr><td class="num">18</td><td class="st"><span class="dot" style="background:#c0392b"></span>10 → <span class="dot" style="background:#b7791f"></span>12</td><td>修改后重新提交</td><td>学生（负责人）</td><td>清空上轮审核记录，从头重走</td></tr>
+          <tr><td class="num">19</td><td class="st"><span class="dot" style="background:#b7791f"></span>3 → <span class="dot" style="background:#b7791f"></span>1</td><td>变更申请审批通过</td><td>项目指导教师</td><td>清学院 / 校级 / 专家三段评审记录</td></tr>
+          <tr><td class="num">20</td><td class="st"><span class="dot" style="background:#b7791f"></span>5 → <span class="dot" style="background:#b7791f"></span>3</td><td>变更申请审批通过</td><td>项目指导教师</td><td>保留学院初审，清校级 / 专家记录</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- 约束 -->
+    <section class="card">
+      <h2>状态约束与门禁</h2>
+      <p class="hint">决定「能不能进入下一状态」的硬性条件。</p>
+      <ul class="notes">
+        <li><b>提交窗口</b>：仅 <span class="tag blue">草稿 0</span> 与 <span class="tag red">已驳回 10</span> 可提交申报，提交后统一进入 <span class="tag amber">12</span>。</li>
+        <li><b>撤回窗口</b>：仅 <span class="tag amber">12</span> 可撤回；进入 <span class="tag amber">1</span> 之后不可撤回。</li>
+        <li><b>变更 / 延期申请窗口</b>：仅 <span class="tag amber">待校级复审 3</span> 与 <span class="tag amber">待专家评审 5</span> 可提交；<span class="tag amber">待分配评审专家 13</span> 不允许提交。</li>
+        <li><b>专家分配门禁</b>：<span class="tag amber">13</span> 必须分配不少于 2 位专家才进入 <span class="tag amber">5</span>；分配动作同时写入占位评审记录。</li>
+        <li><b>名单锁定</b>：<span class="tag amber">5</span> 阶段尚无专家提交评审时可增删名单；一旦存在正式评审记录，后端拒绝调整（名单与已有评分必须一致）。</li>
+        <li><b>变更审批人</b>：仅该项目的指导教师本人；超级管理员可代操作。学院管理员、专家均无权审批。</li>
+        <li><b>变更配额</b>：每个阶段限 1 次，累计上限 2 次；撤回不退名额，超期作废不计入。</li>
+        <li><b>审批缓冲期</b>：须在「提交阶段审核日 + 1 天」内完成，超期自动置为「已作废」。</li>
+        <li><b>截止日锁定</b>：由比赛 5 个日期字段驱动；未配置时间表则不锁定。</li>
+        <li><b>结项三条件</b>：中期已通过 + 成果至少 1 项 + 报销已结清，方可提交结项报告。</li>
+        <li><b>结题不可自批</b>：负责人提交报告后状态仍为 <span class="tag amber">8</span>，必须由被分配专家或超管验收才进入 <span class="tag green">9</span>。</li>
+      </ul>
+
+      <h2 style="margin-top:22px">保留但未启用的状态</h2>
+      <p class="hint" style="margin-bottom:10px"><span class="tag gray">11 已撤销</span> 常量仍存在，但当前代码中没有任何迁移路径可以进入该状态。</p>
+
+      <div class="box-note">
+        <div class="ttl">瞬时过渡态说明</div>
+        状态 <b>2（学院初审通过）</b> 与 <b>4（校级复审通过）</b> 仅作为审核动作的中间语义，数据库不会写入这两个值；
+        审核通过后直接落到下一待审状态（3 / 13），因此统计与筛选时无需考虑这两个值。
+      </div>
+    </section>
+  </div>
+
+  <!-- 变更申请子状态机 -->
+  <section class="card">
+    <h2>变更 / 延期申请自身状态机</h2>
+    <p class="hint">申请记录独立于项目主状态；审批通过才会带动项目回退。</p>
+
+    <div class="diagram center">
+    <svg id="sm-change" viewBox="170 10 900 335" role="img" aria-label="变更申请状态机示意图">
+      <defs>
+        <marker id="ar2-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f8a54"/>
+        </marker>
+        <marker id="ar2-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#c0392b"/>
+        </marker>
+        <marker id="ar2-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#7b8798"/>
+        </marker>
+      </defs>
+
+      <g filter="url(#soft)">
+        <rect x="500" y="140" width="180" height="72" rx="11" fill="#fdf6e7" stroke="#e6c88a"/>
+        <rect x="860" y="30"  width="180" height="72" rx="11" fill="#eaf7f0" stroke="#9fd3b5"/>
+        <rect x="860" y="140" width="180" height="72" rx="11" fill="#fdeeec" stroke="#e7b3ac"/>
+        <rect x="860" y="250" width="180" height="72" rx="11" fill="#f0f2f6" stroke="#c9d2e0"/>
+        <rect x="200" y="140" width="180" height="72" rx="11" fill="#f0f2f6" stroke="#c9d2e0"/>
+      </g>
+
+      <text x="590" y="172" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">待审核</text>
+      <text x="590" y="194" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 0</text>
+      <text x="950" y="62" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">已通过</text>
+      <text x="950" y="84" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 3</text>
+      <text x="950" y="172" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">已驳回</text>
+      <text x="950" y="194" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 4</text>
+      <text x="950" y="282" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">已撤回</text>
+      <text x="950" y="304" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 5</text>
+      <text x="290" y="172" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">已作废</text>
+      <text x="290" y="194" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 6</text>
+
+      <!-- 通过 -->
+      <path d="M680 150 L790 150 L790 66 L854 66" stroke="#1f8a54" stroke-width="2" fill="none" marker-end="url(#ar2-green)"/>
+      <text x="798" y="126" font-size="12" fill="#1f8a54">通过</text>
+
+      <!-- 驳回 -->
+      <path d="M680 176 L854 176" stroke="#c0392b" stroke-width="2" fill="none" marker-end="url(#ar2-red)"/>
+      <text x="766" y="170" text-anchor="middle" font-size="12" fill="#c0392b">驳回</text>
+
+      <!-- 申请人撤回 -->
+      <path d="M590 212 L590 244" stroke="#7b8798" stroke-width="1.8" fill="none" marker-end="url(#ar2-gray)"/>
+      <text x="600" y="234" font-size="12" fill="#7b8798">申请人撤回</text>
+
+      <!-- 超期自动作废 -->
+      <path d="M500 176 L386 176" stroke="#7b8798" stroke-width="1.8" fill="none" marker-end="url(#ar2-gray)"/>
+      <text x="443" y="166" text-anchor="middle" font-size="12" fill="#7b8798">超期自动</text>
+
+      <!-- 修改后重新提交 -->
+      <path d="M856 196 C800 226 740 226 684 196" stroke="#7b8798" stroke-width="1.6" stroke-dasharray="5 4" fill="none" marker-end="url(#ar2-gray)"/>
+      <text x="770" y="244" text-anchor="middle" font-size="12" fill="#7b8798">修改后重提</text>
+    </svg>
+    </div>
+
+    <table style="margin-top:12px">
+      <thead>
+        <tr><th>起始</th><th>触发</th><th>操作人</th><th>目标</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><span class="tag amber">待审核 0</span></td><td>审批通过</td><td>项目指导教师 / 超管</td><td><span class="tag green">已通过 3</span></td><td>项目按提交阶段回退（3→1 或 5→3）</td></tr>
+        <tr><td><span class="tag amber">待审核 0</span></td><td>审批驳回</td><td>项目指导教师 / 超管</td><td><span class="tag red">已驳回 4</span></td><td>项目停留在原阶段，可修改后重提</td></tr>
+        <tr><td><span class="tag amber">待审核 0</span></td><td>申请人撤回</td><td>申请学生本人</td><td><span class="tag gray">已撤回 5</span></td><td>退回名额，不可再次使用</td></tr>
+        <tr><td><span class="tag amber">待审核 0</span></td><td>超过缓冲期</td><td>系统自动</td><td><span class="tag gray">已作废 6</span></td><td>审核日 + 1 天后自动清扫，不计入配额</td></tr>
+        <tr><td><span class="tag red">已驳回 4</span></td><td>修改后重新提交</td><td>申请学生本人</td><td><span class="tag amber">待审核 0</span></td><td>复用同一条记录，占用当前阶段名额</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    生成依据：<code>backend/app/services/review_service.py</code>（审核流转、变更服务）、
+    <code>backend/app/services/project_service.py</code>（提交、撤回、截止日锁定）、
+    <code>backend/app/schemas/project.py</code> 与 <code>backend/app/schemas/review.py</code>（状态常量）。
+    状态码变更或新增迁移时，请同步更新本页。
+  </footer>
+</div>
+</body>
+</html>

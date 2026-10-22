@@ -478,6 +478,9 @@ def seed():
         ]
         comp_objs = []
         for cd in competitions_data:
+            # 届次按比赛开始年份推导（无则用报名开始年份）
+            ref = cd.get("competition_start") or cd.get("registration_start")
+            cd["session"] = f"{ref.year}届" if ref else None
             comp = Competition(**cd)
             db.add(comp)
             comp_objs.append(comp)
@@ -553,6 +556,7 @@ def seed():
                 leader_id=leader.id,
                 teacher_id=teacher.id,
                 competition_id=competition.id if competition else None,
+                competition_session=competition.session if competition else None,
                 start_date=start_date,
                 end_date=end_date,
                 budget_amount=Decimal(str(budget_total)),
@@ -637,47 +641,58 @@ def seed():
                 db.add(budget)
 
             # --- 审核记录 ---
-            if proj.status >= 1:
-                # 学院初审
-                college_admin = next((a for a in admins if a.college_id == college_id),
-                                     admins[0] if admins else None)
-                review_time = proj.submit_time + timedelta(days=random.randint(2, 5))
-                review_result = 2 if proj.status == 10 else 1
-                if proj.status != 10 or random.random() > 0.5:
-                    r1 = ProjReview(
-                        project_id=proj.id,
-                        review_stage=1,
-                        reviewer_id=college_admin.id if college_admin else teacher.id,
-                        reviewer_name=college_admin.real_name if college_admin else teacher.real_name,
-                        review_result=review_result,
-                        review_comment=random.choice(COLLEGE_REVIEW_COMMENTS) if review_result == 1 else proj.reject_reason,
-                        review_time=review_time,
-                    )
-                    db.add(r1)
+            # 严格按"项目状态 → 已完成阶段"生成，避免记录与状态错位
+            # （错位会导致待审核人打开项目后点通过时被 exist_real_review 拦截，
+            #   提示"您已在该阶段审核过此项目"，审核流程无法进行）
+            # 状态：0草稿 12待指导教师确认 1待学院初审 3待校级复审 5待专家评审
+            #      6已立项 7中期 8待结题 9已结题 10已驳回
+            college_admin = next((a for a in admins if a.college_id == college_id),
+                                 admins[0] if admins else None)
+            school_admin = admins[0] if admins else teacher
 
-            if proj.status >= 2:
-                # 校级复审
-                school_admin = admins[0] if admins else teacher
-                review_time = proj.submit_time + timedelta(days=random.randint(8, 15))
-                r2 = ProjReview(
+            # 指导教师确认(阶段0)：状态≥1 且已通过指导教师的（已驳回10 未通过，不写通过记录）
+            if proj.status not in (0, 10, 12):
+                db.add(ProjReview(
+                    project_id=proj.id,
+                    review_stage=0,
+                    reviewer_id=teacher.id,
+                    reviewer_name=teacher.real_name,
+                    review_result=1,
+                    review_comment=random.choice(COLLEGE_REVIEW_COMMENTS),
+                    review_time=proj.submit_time + timedelta(days=random.randint(1, 2)),
+                ))
+
+            # 学院初审(阶段1)：状态≥3（待校级复审及以后）说明学院初审已通过
+            if proj.status in (3, 5, 6, 7, 8, 9):
+                db.add(ProjReview(
+                    project_id=proj.id,
+                    review_stage=1,
+                    reviewer_id=college_admin.id if college_admin else teacher.id,
+                    reviewer_name=college_admin.real_name if college_admin else teacher.real_name,
+                    review_result=1,
+                    review_comment=random.choice(COLLEGE_REVIEW_COMMENTS),
+                    review_time=proj.submit_time + timedelta(days=random.randint(2, 5)),
+                ))
+
+            # 校级复审(阶段2)：状态≥5（待专家评审及以后）说明校级复审已通过
+            if proj.status in (5, 6, 7, 8, 9):
+                db.add(ProjReview(
                     project_id=proj.id,
                     review_stage=2,
                     reviewer_id=school_admin.id,
                     reviewer_name=school_admin.real_name,
                     review_result=1,
                     review_comment=random.choice(SCHOOL_REVIEW_COMMENTS),
-                    review_time=review_time,
-                )
-                db.add(r2)
+                    review_time=proj.submit_time + timedelta(days=random.randint(8, 15)),
+                ))
 
-            if proj.status >= 5:
-                # 专家评审
+            # 专家评审(阶段3)：立项及以后=已完成评审；待专家评审(5)=只写占位(99)待评
+            if proj.status in (6, 7, 8, 9):
                 expert = random.choice(experts)
-                review_time = proj.submit_time + timedelta(days=random.randint(15, 30))
                 score = Decimal(str(random.randint(80, 95)))
                 comment = random.choice(EXPERT_REVIEW_COMMENTS)
                 comment = re.sub(r'综合评分：\d+分', f'综合评分：{score}分', comment)
-                r3 = ProjReview(
+                db.add(ProjReview(
                     project_id=proj.id,
                     review_stage=3,
                     reviewer_id=expert.id,
@@ -685,9 +700,34 @@ def seed():
                     review_result=1,
                     score=score,
                     review_comment=comment,
-                    review_time=review_time,
-                )
-                db.add(r3)
+                    review_time=proj.submit_time + timedelta(days=random.randint(15, 30)),
+                ))
+            elif proj.status == 5:
+                # 待专家评审：为1-2位专家写入占位记录(99=已分配未评审)，供专家端打分
+                for expert in random.sample(experts, random.randint(1, 2)):
+                    db.add(ProjReview(
+                        project_id=proj.id,
+                        review_stage=3,
+                        reviewer_id=expert.id,
+                        reviewer_name=expert.real_name,
+                        review_result=99,
+                        score=None,
+                        review_comment=None,
+                        review_time=proj.submit_time + timedelta(days=random.randint(15, 30)),
+                    ))
+
+            # 已驳回(10)：补一条「指导教师驳回」记录（阶段0）用于展示驳回原因；
+            # 该驳回为软门槛，学生可修改后重新提交（学院/校级/专家驳回则为终局落选，不在此造数）
+            if proj.status == 10:
+                db.add(ProjReview(
+                    project_id=proj.id,
+                    review_stage=0,
+                    reviewer_id=teacher.id,
+                    reviewer_name=teacher.real_name,
+                    review_result=2,
+                    review_comment=proj.reject_reason,
+                    review_time=proj.submit_time + timedelta(days=random.randint(1, 3)),
+                ))
 
         db.commit()
         print("  -> 团队成员、预算、审核记录创建完成")

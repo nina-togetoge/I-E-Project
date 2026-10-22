@@ -17,6 +17,7 @@ export interface UserInfo {
   role_name: string
   college_id: number | null
   college_name: string | null
+  grade: string | null   // 年级（仅学生有值，如 2023）
   school_name: string
   avatar: string | null
   status: number
@@ -27,8 +28,8 @@ export interface UserInfo {
 
 export const useUserStore = defineStore('user', () => {
   // ========== State ==========
-  const accessToken = ref<string>(localStorage.getItem('access_token') || '')
-  const refreshToken = ref<string>(localStorage.getItem('refresh_token') || '')
+  const accessToken = ref<string>(sessionStorage.getItem('access_token') || '')
+  const refreshToken = ref<string>(sessionStorage.getItem('refresh_token') || '')
   const userInfo = ref<UserInfo | null>(null)
 
   // ========== Getters ==========
@@ -81,9 +82,9 @@ export const useUserStore = defineStore('user', () => {
     refreshToken.value = payload.refresh_token
     const info: UserInfo = payload.user_info
     userInfo.value = info
-    localStorage.setItem('access_token', payload.access_token)
-    localStorage.setItem('refresh_token', payload.refresh_token)
-    localStorage.setItem('user_info', JSON.stringify(info))
+    sessionStorage.setItem('access_token', payload.access_token)
+    sessionStorage.setItem('refresh_token', payload.refresh_token)
+    sessionStorage.setItem('user_info', JSON.stringify(info))
   }
 
   /**
@@ -96,22 +97,22 @@ export const useUserStore = defineStore('user', () => {
     }>('/api/auth/refresh', { refresh_token: refreshToken.value })
     accessToken.value = res.data.access_token
     refreshToken.value = res.data.refresh_token
-    localStorage.setItem('access_token', res.data.access_token)
-    localStorage.setItem('refresh_token', res.data.refresh_token)
+    sessionStorage.setItem('access_token', res.data.access_token)
+    sessionStorage.setItem('refresh_token', res.data.refresh_token)
   }
 
   /**
    * 获取当前用户信息
    */
   async function fetchUserInfo() {
-    const cached = localStorage.getItem('user_info')
+    const cached = sessionStorage.getItem('user_info')
     if (cached) {
       userInfo.value = JSON.parse(cached)
     }
     try {
       const res = await get<UserInfo>('/api/auth/me')
       userInfo.value = res.data
-      localStorage.setItem('user_info', JSON.stringify(res.data))
+      sessionStorage.setItem('user_info', JSON.stringify(res.data))
     } catch {
       // 如果获取失败且有缓存，继续使用缓存
     }
@@ -123,7 +124,7 @@ export const useUserStore = defineStore('user', () => {
   async function updateProfile(data: { real_name?: string; email?: string; phone?: string; avatar?: string }) {
     const res = await patch<UserInfo>('/api/users/me/profile', data)
     userInfo.value = res.data
-    localStorage.setItem('user_info', JSON.stringify(res.data))
+    sessionStorage.setItem('user_info', JSON.stringify(res.data))
     return res.data
   }
 
@@ -135,7 +136,7 @@ export const useUserStore = defineStore('user', () => {
     // 改密成功后，清零强制改密标志
     if (userInfo.value) {
       userInfo.value.force_change_pwd = 0
-      localStorage.setItem('user_info', JSON.stringify(userInfo.value))
+      sessionStorage.setItem('user_info', JSON.stringify(userInfo.value))
     }
   }
 
@@ -160,9 +161,9 @@ export const useUserStore = defineStore('user', () => {
     accessToken.value = ''
     refreshToken.value = ''
     userInfo.value = null
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
-    localStorage.removeItem('user_info')
+    sessionStorage.removeItem('access_token')
+    sessionStorage.removeItem('refresh_token')
+    sessionStorage.removeItem('user_info')
   }
 
   return {

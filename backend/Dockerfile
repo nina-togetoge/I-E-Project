@@ -33,13 +33,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app/
 
 # 创建必要的目录
-RUN mkdir -p /app/static/uploads /app/static/whoosh_index
+RUN mkdir -p /app/static/uploads
 
 # 声明端口
 EXPOSE 8000
 
-# 声明数据卷（附件上传 + 全文索引）
-VOLUME ["/app/static/uploads", "/app/static/whoosh_index"]
+# 声明数据卷（附件上传）
+VOLUME ["/app/static/uploads"]
 
 # 健康检查：每30秒检查一次FastAPI是否正常响应
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

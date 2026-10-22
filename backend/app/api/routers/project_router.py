@@ -156,6 +156,20 @@ def api_project_submit_final(
     return success(data=result, message="结项验收报告已提交")
 
 
+@router_project.post("/{project_id}/withdraw-final", response_model=ResponseModel[ProjectSubmitResponse],
+                     summary="撤回结项验收报告提交")
+def api_project_withdraw_final(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = Depends(RequireRole(RoleEnum.STUDENT, RoleEnum.ADMIN)),
+    ctx: OperationContext = Depends(),
+):
+    with ctx:
+        ctx.set_desc(f"撤回项目#{project_id}结项验收报告")
+        result = ProjectService.withdraw_final(db, project_id, current_user)
+    return success(data=result, message="结项验收报告已撤回")
+
+
 @router_project.delete("/{project_id}", response_model=ResponseModel, summary="删除项目(软删)")
 def api_project_delete(
     project_id: int,
