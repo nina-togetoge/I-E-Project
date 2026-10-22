@@ -177,16 +177,22 @@ class ReviewService:
 
         # 同一阶段同一人只允许一次（排除占位记录）
         if ReviewCRUD.exist_real_review(db, project.id, req.review_stage, operator.id):
-            # 结题验收示例外：若此人此前只是驳回（未通过），允许负责人在重新提交报告后再次验收；
-            # 否则项目会因驳回记录永久无法复验。
-            passed_before = req.review_stage == REVIEW_STAGE_FINAL and db.query(ProjReview.id).filter(
-                ProjReview.project_id == project.id,
-                ProjReview.review_stage == REVIEW_STAGE_FINAL,
-                ProjReview.reviewer_id == operator.id,
-                ProjReview.review_result == REVIEW_RESULT_PASS,
-                ProjReview.is_deleted == 0,
-            ).first()
-            if not (req.review_stage == REVIEW_STAGE_FINAL and not passed_before):
+            if req.review_stage == REVIEW_STAGE_FINAL:
+                # 结题验收：仅允许针对「最近一次重新提交的报告」再次验收；
+                # 本轮已给出正式结论的不可重复提交（驳回后负责人修改重提可再次验收）
+                from app.services.project_service import ProjectService
+                round_start = ProjectService._final_round_start(db, project.id)
+                latest = db.query(ProjReview).filter(
+                    ProjReview.project_id == project.id,
+                    ProjReview.review_stage == REVIEW_STAGE_FINAL,
+                    ProjReview.reviewer_id == operator.id,
+                    ProjReview.is_deleted == 0,
+                    ProjReview.review_result.isnot(None),
+                    ProjReview.review_result != 99,
+                ).order_by(ProjReview.id.desc()).first()
+                if latest and (round_start is None or latest.review_time >= round_start):
+                    raise ParamValidateException(message="您已在本轮结题验收中提交过意见，请勿重复提交")
+            else:
                 raise ParamValidateException(message="您已在该阶段审核过此项目，请勿重复提交")
 
         # 如果存在占位记录，先删除再写正式记录
@@ -197,7 +203,8 @@ class ReviewService:
             ProjReview.review_result == 99,
             ProjReview.is_deleted == 0,
         ).first()
-        if placeholder:
+        # 注意：结题验收阶段不能删除 result=99 的记录，它承载"报告正文+本轮验收起点"
+        if placeholder and req.review_stage != REVIEW_STAGE_FINAL:
             db.delete(placeholder)
 
         # 写审核记录
@@ -212,7 +219,35 @@ class ReviewService:
         })
 
         # 更新项目状态
-        if req.review_result == REVIEW_RESULT_PASS:
+        if req.review_stage == REVIEW_STAGE_FINAL:
+            # 结题验收：待所有被分配专家提交后按多数判定，避免一人通过即结题；
+            # 超级管理员代理验收（本人未被分配为专家）时立即判定。
+            from app.services.project_service import ProjectService
+            assigned = ProjectService.assigned_expert_ids(db, project.id)
+            latest = ProjectService.final_latest_reviews(db, project.id)
+            done = (assigned & set(latest.keys())) if assigned else set(latest.keys())
+            is_proxy = is_super_admin(operator) and operator.id not in assigned
+            results: List[int] = []
+            if is_proxy:
+                results = [req.review_result]
+            elif assigned and done >= assigned:
+                results = [latest[rid].review_result for rid in assigned]
+            if results:
+                pass_count = sum(1 for r in results if r == REVIEW_RESULT_PASS)
+                total = len(results)
+                if pass_count * 2 >= total:
+                    project.status = 9  # 多数通过 -> 已结题
+                    project.reject_reason = None
+                else:
+                    project.status = 8  # 多数驳回 -> 退回待结题，可修改后重提
+                    reason = f"结题验收未通过（{pass_count}/{total} 位专家同意）"
+                    if req.review_result != REVIEW_RESULT_PASS and (req.review_comment or "").strip():
+                        reason += f"：{req.review_comment.strip()}"
+                    project.reject_reason = reason[:500]
+            else:
+                # 尚未全部提交：保持待结题，报告继续等待其余专家验收
+                project.status = 8
+        elif req.review_result == REVIEW_RESULT_PASS:
             project.status = ReviewService._next_status_after_pass(project.status, req.review_stage)
             if project.status == 6:
                 project.approval_time = datetime.now()
@@ -231,12 +266,7 @@ class ReviewService:
             # 目标持久态已由 _next_status_after_pass 直接给出（3 / 13 / 5）
         else:
             # 驳回（含已废弃的 result=3"修改后重提"，统一按驳回处理）
-            if req.review_stage == REVIEW_STAGE_FINAL:
-                # 结题验收驳回：退回「待结题(8)」而非驳回(10)，
-                # 否则 submit_final 要求状态为 8，项目将永久无法再次结项
-                project.status = 8
-            else:
-                project.status = 10
+            project.status = 10
             project.reject_reason = (req.review_comment or "")[:500]
 
         # 状态流转后同步"当前审批人"（待学院初审→学院管理员；其余阶段清空）

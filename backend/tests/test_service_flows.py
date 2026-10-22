@@ -5,7 +5,7 @@
   多数通过(含平票) → 已立项(6)，多数驳回 → 已驳回(10)。
 - ExpenseService.create：非负责人提交 403；超剩余预算 400；attachment_ids 仅绑定本人上传的临时附件。
 """
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -101,6 +101,81 @@ def test_final_reject_keeps_project_resubmittable(seed, db):
     proj = seed.reload(M.ProjProject, project.id)
     assert proj.status == 8
     assert "验收材料不完整" in (proj.reject_reason or "")
+
+
+def _final_project_with_experts(seed, expert_count):
+    """造一个已提交结项报告、分配了多位专家的待结题(8)项目"""
+    college = seed.college()
+    leader = seed.user(1, college.id)
+    experts = [seed.user(3, college.id) for _ in range(expert_count)]
+    project = seed.project(college.id, leader.id, status=8)
+    seed.midterm(project.id, status=2)
+    seed.achievement(project.id)
+    for e in experts:
+        seed.assign_expert(project.id, e.id, stage=3)
+    seed.assign_expert(project.id, leader.id, stage=4)  # 结项报告占位(review_result=99)
+    return project, leader, experts
+
+
+def test_final_review_waits_for_all_assigned_experts(seed, db):
+    """结题验收须等待全部已分配专家提交，按多数判定，避免一人通过即结题。"""
+    project, _, experts = _final_project_with_experts(seed, 2)
+    ReviewService.do_review(db, ReviewCreateRequest(
+        project_id=project.id, review_stage=REVIEW_STAGE_FINAL,
+        review_result=REVIEW_RESULT_PASS, review_comment="材料完整，同意结题",
+    ), experts[0])
+    assert seed.reload(M.ProjProject, project.id).status == 8  # 仍有专家未验收
+
+    ReviewService.do_review(db, ReviewCreateRequest(
+        project_id=project.id, review_stage=REVIEW_STAGE_FINAL,
+        review_result=REVIEW_RESULT_PASS, review_comment="同意结题",
+    ), experts[1])
+    assert seed.reload(M.ProjProject, project.id).status == 9
+
+
+def test_final_review_majority_reject(seed, db):
+    """3 位专家中 2 位驳回 -> 退回待结题(8)，并记录多数驳回原因。"""
+    project, _, experts = _final_project_with_experts(seed, 3)
+    results = [REVIEW_RESULT_PASS, REVIEW_RESULT_REJECT, REVIEW_RESULT_REJECT]
+    for expert, result in zip(experts, results):
+        ReviewService.do_review(db, ReviewCreateRequest(
+            project_id=project.id, review_stage=REVIEW_STAGE_FINAL,
+            review_result=result, review_comment="同意结题" if result == 1 else "成果材料需补充",
+        ), expert)
+    proj = seed.reload(M.ProjProject, project.id)
+    assert proj.status == 8
+    assert "1/3" in (proj.reject_reason or "")
+
+
+def test_final_reject_allows_resubmit_after_deadline(seed, db):
+    """驳回后的修改重提不受结题截止日限制，避免逾期驳回后项目永久卡死。"""
+    project, leader, experts = _final_project_with_experts(seed, 1)
+    comp = seed.competition()
+    p = db.query(M.ProjProject).filter(M.ProjProject.id == project.id).first()
+    p.competition_id = comp.id
+    c = db.query(M.Competition).filter(M.Competition.id == comp.id).first()
+    c.final_deadline = date.today() - timedelta(days=1)
+    db.commit()
+
+    # 逾期 + 未被驳回时禁止提交
+    with pytest.raises(BizException):
+        ProjectService.submit_final(db, project.id, "报告", [], leader)
+
+    ReviewService.do_review(db, ReviewCreateRequest(
+        project_id=project.id, review_stage=REVIEW_STAGE_FINAL,
+        review_result=REVIEW_RESULT_REJECT, review_comment="请补充成果证明材料",
+    ), experts[0])
+
+    # 本轮已驳回：允许修改后重新提交
+    res = ProjectService.submit_final(db, project.id, "补充成果材料后的结项报告", [], leader)
+    assert res.status == 8
+    placeholder = db.query(M.ProjReview).filter(
+        M.ProjReview.project_id == project.id,
+        M.ProjReview.review_stage == REVIEW_STAGE_FINAL,
+        M.ProjReview.review_result == 99,
+        M.ProjReview.is_deleted == 0,
+    ).first()
+    assert "补充成果材料后的结项报告" in (placeholder.review_comment or "")
 
 
 def test_non_flow_status_cannot_be_reviewed(seed, db):

@@ -194,7 +194,7 @@ class ProjectService:
         return item
 
     @staticmethod
-    def _to_detail(db: Session, obj: ProjProject) -> ProjectDetailResponse:
+    def _to_detail(db: Session, obj: ProjProject, operator: Optional[SysUser] = None) -> ProjectDetailResponse:
         """ORM -> Pydantic详情（含团队/预算等子表）"""
         item = ProjectDetailResponse.model_validate(obj)
         item.project_type_name = ProjectCRUD.PROJECT_TYPE_NAME.get(item.project_type, "")
@@ -214,13 +214,41 @@ class ProjectService:
             item.status == PROJECT_STATUS_REJECTED
             and not ProjectService._is_eliminated(db, obj)
         )
-        # 是否已提交结项验收报告（占位记录：阶段=结题验收4、结果=99），供前端「撤回报告提交」判定
-        item.final_report_submitted = db.query(ProjReview).filter(
-            ProjReview.project_id == obj.id,
-            ProjReview.review_stage == REVIEW_STAGE_FINAL,
-            ProjReview.review_result == 99,
-            ProjReview.is_deleted == 0,
-        ).first() is not None
+        # 结项报告（占位记录：阶段=结题验收4、结果=99）正文与验收状态
+        report_record = ProjectService._final_report_record(db, obj.id)
+        item.final_report_submitted = report_record is not None
+        item.final_report = ProjectService._strip_report_prefix(
+            report_record.review_comment
+        ) if report_record else None
+        if obj.status == 9:
+            item.final_report_status = 2  # 已通过（已结题）
+        elif report_record and obj.reject_reason:
+            item.final_report_status = 3  # 验收驳回，可修改后重新提交
+        elif report_record:
+            item.final_report_status = 1  # 待验收
+        else:
+            item.final_report_status = 0  # 未提交
+        # 驳回意见：取本轮最新一条驳回记录（仅驳回态展示，避免验收中误提示）
+        item.final_reject_reason = None
+        if item.final_report_status == 3:
+            rejects = [
+                r for r in ProjectService.final_latest_reviews(db, obj.id).values()
+                if r.review_result != 1
+            ]
+            if rejects:
+                item.final_reject_reason = max(rejects, key=lambda r: r.id).review_comment
+        item.final_review_total, item.final_review_done = ProjectService.final_review_stats(db, obj.id)
+        # 专家验收入口：被分配到该项目的专家或超级管理员
+        if operator is not None:
+            item.final_can_accept = (
+                obj.status == 8
+                and (
+                    is_super_admin(operator)
+                    or operator.id in ProjectService.assigned_expert_ids(db, obj.id)
+                )
+            )
+            item.final_reviewed_by_me = operator.id in ProjectService.final_latest_reviews(db, obj.id)
+        item.final_checklist = ProjectService.get_final_checklist(db, obj)
         # 流程截止日（截止日驱动锁定）：变更/延期锁死日 = 当前阶段审核日
         item.change_deadline = ProjectService.get_change_deadline(db, obj)
         item.change_locked = (
@@ -540,7 +568,7 @@ class ProjectService:
             ).first() is not None
         if not ok:
             raise PermissionDeniedException(message="无权查看该项目")
-        return ProjectService._to_detail(db, obj)
+        return ProjectService._to_detail(db, obj, operator)
 
     # ========== 创建 / 修改 / 删除 ==========
     @staticmethod
@@ -659,7 +687,7 @@ class ProjectService:
 
         db.commit()
         db.refresh(obj)
-        return ProjectService._to_detail(db, obj)
+        return ProjectService._to_detail(db, obj, operator)
 
     @staticmethod
     def update(db: Session, project_id: int, req: ProjectUpdate, operator: SysUser) -> ProjectDetailResponse:
@@ -698,7 +726,7 @@ class ProjectService:
             ).update({SysAttachment.biz_id: obj.id}, synchronize_session=False)
         db.commit()
         db.refresh(obj)
-        return ProjectService._to_detail(db, obj)
+        return ProjectService._to_detail(db, obj, operator)
 
     @staticmethod
     def submit(db: Session, project_id: int, operator: SysUser) -> ProjectSubmitResponse:
@@ -774,6 +802,128 @@ class ProjectService:
             message=f"已提交，等待指导教师确认，项目编号：{obj.project_no}",
         )
 
+    # ================= 结项验收：报告状态 / 检查清单 / 专家进度 =================
+    FINAL_REPORT_PREFIX = "[结项报告] "
+
+    @staticmethod
+    def _strip_report_prefix(comment: Optional[str]) -> Optional[str]:
+        if not comment:
+            return None
+        if comment.startswith(ProjectService.FINAL_REPORT_PREFIX):
+            return comment[len(ProjectService.FINAL_REPORT_PREFIX):]
+        return comment
+
+    @staticmethod
+    def _final_report_record(db: Session, project_id: int) -> Optional[ProjReview]:
+        """结项报告占位记录（result=99）；其 review_time 同时标记「本轮验收」起点"""
+        return db.query(ProjReview).filter(
+            ProjReview.project_id == project_id,
+            ProjReview.review_stage == REVIEW_STAGE_FINAL,
+            ProjReview.review_result == 99,
+            ProjReview.is_deleted == 0,
+        ).order_by(ProjReview.id.desc()).first()
+
+    @staticmethod
+    def _final_round_start(db: Session, project_id: int) -> Optional[datetime]:
+        record = ProjectService._final_report_record(db, project_id)
+        return record.review_time if record else None
+
+    @staticmethod
+    def assigned_expert_ids(db: Session, project_id: int) -> set:
+        """被分配到该项目（专家评审阶段）的专家ID集合"""
+        rows = db.query(ProjReview.reviewer_id).filter(
+            ProjReview.project_id == project_id,
+            ProjReview.review_stage == REVIEW_STAGE_EXPERT,
+            ProjReview.is_deleted == 0,
+        ).all()
+        return {r[0] for r in rows if r[0]}
+
+    @staticmethod
+    def final_latest_reviews(db: Session, project_id: int) -> Dict[int, ProjReview]:
+        """本轮结题验收中每位专家最新的一条正式意见（占位记录不计）"""
+        start = ProjectService._final_round_start(db, project_id)
+        q = db.query(ProjReview).filter(
+            ProjReview.project_id == project_id,
+            ProjReview.review_stage == REVIEW_STAGE_FINAL,
+            ProjReview.is_deleted == 0,
+            ProjReview.review_result.isnot(None),
+            ProjReview.review_result != 99,
+        )
+        if start is not None:
+            q = q.filter(ProjReview.review_time >= start)
+        latest: Dict[int, ProjReview] = {}
+        for row in q.order_by(ProjReview.id).all():
+            latest[row.reviewer_id] = row
+        return latest
+
+    @staticmethod
+    def final_review_stats(db: Session, project_id: int) -> Tuple[int, int]:
+        """返回 (应参与验收专家数, 本轮已提交意见专家数)"""
+        assigned = ProjectService.assigned_expert_ids(db, project_id)
+        latest = ProjectService.final_latest_reviews(db, project_id)
+        if assigned:
+            return len(assigned), len(assigned & set(latest.keys()))
+        return 0, len(latest)
+
+    @staticmethod
+    def _latest_final_review(db: Session, project_id: int) -> Optional[ProjReview]:
+        """最近一次正式结题验收意见（任意轮次），用于展示驳回意见"""
+        return db.query(ProjReview).filter(
+            ProjReview.project_id == project_id,
+            ProjReview.review_stage == REVIEW_STAGE_FINAL,
+            ProjReview.is_deleted == 0,
+            ProjReview.review_result.isnot(None),
+            ProjReview.review_result != 99,
+        ).order_by(ProjReview.id.desc()).first()
+
+    @staticmethod
+    def final_rejected_current_round(db: Session, project_id: int) -> bool:
+        """本轮报告是否已被专家驳回（驳回后可直接修改重提，不受截止日限制）"""
+        latest = ProjectService._latest_final_review(db, project_id)
+        start = ProjectService._final_round_start(db, project_id)
+        if not latest or latest.review_result == 1:
+            return False
+        return start is None or latest.review_time >= start
+
+    @staticmethod
+    def _final_condition_stats(db: Session, project: ProjProject) -> Tuple[bool, int, int]:
+        """结项三条件统计：中期已通过 / 成果数 / 未结清报销单数"""
+        midterm = MidtermCRUD.get_by_project(db, project.id)
+        ach_count = db.query(func.count(ProjAchievement.id)).filter(
+            ProjAchievement.project_id == project.id,
+            ProjAchievement.is_deleted == 0,
+        ).scalar() or 0
+        pending_expense = db.query(func.count(ProjExpense.id)).filter(
+            ProjExpense.project_id == project.id,
+            ProjExpense.is_deleted == 0,
+            ProjExpense.status.notin_([EXPENSE_STATUS_COMPLETED, EXPENSE_STATUS_REJECTED]),
+        ).scalar() or 0
+        return bool(midterm and midterm.status == 2), int(ach_count), int(pending_expense)
+
+    @staticmethod
+    def get_final_checklist(db: Session, project: ProjProject) -> List[dict]:
+        """结项条件检查清单（前端展示；前 3 项为提交/验收硬性条件）"""
+        midterm_ok, ach_count, pending_expense = ProjectService._final_condition_stats(db, project)
+        report_ok = ProjectService._final_report_record(db, project.id) is not None
+        return [
+            {
+                "key": "midterm", "label": "中期检查已通过", "passed": midterm_ok,
+                "detail": "中期检查已审核通过" if midterm_ok else "中期检查尚未通过",
+            },
+            {
+                "key": "achievement", "label": "已登记项目成果", "passed": ach_count >= 1,
+                "detail": f"已登记 {ach_count} 项成果" if ach_count else "至少需登记 1 项成果",
+            },
+            {
+                "key": "expense", "label": "经费报销已结清", "passed": pending_expense == 0,
+                "detail": "无未结清报销" if pending_expense == 0 else f"{pending_expense} 笔报销待审批",
+            },
+            {
+                "key": "report", "label": "结项验收报告已提交", "passed": report_ok,
+                "detail": "报告已提交" if report_ok else "尚未提交结项验收报告",
+            },
+        ]
+
     @staticmethod
     def _ensure_final_conditions(db: Session, project: ProjProject) -> None:
         """结项三条件校验（统一入口，供结项提交复用）：
@@ -781,25 +931,11 @@ class ProjectService:
         2) 至少登记 1 项项目成果
         3) 经费报销已全部结清（无处于审批中间态的报销单）
         """
-        # 1) 中期检查必须已通过（status=2）
-        midterm = MidtermCRUD.get_by_project(db, project.id)
-        if not midterm or midterm.status != 2:
+        midterm_ok, ach_count, pending_expense = ProjectService._final_condition_stats(db, project)
+        if not midterm_ok:
             raise ParamValidateException(message="结项前需先完成中期检查并通过审核")
-
-        # 2) 至少 1 项成果已登记
-        ach_count = db.query(func.count(ProjAchievement.id)).filter(
-            ProjAchievement.project_id == project.id,
-            ProjAchievement.is_deleted == 0,
-        ).scalar() or 0
         if ach_count < 1:
             raise ParamValidateException(message="结项前需至少登记 1 项项目成果")
-
-        # 3) 无未结清报销单：已完成(COMPLETED)或已驳回(REJECTED)视为结清
-        pending_expense = db.query(func.count(ProjExpense.id)).filter(
-            ProjExpense.project_id == project.id,
-            ProjExpense.is_deleted == 0,
-            ProjExpense.status.notin_([EXPENSE_STATUS_COMPLETED, EXPENSE_STATUS_REJECTED]),
-        ).scalar() or 0
         if pending_expense > 0:
             raise ParamValidateException(message="结项前需先完成全部经费报销的审批")
 
@@ -820,13 +956,20 @@ class ProjectService:
             raise PermissionDeniedException(message="仅项目负责人可提交结项报告")
         if obj.status != 8:
             raise ParamValidateException(message="仅待结题状态可提交结项验收报告")
-        if ProjectService.is_past_deadline(ProjectService.get_final_deadline(db, obj)):
+        # 截止日限制：驳回后的修改重提不受截止日限制，否则逾期驳回的项目将永久无法结项
+        if (
+            ProjectService.is_past_deadline(ProjectService.get_final_deadline(db, obj))
+            and not ProjectService.final_rejected_current_round(db, obj.id)
+        ):
             raise ParamValidateException(message="已超过结题报告提交截止日，无法提交结项验收报告")
         if not final_report or not final_report.strip():
             raise ParamValidateException(message="请填写结项验收报告")
 
         # 结项三条件校验：中期已批 + 成果≥1 + 报销已结清
         ProjectService._ensure_final_conditions(db, obj)
+
+        # 重新提交即开启新一轮验收：清除上一轮驳回标记，供专家重新验收
+        obj.reject_reason = None
 
         # 关联结项附件（仅限本人上传的 project 临时附件，防止劫持他人/其他业务附件）
         if attachment_ids:

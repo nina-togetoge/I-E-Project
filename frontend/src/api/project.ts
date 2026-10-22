@@ -43,6 +43,22 @@ export interface ProjectDetail extends ProjectListItem {
   expected_results: string | null
   reject_reason: string | null
   final_report_submitted?: boolean
+  /** 结项验收报告正文 */
+  final_report?: string | null
+  /** 结项报告状态：0未提交 1待验收 2已通过 3已驳回 */
+  final_report_status?: number
+  /** 最近一次结题验收驳回意见 */
+  final_reject_reason?: string | null
+  /** 参与结题验收的专家数 */
+  final_review_total?: number
+  /** 本轮已提交结题验收意见的专家数 */
+  final_review_done?: number
+  /** 当前用户是否可进行结题验收 */
+  final_can_accept?: boolean
+  /** 当前用户本轮是否已提交结题验收意见 */
+  final_reviewed_by_me?: boolean
+  /** 结项条件检查清单 */
+  final_checklist?: { key: string; label: string; passed: boolean; detail: string }[]
   change_deadline?: string | null
   change_locked?: boolean
   midterm_deadline?: string | null

@@ -17,11 +17,11 @@
         </div>
       </div>
 
-      <!-- 审核意见（驳回时显示） -->
+      <!-- 审核意见（退回修改 / 驳回时显示） -->
       <el-alert
-        v-if="midterm.status === 4 && midterm.review_comment"
-        :title="`审核意见：${midterm.review_comment}`"
-        type="error"
+        v-if="(midterm.status === 3 || midterm.status === 4) && midterm.review_comment"
+        :title="`${midterm.status === 3 ? '退回修改意见' : '审核意见'}：${midterm.review_comment}`"
+        :type="midterm.status === 3 ? 'warning' : 'error'"
         :closable="false"
         class="mb-16"
         show-icon
@@ -64,8 +64,11 @@
           />
         </el-form-item>
         <el-form-item label="已用经费">
-          <el-input-number v-model="midtermForm.budget_usage" :min="0" :precision="2" :max="project.budget_amount" style="width: 200px" :disabled="isReadonly" />
-          <span class="form-tip">总预算 ¥{{ Number(project.budget_amount || 0).toFixed(2) }}</span>
+          <span class="budget-value">¥{{ usedAmount.toFixed(2) }}</span>
+          <span class="form-tip">
+            由项目经费报销自动汇总 · 总预算 ¥{{ Number(project.budget_amount || 0).toFixed(2) }} ·
+            剩余 ¥{{ (Number(project.budget_amount || 0) - usedAmount).toFixed(2) }}
+          </span>
         </el-form-item>
         <el-form-item v-if="!isReadonly">
           <el-button :loading="midtermLoading" @click="handleSave(false)">保存草稿</el-button>
@@ -100,13 +103,20 @@
           </el-form-item>
         </template>
       </el-form>
+
+      <!-- 中期通过后的下一步 -->
+      <el-card v-if="midterm.status === 2" shadow="never" class="next-step">
+        <div class="next-step-title">中期检查已通过，可继续办理：</div>
+        <el-button type="primary" @click="goNext('achievements')">去登记成果</el-button>
+        <el-button type="success" @click="goNext('final')">去结项验收</el-button>
+      </el-card>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getProjectDetail } from '@/api/project'
 import { getMidtermCheck, saveMidtermDraft, submitMidtermCheck, reviewMidtermCheck, withdrawMidtermCheck } from '@/api/review'
@@ -116,6 +126,7 @@ import { useProcessStore } from '@/store/process'
 import { useUserStore } from '@/store/user'
 
 const route = useRoute()
+const router = useRouter()
 const processStore = useProcessStore()
 const userStore = useUserStore()
 const pid = computed(() => Number(route.params.id))
@@ -145,8 +156,18 @@ const statusTagType = computed(() => {
 /** 当前用户是否为项目负责人（后端 save/submit 仅允许负责人） */
 const isLeader = computed(() => !!project.value && Number(project.value.leader_id) === Number(userStore.userInfo?.id))
 
-// 审核中(1)或已通过(2)、或非项目负责人时只读
-const isReadonly = computed(() => midterm.value.status === 1 || midterm.value.status === 2 || !isLeader.value)
+/** 已用经费：由项目经费报销自动汇总（不再手工填写） */
+const usedAmount = computed(() => Number(project.value?.used_amount || 0))
+
+// 审核中(1)/已通过(2)/已作废(5)、或非项目负责人时只读
+const isReadonly = computed(() =>
+  [1, 2, 5].includes(midterm.value.status) || !isLeader.value
+)
+
+/** 跳转到成果登记 / 结项验收 */
+function goNext(suffix: 'achievements' | 'final') {
+  router.push(`/projects/${pid.value}/${suffix}`)
+}
 const readonlyTip = computed(() => {
   if (midterm.value.status === 1) return '中期检查正在审核中，暂不可修改，请等待审核结果'
   if (midterm.value.status === 2) return '中期检查已审核通过，不可再修改'
@@ -262,7 +283,13 @@ function handleMidtermFileUpload(file: any) {
 async function handleSave(submit: boolean) {
   midtermLoading.value = true
   try {
-    const payload = { project_id: pid.value, ...midtermForm, attachment_ids: midtermAttachmentIds.value }
+    // 已用经费以项目经费报销汇总为准，避免手工填写与账目不一致
+    const payload = {
+      project_id: pid.value,
+      ...midtermForm,
+      budget_usage: usedAmount.value,
+      attachment_ids: midtermAttachmentIds.value,
+    }
     if (submit) {
       await submitMidtermCheck(payload)
       ElMessage.success('中期检查已提交审核')
@@ -312,5 +339,18 @@ onBeforeUnmount(() => processStore.reset())
 }
 .withdraw-btn {
   margin-top: 12px;
+}
+.budget-value {
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+}
+.next-step {
+  max-width: 1000px;
+  margin: 16px auto 0;
+}
+.next-step-title {
+  font-weight: 600;
+  margin-bottom: 12px;
 }
 </style>

@@ -180,6 +180,16 @@ class ProjectDetailResponse(ProjectListItem):
     expected_results: Optional[str] = None
     reject_reason: Optional[str] = None
     final_report_submitted: bool = Field(default=False, description="是否已提交结项验收报告（待结题阶段）")
+    final_report: Optional[str] = Field(default=None, description="结项验收报告正文")
+    final_report_status: int = Field(
+        default=0, description="结项报告状态：0未提交 1待验收 2已通过 3已驳回"
+    )
+    final_reject_reason: Optional[str] = Field(default=None, description="最近一次结题验收驳回意见")
+    final_review_total: int = Field(default=0, description="参与结题验收的专家数")
+    final_review_done: int = Field(default=0, description="本轮已提交结题验收意见的专家数")
+    final_can_accept: bool = Field(default=False, description="当前用户是否可进行结题验收")
+    final_reviewed_by_me: bool = Field(default=False, description="当前用户本轮是否已提交结题验收意见")
+    final_checklist: List[dict] = Field(default_factory=list, description="结项条件检查清单")
     # 流程截止日（截止日驱动锁定）
     change_deadline: Optional[date] = Field(default=None, description="变更/延期申请锁死日（当前阶段审核日）")
     change_locked: bool = Field(default=False, description="是否已超过当前阶段审核日，变更/延期已锁定")

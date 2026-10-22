@@ -172,17 +172,40 @@
       </section>
 
       <!-- 6. 结项验收 -->
-      <section v-if="project && project.status === 8" class="paper-section">
+      <section v-if="project && (project.status === 8 || project.status === 9)" class="paper-section">
         <h2 class="section-title">
           <span class="section-num">6</span>结项验收
           <span class="section-action deadline-hint-wrap">
-            <el-tag v-if="finalDeadlineText" :type="finalLocked ? 'info' : 'success'" size="small" effect="plain">{{ finalDeadlineText }}</el-tag>
-            <el-button v-if="isProjectLeader && !finalSubmitted" type="success" size="small" :disabled="finalLocked" @click="goFinal">提交结项验收报告</el-button>
+            <el-tag v-if="project.status === 8 && finalDeadlineText" :type="finalLocked ? 'info' : 'success'" size="small" effect="plain">{{ finalDeadlineText }}</el-tag>
+            <el-button
+              v-if="isProjectLeader && project.status === 8 && (finalReportStatus === 0 || finalReportStatus === 3)"
+              type="success"
+              size="small"
+              :disabled="finalLocked && finalReportStatus !== 3"
+              @click="goFinal"
+            >{{ finalReportStatus === 3 ? '修改并重新提交' : '提交结项验收报告' }}</el-button>
             <el-button v-else-if="canWithdrawFinal" type="warning" size="small" :loading="finalLoading" @click="handleWithdrawFinal">撤回报告提交</el-button>
+            <el-button v-else-if="finalReportStatus > 0" size="small" @click="goFinal">查看结项报告</el-button>
           </span>
         </h2>
         <el-alert
-          v-if="finalSubmitted"
+          v-if="finalReportStatus === 2"
+          title="结项验收已通过，项目已结题"
+          type="success"
+          :closable="false"
+          show-icon
+          class="final-submitted-alert"
+        />
+        <el-alert
+          v-else-if="finalReportStatus === 3"
+          :title="`验收驳回：${project.final_reject_reason || project.reject_reason || '请修改后重新提交'}`"
+          type="error"
+          :closable="false"
+          show-icon
+          class="final-submitted-alert"
+        />
+        <el-alert
+          v-else-if="finalReportStatus === 1"
           title="结项验收报告已提交，等待专家验收"
           type="success"
           :closable="false"
@@ -388,7 +411,7 @@ const sectionNum = computed(() => {
   if (!project.value) return 7
   let n = 5
   if (canShowProgress.value) n += 1 // 项目成果
-  if (project.value.status === 8) n++ // 结项验收
+  if ([8, 9].includes(project.value.status)) n++ // 结项验收（含已结题回看）
   return n
 })
 
@@ -421,11 +444,13 @@ const changeRules: FormRules = {
 // 结项验收
 const finalLoading = ref(false)
 
-/** 结项验收报告是否已提交（后端字段：待结题阶段提交报告后为 True） */
-const finalSubmitted = computed(() => !!project.value?.final_report_submitted)
-/** 撤回结项报告提交：仅项目负责人本人（或超管），且报告已提交 */
+/** 结项报告状态：0未提交 1待验收 2已通过 3已驳回 */
+const finalReportStatus = computed(() => Number(project.value?.final_report_status ?? 0))
+/** 撤回结项报告提交：仅报告待验收 + 未过截止日 + 负责人/超管 */
 const canWithdrawFinal = computed(() =>
-  finalSubmitted.value && !finalLocked.value && (isProjectLeader.value || userStore.isSuperAdmin)
+  finalReportStatus.value === 1
+  && !finalLocked.value
+  && (isProjectLeader.value || userStore.isSuperAdmin)
 )
 
 async function handleWithdrawFinal() {

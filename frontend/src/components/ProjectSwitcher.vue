@@ -30,11 +30,11 @@ const props = defineProps<{
   suffix: 'midterm' | 'achievements' | 'final'
 }>()
 
-/** 各页面可切换的项目状态：中期检查中 / 已立项及之后 / 待结题 */
+/** 各页面可切换的项目状态：含只读回看（中期通过后 / 已结题） */
 const STATUS_BY_SUFFIX: Record<'midterm' | 'achievements' | 'final', number[]> = {
-  midterm: [7],
+  midterm: [7, 8, 9],
   achievements: [6, 7, 8, 9],
-  final: [8],
+  final: [8, 9],
 }
 
 const route = useRoute()
