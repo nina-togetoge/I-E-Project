@@ -10,7 +10,7 @@
           <div>
             <h2 class="page-title">中期检查</h2>
             <div class="page-subtitle">
-              <el-tag v-if="midterm.status" :type="statusTagType" size="small">{{ midterm.status_name || '未提交' }}</el-tag>
+              <el-tag v-if="midterm.id" :type="statusTagType" size="small">{{ midterm.status_name || '草稿' }}</el-tag>
             </div>
           </div>
           <ProjectSwitcher :current-id="pid" suffix="midterm" />
@@ -169,8 +169,12 @@ const statusTagType = computed(() => {
   const s = midterm.value.status
   if (s === 2) return 'success'
   if (s === 4) return 'danger'
+  if (s === 0) return 'info'
   return 'warning'
 })
+
+/** 仅已立项(6)/中期检查中(7)可填写提交中期检查（与后端校验一致） */
+const midtermStage = computed(() => [6, 7].includes(Number(project.value?.status)))
 
 /** 当前用户是否为项目负责人（后端 save/submit 仅允许负责人） */
 const isLeader = computed(() => !!project.value && Number(project.value.leader_id) === Number(userStore.userInfo?.id))
@@ -178,9 +182,9 @@ const isLeader = computed(() => !!project.value && Number(project.value.leader_i
 /** 已用经费：由项目经费报销自动汇总（不再手工填写） */
 const usedAmount = computed(() => Number(project.value?.used_amount || 0))
 
-// 审核中(1)/已通过(2)/已作废(5)、或非项目负责人时只读
+// 审核中(1)/已通过(2)/已作废(5)、未进入中期阶段、或非项目负责人时只读
 const isReadonly = computed(() =>
-  [1, 2, 5].includes(midterm.value.status) || !isLeader.value
+  !midtermStage.value || [1, 2, 5].includes(midterm.value.status) || !isLeader.value
 )
 
 /** 跳转到成果登记 / 结项验收 */
@@ -190,6 +194,7 @@ function goNext(suffix: 'achievements' | 'final') {
 const readonlyTip = computed(() => {
   if (midterm.value.status === 1) return '中期检查正在审核中，暂不可修改，请等待审核结果'
   if (midterm.value.status === 2) return '中期检查已审核通过，不可再修改'
+  if (!midtermStage.value) return '项目尚未进入中期检查阶段，待项目立项后可填写并提交中期报告'
   if (!isLeader.value) return '仅项目负责人可填写并提交中期检查'
   return ''
 })

@@ -72,8 +72,8 @@
         class="mb-16"
       />
 
-      <!-- 结项条件检查清单 -->
-      <el-card v-if="checklist.length" shadow="never" class="mb-16">
+      <!-- 结项条件检查（仅进入待结题/已结题阶段后展示） -->
+      <el-card v-if="checklist.length && isFinalStage" shadow="never" class="mb-16">
         <template #header><span class="card-title">结项条件检查</span></template>
         <div v-for="item in checklist" :key="item.key" class="check-item">
           <el-icon :class="item.passed ? 'check-pass' : 'check-fail'">
@@ -139,7 +139,10 @@
 
         <!-- 只读：已提交/已结题/非负责人 -->
         <template v-else>
-          <div class="report-text">{{ project.final_report || '—' }}</div>
+          <div v-if="project.final_report" class="report-text">{{ project.final_report }}</div>
+          <div v-else class="report-empty">
+            项目进入「待结题」阶段后，由负责人填写并提交结项验收报告。
+          </div>
           <el-alert
             v-if="!isLeader && project.status === 8 && reportStatus === 0"
             title="仅项目负责人可填写并提交结项验收报告"
@@ -236,8 +239,11 @@ const isLeader = computed(() =>
 
 /** 结项报告状态：0未提交 1待验收 2已通过 3已驳回 */
 const reportStatus = computed(() => Number(project.value?.final_report_status ?? 0))
+/** 是否已进入结项验收阶段（待结题8 / 已结题9） */
+const isFinalStage = computed(() => [8, 9].includes(Number(project.value?.status)))
 const reportStatusText = computed(() => {
   const map: Record<number, string> = { 0: '未提交', 1: '待专家验收', 2: '验收通过', 3: '验收驳回' }
+  if (reportStatus.value === 0 && !isFinalStage.value) return '未开始'
   return map[reportStatus.value] || '未提交'
 })
 const reportStatusTagType = computed(() => {
@@ -416,6 +422,15 @@ onBeforeUnmount(() => processStore.reset())
   border-radius: 4px;
   padding: 16px;
   min-height: 120px;
+}
+.report-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: #909399;
+  font-size: 13px;
+  background: #fafafa;
+  border: 1px dashed #dcdfe6;
+  border-radius: 4px;
 }
 .review-progress { display: flex; align-items: center; gap: 16px; }
 .review-count { color: #606266; font-size: 13px; white-space: nowrap; }
