@@ -53,6 +53,7 @@
   .sw.solid-blue{border-color:var(--blue)}
   .sw.dashed-amber{border-color:var(--amber);border-top-style:dashed}
   .sw.dashed-gray{border-color:var(--gray);border-top-style:dashed}
+  .sw.dashed-red{border-color:var(--red);border-top-style:dashed}
   .grid2{display:grid;grid-template-columns:1.35fr .95fr;gap:20px;align-items:start}
   table{width:100%;border-collapse:collapse;font-size:12.8px}
   th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
@@ -103,20 +104,20 @@
     <h1>项目主干状态机</h1>
     <p class="sub">
       覆盖「申报 → 指导教师确认 → 学院初审 → 校级复审 → 专家评审 → 立项 → 中期 → 结题」全链路，
-      并包含变更/延期申请触发的阶段性退回。状态码与后端 <code>PROJECT_STATUS_*</code> 常量一一对应。
+      并包含变更/延期申请触发的阶段性退回，以及截止日逾期后的自动终止。状态码与后端 <code>PROJECT_STATUS_*</code> 常量一一对应。
     </p>
     <div class="meta">
-      <span class="chip"><b>v2.1</b> · 2026-10-21</span>
+      <span class="chip"><b>v2.2</b> · 2026-10-23</span>
       <span class="chip">依据后端服务代码生成</span>
-      <span class="chip live">新增「待分配评审专家 13」</span>
-      <span class="chip">状态 0 / 1 / 3 / 5 / 6 / 7 / 8 / 9 / 10 / 12 / 13</span>
+      <span class="chip live">新增「逾期自动终止 11」</span>
+      <span class="chip">状态 0 / 1 / 3 / 5 / 6 / 7 / 8 / 9 / 10 / 11 / 12 / 13</span>
     </div>
   </header>
 
   <!-- 主图 -->
   <section class="card">
     <h2>主干流转图</h2>
-    <p class="hint">蓝色实线＝主流程推进；橙色虚线＝变更申请审批通过后的退回；灰色虚线＝撤回 / 重新提交。驳回统一汇入「已驳回(10)」。</p>
+    <p class="hint">蓝色实线＝主流程推进；橙色虚线＝变更申请审批通过后的退回；灰色虚线＝撤回 / 重新提交；红色虚线＝截止日逾期自动终止。驳回统一汇入「已驳回(10)」。</p>
 
     <div class="diagram">
     <svg id="sm-main" viewBox="20 0 1260 690" role="img" aria-label="项目主干状态机示意图">
@@ -213,12 +214,21 @@
       <!-- ============ 驳回汇聚 ============ -->
       <g filter="url(#soft)">
         <rect x="215" y="470" width="140" height="64" rx="11" fill="#fdeeec" stroke="#e7b3ac"/>
-        <rect x="40"  y="470" width="140" height="64" rx="11" fill="#f0f2f6" stroke="#d5dbe6" stroke-dasharray="6 5"/>
+        <rect x="40"  y="470" width="140" height="64" rx="11" fill="#f0f2f6" stroke="#c9d2e0"/>
       </g>
       <text x="285" y="499" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">已驳回</text>
       <text x="285" y="519" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 10</text>
-      <text x="110" y="499" text-anchor="middle" font-size="16.5" font-weight="700" fill="#5b6676">已撤销</text>
-      <text x="110" y="519" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 11 · 暂未启用</text>
+      <text x="110" y="499" text-anchor="middle" font-size="16.5" font-weight="700" fill="#1b2430">已撤销</text>
+      <text x="110" y="519" text-anchor="middle" font-size="12.5" fill="#7b8798">status = 11 · 自动终止</text>
+
+      <!-- 逾期自动终止（6/7 中期、8 结题 → 11，系统清扫） -->
+      <g stroke="#c0392b" stroke-width="1.8" stroke-dasharray="6 4" fill="none">
+        <path d="M1225 142 L1250 142 L1250 560 L820 560"/>
+        <path d="M1160 334 L1160 560 L820 560"/>
+        <path d="M965 334 L965 560 L820 560"/>
+        <path d="M820 560 L110 560 L110 538" marker-end="url(#ar-red)"/>
+      </g>
+      <text x="600" y="550" text-anchor="middle" font-size="11.5" fill="#c0392b">逾期自动终止（6/7 中期未通过 · 8 结题未交报告）</text>
 
       <!-- 12 -> 10（直落） -->
       <path d="M280 174 L280 464" stroke="#c0392b" stroke-width="1.8" fill="none" marker-end="url(#ar-red)"/>
@@ -252,8 +262,9 @@
       <span><i class="sw solid-blue"></i>主流程推进</span>
       <span><i class="sw dashed-amber"></i>变更申请审批通过后退回</span>
       <span><i class="sw dashed-gray"></i>撤回 / 重新提交</span>
+      <span><i class="sw dashed-red"></i>截止日逾期自动终止</span>
       <span><span class="dot" style="background:#c0392b"></span>驳回</span>
-      <span><span class="dot" style="background:#f0f2f6;border:1px solid #d5dbe6"></span>未启用状态</span>
+      <span><span class="dot" style="background:#f0f2f6;border:1px solid #c9d2e0"></span>已撤销 / 终止</span>
     </div>
   </section>
 
@@ -261,7 +272,7 @@
     <!-- 流转明细 -->
     <section class="card">
       <h2>主干流转明细</h2>
-      <p class="hint">共 20 条有效迁移，触发人均在后端服务层做权限校验。</p>
+      <p class="hint">共 22 条有效迁移，触发人均在后端服务层做权限校验。</p>
       <table>
         <thead>
           <tr><th>#</th><th>起始 → 目标</th><th>触发动作</th><th>操作人</th><th>备注</th></tr>
@@ -287,6 +298,8 @@
           <tr><td class="num">18</td><td class="st"><span class="dot" style="background:#c0392b"></span>10 → <span class="dot" style="background:#b7791f"></span>12</td><td>修改后重新提交</td><td>学生（负责人）</td><td>清空上轮审核记录，从头重走</td></tr>
           <tr><td class="num">19</td><td class="st"><span class="dot" style="background:#b7791f"></span>3 → <span class="dot" style="background:#b7791f"></span>1</td><td>变更申请审批通过</td><td>项目指导教师</td><td>清学院 / 校级 / 专家三段评审记录</td></tr>
           <tr><td class="num">20</td><td class="st"><span class="dot" style="background:#b7791f"></span>5 → <span class="dot" style="background:#b7791f"></span>3</td><td>变更申请审批通过</td><td>项目指导教师</td><td>保留学院初审，清校级 / 专家记录</td></tr>
+          <tr><td class="num">21</td><td class="st"><span class="dot" style="background:#1f8a54"></span>6 <span class="code">/</span> <span class="dot" style="background:#b7791f"></span>7 → <span class="dot" style="background:#7b8798"></span>11</td><td>中期截止日仍未提交或未通过</td><td>系统自动</td><td>读取项目详情时清扫；终止留档</td></tr>
+          <tr><td class="num">22</td><td class="st"><span class="dot" style="background:#b7791f"></span>8 → <span class="dot" style="background:#7b8798"></span>11</td><td>结题截止日仍未提交报告</td><td>系统自动</td><td>读取项目详情时清扫；终止留档</td></tr>
         </tbody>
       </table>
     </section>
@@ -304,15 +317,24 @@
         <li><b>变更审批人</b>：仅该项目的指导教师本人；超级管理员可代操作。学院管理员、专家均无权审批。</li>
         <li><b>变更配额</b>：每个阶段限 1 次，累计上限 2 次；撤回不退名额，超期作废不计入。</li>
         <li><b>审批缓冲期</b>：须在「提交阶段审核日 + 1 天」内完成，超期自动置为「已作废」。</li>
-        <li><b>截止日锁定</b>：由比赛 5 个日期字段驱动；未配置时间表则不锁定。</li>
+        <li><b>截止日锁定</b>：由比赛时间表的学院初审日、校级复审日、专家评审日、中期截止日、结题截止日驱动；未配置时间表则不锁定。报告按时提交后的审核 / 验收不再受截止日限制。</li>
+        <li><b>逾期自动终止</b>：中期截止日过后仍处于 <span class="tag amber">6 / 7</span> 且未提交或未通过，或结题截止日过后仍未提交报告，项目自动置为 <span class="tag gray">已撤销 11</span>。</li>
         <li><b>结项三条件</b>：中期已通过 + 成果至少 1 项 + 报销已结清，方可提交结项报告。</li>
         <li><b>结题不可自批</b>：负责人提交报告后状态仍为 <span class="tag amber">8</span>，必须由被分配专家或超管验收才进入 <span class="tag green">9</span>。</li>
       </ul>
 
-      <h2 style="margin-top:22px">保留但未启用的状态</h2>
-      <p class="hint" style="margin-bottom:10px"><span class="tag gray">11 已撤销</span> 常量仍存在，但当前代码中没有任何迁移路径可以进入该状态。</p>
+      <h2 style="margin-top:22px">逾期自动终止（状态 11）</h2>
+      <p class="hint" style="margin-bottom:10px"><span class="tag gray">11 已撤销</span> 已启用，只由系统清扫写入，没有人工操作路径。</p>
 
       <div class="box-note">
+        <div class="ttl">触发与执行</div>
+        <b>中期终止</b>：中期截止日过后，项目仍处于「已立项 6」或「中期检查中 7」，且中期报告未提交或未通过。<br>
+        <b>结题终止</b>：结题截止日过后，项目仍处于「待结题 8」，且未提交结题报告。<br>
+        <b>执行时机</b>：读取项目详情时触发清扫，因此项目列表不会实时变化，逾期项目在下一次打开详情后才变为「已撤销」。<br>
+        <b>不触发的情况</b>：报告已在截止日前提交（含被驳回后重提），后续审核 / 验收不受截止日限制。
+      </div>
+
+      <div class="box-note" style="margin-top:12px">
         <div class="ttl">瞬时过渡态说明</div>
         状态 <b>2（学院初审通过）</b> 与 <b>4（校级复审通过）</b> 仅作为审核动作的中间语义，数据库不会写入这两个值；
         审核通过后直接落到下一待审状态（3 / 13），因此统计与筛选时无需考虑这两个值。
