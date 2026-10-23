@@ -47,6 +47,11 @@ class SysUser(BaseModel):
         comment="所属学院ID"
     )
     grade: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, comment="年级")
+    gender: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, comment="性别")
+    major: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, comment="专业(学生)")
+    title: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, comment="职称(教师/专家)")
+    direction: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="研究方向(教师/专家)")
+    organization: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="所属单位(专家)")
     avatar: Mapped[Optional[str]] = mapped_column(Text(length=2**32-1), nullable=True, comment="头像URL或base64")
     status: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, comment="状态: 0-禁用 1-启用")
     force_change_pwd: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, comment="首次登录强制改密:0-否 1-是")

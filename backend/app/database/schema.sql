@@ -55,6 +55,11 @@ CREATE TABLE `sys_user` (
   `role` tinyint NOT NULL DEFAULT '1' COMMENT '角色: 1-学生 2-指导教师 3-评审专家 4-系统管理员',
   `college_id` bigint DEFAULT NULL COMMENT '所属学院ID',
   `grade` varchar(32) DEFAULT NULL COMMENT '年级',
+  `gender` varchar(10) DEFAULT NULL COMMENT '性别',
+  `major` varchar(100) DEFAULT NULL COMMENT '专业(学生)',
+  `title` varchar(64) DEFAULT NULL COMMENT '职称(教师/专家)',
+  `direction` varchar(255) DEFAULT NULL COMMENT '研究方向(教师/专家)',
+  `organization` varchar(255) DEFAULT NULL COMMENT '所属单位(专家)',
   `avatar` longtext,
   `status` tinyint NOT NULL DEFAULT '1' COMMENT '状态: 0-禁用 1-启用',
   `force_change_pwd` tinyint NOT NULL DEFAULT '0' COMMENT '首次登录强制改密',
@@ -5917,3 +5922,31 @@ INSERT INTO `sys_operation_log` (`id`, `user_id`, `username`, `real_name`, `user
 (4408, NULL, NULL, NULL, NULL, 'query', 'unknown', NULL, 'GET', '/api/reviews?page=1&page_size=10', '{"query": {"page": "1", "page_size": "10"}}', 200, '172.19.0.1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) TRAESOLOCN/1.107.1 Chrome/142.0.7444.235 Electron/39.2.7 Safari/537.36', 23, '2026-09-19 21:12:14'),
 (4409, NULL, NULL, NULL, NULL, 'query', 'unknown', NULL, 'GET', '/api/colleges', NULL, 200, '172.19.0.3', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', 192, '2026-09-19 21:50:21'),
 (4410, NULL, NULL, NULL, NULL, 'query', 'announcement', NULL, 'GET', '/api/projects/announcement/list?page=1&page_size=10', '{"query": {"page": "1", "page_size": "10"}}', 200, '172.19.0.3', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36', 127, '2026-09-19 21:50:21');
+
+-- ============================================================
+-- 论文第三章角色视图（方案A：统一账号表 + 角色视图，非物理拆分）
+-- 字段名与论文表结构保持一致，便于论文与数据库对照
+-- ============================================================
+CREATE OR REPLACE VIEW `v_student` AS
+SELECT id AS student_id, username AS student_no, real_name AS name, password_hash AS password,
+       gender, grade, major, phone, email
+FROM sys_user WHERE role = 1 AND is_deleted = 0;
+
+CREATE OR REPLACE VIEW `v_teacher` AS
+SELECT id AS teacher_id, username AS teacher_no, real_name AS name, password_hash AS password,
+       title, direction, phone, email
+FROM sys_user WHERE role = 2 AND is_deleted = 0;
+
+CREATE OR REPLACE VIEW `v_college_admin` AS
+SELECT id AS admin_id, username AS admin_no, real_name, college_id, phone, email
+FROM sys_user WHERE role = 4 AND college_id IS NOT NULL AND is_deleted = 0;
+
+CREATE OR REPLACE VIEW `v_super_admin` AS
+SELECT id AS admin_id, username AS account, real_name, password_hash AS password,
+       CAST(2 AS SIGNED) AS permission, phone, email
+FROM sys_user WHERE role = 4 AND college_id IS NULL AND is_deleted = 0;
+
+CREATE OR REPLACE VIEW `v_expert` AS
+SELECT id AS expert_id, username AS expert_no, real_name, password_hash AS password,
+       title, direction, organization, phone, email
+FROM sys_user WHERE role = 3 AND is_deleted = 0;
