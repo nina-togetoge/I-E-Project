@@ -872,7 +872,7 @@ PROJECTS = [
                 "publish_date": date(2026, 9, 1),
                 "publisher": "软件导刊",
                 "achievement_no": "10.19788/j.issn.1004-731X.2026.07.012",
-                "level": 2, "award_level": None,
+                "level": 1, "award_level": None,
                 "summary": "提出融合知识路径约束与图神经网络的推荐方法，在自建课程数据集上"
                            "NDCG@10 较基线提升 11.6%。",
                 "certificate": "paper",
@@ -1030,7 +1030,8 @@ PROJECTS = [
                 "publish_date": date(2026, 6, 15),
                 "publisher": "计算机教育",
                 "achievement_no": "10.19788/j.issn.1004-731X.2026.09.021",
-                "level": 2, "award_level": None,
+                # 成果级别与项目级别映射不同（成果 1校级/2省级/3国家级），此处按校级填写
+                "level": 1, "award_level": None,
                 "summary": "论文总结校园二手交易平台的实名认证、担保交易与信用评价设计，"
                            "并给出试运行数据分析。",
                 "certificate": "paper",

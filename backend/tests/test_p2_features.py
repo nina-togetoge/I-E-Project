@@ -60,17 +60,54 @@ def test_leader_cannot_review_own_achievement(client, seed, auth_headers):
     assert r.json()["code"] == 403
 
 
-def test_edit_after_review_resets_to_pending(client, seed, auth_headers):
+def test_leader_cannot_edit_or_delete_recognized_achievement(client, seed, auth_headers):
     _, leader, teacher, _, ach = _project_with_achievement(seed)
     client.post(f"/api/achievements/{ach.id}/review",
                 json={"result": 1}, headers=auth_headers(teacher))
 
     r = client.put(f"/api/achievements/{ach.id}",
                    json={"title": "修改后的成果"}, headers=auth_headers(leader))
+    assert r.json()["code"] == 403
+
+    r = client.delete(f"/api/achievements/{ach.id}", headers=auth_headers(leader))
+    assert r.json()["code"] == 403
+
+
+def test_teacher_edit_after_review_resets_to_pending(client, seed, auth_headers):
+    _, _, teacher, _, ach = _project_with_achievement(seed)
+    client.post(f"/api/achievements/{ach.id}/review",
+                json={"result": 1}, headers=auth_headers(teacher))
+
+    r = client.put(f"/api/achievements/{ach.id}",
+                   json={"title": "修改后的成果"}, headers=auth_headers(teacher))
     body = r.json()
     assert body["code"] == 200
     assert body["data"]["review_status"] == 0
     assert body["data"]["review_status_name"] == "待认定"
+
+
+def test_revoke_review_returns_to_pending_and_unlocks_leader(client, seed, auth_headers):
+    _, leader, teacher, _, ach = _project_with_achievement(seed)
+    client.post(f"/api/achievements/{ach.id}/review",
+                json={"result": 1}, headers=auth_headers(teacher))
+
+    # 负责人无权撤销认定
+    r = client.post(f"/api/achievements/{ach.id}/revoke", headers=auth_headers(leader))
+    assert r.json()["code"] == 403
+
+    r = client.post(f"/api/achievements/{ach.id}/revoke", headers=auth_headers(teacher))
+    body = r.json()
+    assert body["code"] == 200
+    assert body["data"]["review_status"] == 0
+    assert body["data"]["review_status_name"] == "待认定"
+    assert body["data"]["reviewer_name"] is None
+
+    # 撤销后负责人恢复编辑/删除权限
+    r = client.put(f"/api/achievements/{ach.id}",
+                   json={"title": "撤销后修改"}, headers=auth_headers(leader))
+    assert r.json()["code"] == 200
+    r = client.delete(f"/api/achievements/{ach.id}", headers=auth_headers(leader))
+    assert r.json()["code"] == 200
 
 
 # ====================================================================

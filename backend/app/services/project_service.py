@@ -1471,16 +1471,21 @@ class AchievementService:
         raise PermissionDeniedException(message=deny_message)
 
     @staticmethod
+    def _can_review(project: ProjProject, operator: SysUser) -> bool:
+        """是否具备认定权限：超管、本院学院管理员、项目指导教师"""
+        if is_super_admin(operator):
+            return True
+        if is_college_admin(operator):
+            return bool(operator.college_id) and project.college_id == operator.college_id
+        return operator.role == RoleEnum.TEACHER and project.teacher_id == operator.id
+
+    @staticmethod
     def _ensure_review_permission(project: ProjProject, operator: SysUser) -> None:
         """成果认定权限：该项目指导教师、学院管理员、超级管理员（负责人不得自认）"""
-        if is_super_admin(operator):
+        if AchievementService._can_review(project, operator):
             return
         if is_college_admin(operator):
-            if not operator.college_id or project.college_id != operator.college_id:
-                raise PermissionDeniedException(message="学院管理员仅可认定本院项目成果")
-            return
-        if operator.role == RoleEnum.TEACHER and project.teacher_id == operator.id:
-            return
+            raise PermissionDeniedException(message="学院管理员仅可认定本院项目成果")
         raise PermissionDeniedException(message="仅项目指导教师或管理员可认定成果")
 
     @staticmethod
@@ -1615,6 +1620,9 @@ class AchievementService:
             ProjAchievementReview.is_deleted == 0,
         ).first()
         old_status = old_review.status if old_review else 1
+        # 已认定成果锁定给负责人：需由指导教师/管理员撤销认定后才能修改
+        if old_status == 1 and not AchievementService._can_review(obj, operator):
+            raise PermissionDeniedException(message="成果已认定，需先撤销认定后才能修改")
         data = req.model_dump(exclude_unset=True)
         attachment_ids = data.pop("attachment_ids", []) or []
         if "publish_date" in data:
@@ -1676,6 +1684,44 @@ class AchievementService:
         return AchievementService._to_response(db, ach, row)
 
     @staticmethod
+    def revoke_review(db: Session, pk: int, operator: SysUser) -> AchievementResponse:
+        """撤销成果认定：回到「待认定」，清空认定结论，允许负责人修改后重新认定"""
+        from app.models import ProjAchievement
+        ach = db.query(ProjAchievement).filter(
+            ProjAchievement.id == pk, ProjAchievement.is_deleted == 0
+        ).first()
+        if not ach:
+            raise ResourceNotFoundException(message="成果不存在")
+        obj = ProjectCRUD.get_by_id(db, ach.project_id)
+        if not obj:
+            raise ResourceNotFoundException(message="所属项目不存在")
+        AchievementService._ensure_project_status(obj)
+        AchievementService._ensure_review_permission(obj, operator)
+        row = db.query(ProjAchievementReview).filter(
+            ProjAchievementReview.achievement_id == ach.id,
+            ProjAchievementReview.is_deleted == 0,
+        ).first()
+        if not row or row.status != 1:
+            raise ParamValidateException(message="仅已认定的成果可撤销认定")
+        row.status = 0
+        row.reviewer_id = None
+        row.reviewer_name = None
+        row.review_comment = None
+        row.review_time = None
+        row.submit_time = datetime.now()
+        NotificationService.push(
+            db, obj.leader_id, "成果认定已撤销",
+            f"项目「{obj.project_name}」的成果「{ach.title}」认定已被撤销，"
+            "可在编辑修改后重新提交认定。",
+            level=NOTICE_LEVEL_WARNING, biz_type="achievement", biz_id=ach.id,
+            link=f"/projects/{obj.id}/achievements",
+        )
+        db.commit()
+        db.refresh(ach)
+        db.refresh(row)
+        return AchievementService._to_response(db, ach, row)
+
+    @staticmethod
     def delete(db: Session, pk: int, operator: SysUser) -> None:
         from app.models import ProjAchievement
         ach = db.query(ProjAchievement).filter(
@@ -1683,13 +1729,22 @@ class AchievementService:
         ).first()
         if not ach:
             raise ResourceNotFoundException(message="成果不存在")
+        obj = ProjectCRUD.get_by_id(db, ach.project_id)
+        if not obj:
+            raise ResourceNotFoundException(message="所属项目不存在")
         if not is_super_admin(operator):
-            obj = ProjectCRUD.get_by_id(db, ach.project_id)
             if is_college_admin(operator):
-                if not obj or not operator.college_id or obj.college_id != operator.college_id:
+                if not operator.college_id or obj.college_id != operator.college_id:
                     raise PermissionDeniedException(message="学院管理员仅可删除本院成果")
-            elif not obj or obj.leader_id != operator.id:
+            elif obj.leader_id != operator.id:
                 raise PermissionDeniedException(message="仅负责人或管理员可删除成果")
+        # 已认定成果仅管理员可删除；负责人需先撤销认定，保留认定历史可追溯
+        review = db.query(ProjAchievementReview).filter(
+            ProjAchievementReview.achievement_id == ach.id,
+            ProjAchievementReview.is_deleted == 0,
+        ).first()
+        if review and review.status == 1 and not AchievementService._can_review(obj, operator):
+            raise PermissionDeniedException(message="成果已认定，请先撤销认定后再删除")
         ach.is_deleted = 1
         db.query(ProjAchievementReview).filter(
             ProjAchievementReview.achievement_id == ach.id

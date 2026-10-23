@@ -260,6 +260,19 @@ def api_achievement_review(
     return success(data=data, message="成果认定完成")
 
 
+@router_achievement.post("/{pk}/revoke", response_model=ResponseModel[AchievementResponse], summary="撤销成果认定")
+def api_achievement_revoke(
+    pk: int,
+    db: Session = Depends(get_db),
+    current_user: SysUser = require_login,
+    ctx: OperationContext = Depends(),
+):
+    with ctx:
+        ctx.set_desc(f"撤销成果#{pk}认定")
+        data = AchievementService.revoke_review(db, pk, current_user)
+    return success(data=data, message="已撤销认定")
+
+
 @router_achievement.delete("/{pk}", response_model=ResponseModel, summary="删除成果")
 def api_achievement_delete(
     pk: int,

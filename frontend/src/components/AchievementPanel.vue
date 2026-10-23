@@ -23,7 +23,7 @@
             <th style="width:110px">日期</th>
             <th style="width:90px">证明材料</th>
             <th style="width:100px">认定状态</th>
-            <th style="width:150px">操作</th>
+            <th style="width:240px">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -60,10 +60,17 @@
               >{{ reviewStatusLabel(a.review_status) }}</el-tag>
             </td>
             <td align="center">
-              <el-button v-if="canReview" link type="warning" size="small" @click="openReview(a)">认定</el-button>
-              <el-button v-if="canRegister" link type="primary" size="small" @click="openEdit(a)">编辑</el-button>
-              <el-button v-if="canDelete" link type="danger" size="small" @click="handleDelete(a)">删除</el-button>
-              <span v-if="!canRegister && !canDelete && !canReview">—</span>
+              <el-button link type="primary" size="small" @click="openDetail(a)">查看</el-button>
+              <el-button
+                v-if="canReview && reviewStatusOf(a) !== 1"
+                link type="warning" size="small" @click="openReview(a)"
+              >认定</el-button>
+              <el-button
+                v-if="canReview && reviewStatusOf(a) === 1"
+                link type="danger" size="small" @click="handleRevoke(a)"
+              >撤销认定</el-button>
+              <el-button v-if="canEditRow(a)" link type="primary" size="small" @click="openEdit(a)">编辑</el-button>
+              <el-button v-if="canDeleteRow(a)" link type="danger" size="small" @click="handleDelete(a)">删除</el-button>
             </td>
           </tr>
         </tbody>
@@ -169,13 +176,42 @@
     <el-dialog center v-model="attDialog" :title="`成果证明材料 - ${attTitle}`" width="600px">
       <ProjectAttachmentList :attachments="attList" />
     </el-dialog>
+
+    <!-- 成果详情查看弹窗 -->
+    <el-dialog center v-model="detailDialog" :title="detailRow?.title || '成果详情'" width="640px">
+      <template v-if="detailRow">
+        <el-descriptions :column="2" border>
+          <el-descriptions-item label="成果类型">{{ achievementTypeMap[detailRow.achievement_type] || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="级别">{{ achievementLevelMap[detailRow.level] || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="作者">{{ detailRow.author || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="日期">{{ formatDate(detailRow.publish_date) }}</el-descriptions-item>
+          <el-descriptions-item label="发表刊物/机构">{{ detailRow.publisher || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="编号">{{ detailRow.achievement_no || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="获奖等级">{{ detailRow.award_level || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="认定状态">
+            <el-tag size="small" :type="reviewStatusTagType(detailRow.review_status)">
+              {{ reviewStatusLabel(detailRow.review_status) }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="成果简介" :span="2">{{ detailRow.summary || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="认定人">{{ detailRow.reviewer_name || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="认定时间">{{ detailRow.review_time ? formatDate(detailRow.review_time) : '—' }}</el-descriptions-item>
+          <el-descriptions-item label="认定意见" :span="2">{{ detailRow.review_comment || '—' }}</el-descriptions-item>
+        </el-descriptions>
+        <div class="detail-attachments">
+          <div class="detail-attachments__title">证明材料</div>
+          <ProjectAttachmentList v-if="detailRow.attachments?.length" :attachments="detailRow.attachments" />
+          <span v-else class="detail-attachments__empty">暂无证明材料</span>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { listAchievements, createAchievement, updateAchievement, deleteAchievement, reviewAchievement } from '@/api/project'
+import { listAchievements, createAchievement, updateAchievement, deleteAchievement, reviewAchievement, revokeAchievement } from '@/api/project'
 import { deleteAttachment } from '@/api/common'
 import ProjectAttachmentList from '@/components/ProjectAttachmentList.vue'
 import FileUpload from '@/components/FileUpload.vue'
@@ -215,6 +251,8 @@ const newAttachments = ref<any[]>([])
 const attDialog = ref(false)
 const attTitle = ref('')
 const attList = ref<any[]>([])
+const detailDialog = ref(false)
+const detailRow = ref<any>(null)
 const reviewDialog = ref(false)
 const reviewing = ref(false)
 const reviewTarget = ref<any>(null)
@@ -229,6 +267,20 @@ function reviewStatusTagType(status?: number): string {
     case 2: return 'danger'
     default: return 'success'
   }
+}
+/** 与后端一致：无认定记录的历史成果按「已认定」处理 */
+function reviewStatusOf(row: any): number {
+  return Number(row.review_status ?? 1)
+}
+// 已认定成果锁定负责人：仅认定人（指导教师/管理员）仍可编辑
+function canEditRow(row: any): boolean {
+  return canRegister.value && (reviewStatusOf(row) !== 1 || canReview.value)
+}
+// 已认定成果负责人不可删除，管理员不受限
+function canDeleteRow(row: any): boolean {
+  if (!canDelete.value) return false
+  if (isProjectAdmin.value) return true
+  return reviewStatusOf(row) !== 1
 }
 const formRef = ref<FormInstance>()
 const form = reactive({
@@ -382,7 +434,18 @@ function openCreate() {
   showDialog.value = true
 }
 
-function openEdit(row: any) {
+async function openEdit(row: any) {
+  // 认定人修改已认定成果时，修改后认定将失效并需重新认定
+  if (reviewStatusOf(row) === 1) {
+    try {
+      await ElMessageBox.confirm(
+        '该成果已认定，修改后将失效并需重新认定，是否继续？',
+        '提示', { type: 'warning' },
+      )
+    } catch {
+      return
+    }
+  }
   resetDialogForm()
   editingId.value = row.id
   form.achievement_type = row.achievement_type
@@ -468,10 +531,41 @@ async function handleSubmit() {
 }
 
 async function handleDelete(row: any) {
-  await ElMessageBox.confirm(`确认删除成果「${row.title}」？`, '提示', { type: 'warning' })
-  await deleteAchievement(row.id)
-  ElMessage.success('已删除')
-  loadAchievements()
+  try {
+    await ElMessageBox.confirm(`确认删除成果「${row.title}」？`, '提示', { type: 'warning' })
+  } catch {
+    return
+  }
+  try {
+    await deleteAchievement(row.id)
+    ElMessage.success('已删除')
+    loadAchievements()
+  } catch {
+    // 错误已由全局请求拦截器统一提示
+  }
+}
+
+function openDetail(row: any) {
+  detailRow.value = row
+  detailDialog.value = true
+}
+
+async function handleRevoke(row: any) {
+  try {
+    await ElMessageBox.confirm(
+      `确认撤销成果「${row.title}」的认定？撤销后需重新认定。`,
+      '提示', { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  try {
+    await revokeAchievement(row.id)
+    ElMessage.success('已撤销认定')
+    loadAchievements()
+  } catch {
+    // 错误已由全局请求拦截器统一提示
+  }
 }
 
 function openReview(row: any) {
@@ -554,5 +648,17 @@ watch(() => props.project?.id, (id) => {
   border-radius: 4px;
   font-size: 13px;
   color: #606266;
+}
+.detail-attachments {
+  margin-top: 16px;
+}
+.detail-attachments__title {
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #303133;
+}
+.detail-attachments__empty {
+  color: #909399;
+  font-size: 13px;
 }
 </style>

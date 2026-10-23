@@ -256,6 +256,11 @@ export function reviewAchievement(pk: number, data: { result: number; comment?: 
   return post<Achievement>(`/api/achievements/${pk}/review`, data)
 }
 
+/** 撤销成果认定（回到待认定，允许负责人修改后重新认定） */
+export function revokeAchievement(pk: number) {
+  return post<Achievement>(`/api/achievements/${pk}/revoke`)
+}
+
 /** 导出结项归档（ZIP） */
 export function downloadProjectArchive(projectId: number, filename?: string) {
   return download(
