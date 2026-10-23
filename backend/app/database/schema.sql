@@ -299,7 +299,7 @@ CREATE TABLE `proj_achievement` (
   `publish_date` date DEFAULT NULL COMMENT '发表/授权日期',
   `publisher` varchar(255) DEFAULT NULL COMMENT '发表刊物/授权机构',
   `achievement_no` varchar(128) DEFAULT NULL COMMENT '编号(专利号/登记号等)',
-  `level` tinyint DEFAULT NULL COMMENT '级别: 1-校级 2-省级 3-国家级 4-国际级',
+  `level` tinyint DEFAULT NULL COMMENT '级别: 1-校级 2-省级 3-国家级',
   `award_level` varchar(64) DEFAULT NULL COMMENT '获奖等级',
   `summary` text COMMENT '成果简介',
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',

@@ -290,7 +290,7 @@ COMPETITION_FIXES = {
         "status": 2, "contact": "010-8422 6677", "official_url": "http://www.chinacxcy.cn",
     },
     "iCAN国际创新创业大赛": {
-        "status": 2, "contact": "010-8264 7788", "official_url": None,
+        "status": 2, "contact": "010-8264 7788", "official_url": None, "level": 3,
     },
     "全国大学生创新体验竞赛": {
         "status": 3, "contact": "025-8379 2200", "official_url": None,
@@ -359,6 +359,7 @@ ROUTINE_REVIEW_FIXES = {
     (4, 2): "项目已具备实施基础，同意通过校级复审。",
 }
 
+# 按项目ID匹配（中期检查与项目一对一）
 MIDTERM_COMMENT_FIXES = {
     3: "项目按计划完成知识图谱构建与推荐算法开发，阶段成果达到中期考核要求，同意通过中期检查。",
     4: "小程序已上线试运行，用户规模与功能完成度符合中期目标，经费使用合理，同意通过中期检查。",
@@ -372,12 +373,13 @@ ACHIEVEMENT_NO_FIXES = {
     (4, "校园二手交易平台的设计与实现"): "10.19788/j.issn.1004-731X.2026.09.021",
 }
 
+# 按成果标题匹配，避免自增ID变化导致意见错配
 ACHIEVEMENT_REVIEW_FIXES = {
-    1: "软件著作权登记证书信息完整，与项目研究内容一致，予以认定。",
-    2: "论文已正式发表，期刊信息与作者署名真实有效，予以认定。",
-    3: "软件著作权登记材料齐全，权属清晰，予以认定。",
-    4: "论文内容与项目研究方向一致，发表信息核验无误，予以认定。",
-    5: "获奖证书真实有效，获奖等级与赛事信息一致，予以认定。",
+    "校园智能垃圾分类回收系统 V1.0": "软件著作权登记证书信息完整，与项目研究内容一致，予以认定。",
+    "课程知识图谱构建与推荐系统 V1.0": "软件著作权登记材料齐全，权属清晰，予以认定。",
+    "基于知识图谱的个性化学习资源推荐方法": "论文已正式发表，期刊信息与作者署名真实有效，予以认定。",
+    "校园二手交易平台的设计与实现": "论文内容与项目研究方向一致，发表信息核验无误，予以认定。",
+    "2026年校级大学生创新创业大赛": "获奖证书真实有效，获奖等级与赛事信息一致，予以认定。",
 }
 
 
@@ -513,9 +515,9 @@ def seed():
         print(f"[审核记录] 已更新 {expert_fixed} 条专家/结题意见，常规意见 {len(ROUTINE_REVIEW_FIXES)} 条")
 
         # ---------- 中期评语 ----------
-        for midterm_id, comment in MIDTERM_COMMENT_FIXES.items():
+        for pid, comment in MIDTERM_COMMENT_FIXES.items():
             row = db.query(ProjMidtermCheck).filter(
-                ProjMidtermCheck.id == midterm_id,
+                ProjMidtermCheck.project_id == pid,
                 ProjMidtermCheck.is_deleted == 0,
             ).first()
             if row:
@@ -539,9 +541,15 @@ def seed():
 
         # ---------- 成果认定意见 ----------
         ar_fixed = 0
-        for achievement_id, comment in ACHIEVEMENT_REVIEW_FIXES.items():
+        for title, comment in ACHIEVEMENT_REVIEW_FIXES.items():
+            ach = db.query(ProjAchievement).filter(
+                ProjAchievement.title == title,
+                ProjAchievement.is_deleted == 0,
+            ).first()
+            if not ach:
+                continue
             rows = db.query(ProjAchievementReview).filter(
-                ProjAchievementReview.achievement_id == achievement_id,
+                ProjAchievementReview.achievement_id == ach.id,
                 ProjAchievementReview.is_deleted == 0,
             ).all()
             for row in rows:

@@ -26,7 +26,7 @@ from app.schemas.review import MIDTERM_STATUS_NAME
 from app.utils.excel_helper import ExcelHelper
 
 ACHIEVEMENT_TYPE_NAME = {1: "论文", 2: "专利", 3: "软件著作权", 4: "竞赛获奖", 5: "创业成果", 6: "其他"}
-ACHIEVEMENT_LEVEL_NAME = {1: "校级", 2: "省级", 3: "国家级", 4: "国际级"}
+ACHIEVEMENT_LEVEL_NAME = {1: "校级", 2: "省级", 3: "国家级"}
 REVIEW_STATUS_NAME = {0: "待认定", 1: "已认定", 2: "不通过"}
 
 

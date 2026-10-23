@@ -93,6 +93,12 @@ const layoutRoutes: RouteRecordRaw[] = [
         component: () => import(/* webpackChunkName: "expense" */ '@/views/expense/MyExpenses.vue'),
         meta: { title: '报销申请', icon: 'Money', roles: [1], group: 'project' },
       },
+      {
+        path: 'my-certificates',
+        name: 'MyCertificates',
+        component: () => import(/* webpackChunkName: "certificate" */ '@/views/certificate/MyCertificates.vue'),
+        meta: { title: '我的证书', icon: 'Medal', roles: [1], group: 'project' },
+      },
 
       // ==================== 审核中心 ====================
       {

@@ -24,6 +24,7 @@ from app.models.project import (
 from app.models.competition import Competition
 from app.models.announcement import Announcement
 from app.models.notification import SysNotification
+from app.models.certificate import ProjCertificate
 
 __all__ = [
     # Base
@@ -52,4 +53,6 @@ __all__ = [
     "Announcement",
     # Notification
     "SysNotification",
+    # Certificate
+    "ProjCertificate",
 ]

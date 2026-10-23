@@ -263,12 +263,13 @@ const PROCESS_STAGES = [
   { key: 'finished', label: '已结题', status: 9, segment: 'exec', icon: 'CircleCheckFilled' },
 ]
 
-// 阶段按功能归入侧边栏分组：审批段归「审核中心」；
+// 阶段按功能归入侧边栏分组：审批段不再作为侧边栏阶段菜单，
+// 统一由「审核工作台」（教师/管理员）与「待评审项目」（专家）入口承载，避免同名重复入口；
 // 执行段在「项目管理」下以「已立项」父级菜单收拢（中期检查 / 结项验收）。
 const STAGE_GROUP_MAP: Record<string, string[]> = {
   project: ['declare'],
   exec: ['midterm', 'final'],
-  review: ['teacher', 'college', 'expert'],
+  review: [],
 }
 
 // 取某分组下的阶段列表（带序号偏移，保持全局编号连续）
@@ -280,14 +281,9 @@ function stagesOfGroup(groupKey: string) {
     .filter((s) => {
       // 项目申报仅对学生显示（教师/管理员跳转目标与"我的项目"重复）
       if (s!.key === 'declare') return userStore.role === ROLES.STUDENT
-      // 审批段各阶段按「谁可审核」过滤：后端待审队列按角色固定到唯一状态
-      // （教师→12/学院管理员→1/超管→3），若展示无关阶段，点击只会落到本角色
-      // 自己的队列，甚至 403。故每人仅保留自己可审核的那个阶段。
-      if (s!.key === 'teacher') return userStore.isTeacher
-      if (s!.key === 'college') return userStore.isCollegeAdmin
-      if (s!.key === 'university') return userStore.isSuperAdmin
-      if (s!.key === 'expert') return userStore.isExpert
-      // 执行段阶段（项目立项/中期检查/成果登记/结项验收/已结题）常驻侧边栏展示
+      // 结项验收仅由评审专家/超级管理员操作，教师只参与中期检查审核
+      if (s!.key === 'final') return !userStore.isTeacher
+      // 执行段阶段（项目立项/中期检查/结项验收/已结题）常驻侧边栏展示
       return true
     })
     .map((s) => {

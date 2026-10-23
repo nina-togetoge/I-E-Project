@@ -28,7 +28,7 @@ router_competition = APIRouter(prefix="/competitions", tags=["创新创业大赛
 def api_competition_list(
     keyword: Optional[str] = Query(None, description="关键词(名称/主办方)"),
     competition_type: Optional[int] = Query(None, ge=1, le=4, description="比赛类型"),
-    level: Optional[int] = Query(None, ge=1, le=4, description="级别"),
+    level: Optional[int] = Query(None, ge=1, le=3, description="级别:1校级2省级3国家级"),
     status: Optional[int] = Query(None, ge=0, le=4, description="状态"),
     pager: PaginationParams = Depends(),
     db: Session = Depends(get_db),

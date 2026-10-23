@@ -106,7 +106,6 @@
             <el-option label="校级" :value="1" />
             <el-option label="省级" :value="2" />
             <el-option label="国家级" :value="3" />
-            <el-option label="国际级" :value="4" />
           </el-select>
         </el-form-item>
         <el-form-item v-if="isFieldVisible('award_level')" :label="labelOf('award_level')" prop="award_level">
@@ -248,7 +247,7 @@ const achievementTypeMap: Record<number, string> = {
 }
 // 获奖级别（与成果登记弹窗、后端 AchievementCreate.level 保持一致）
 const achievementLevelMap: Record<number, string> = {
-  1: '校级', 2: '省级', 3: '国家级', 4: '国际级',
+  1: '校级', 2: '省级', 3: '国家级',
 }
 const typeOptions = Object.entries(achievementTypeMap).map(([key, label]) => ({
   value: Number(key), label,

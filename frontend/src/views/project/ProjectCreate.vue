@@ -412,7 +412,7 @@ async function searchStudent(row: any, _index: number) {
       const s = items[0]
       row.student_id = s.id
       row.student_name = s.real_name || s.username
-      // 用户信息中无「专业」字段，专业由用户手动填写，此处不回填
+      row.major = s.major || ''
       row.grade = s.grade || ''
       ElMessage.success(`已自动填充：${row.student_name}`)
     } else if (items.length > 1) {

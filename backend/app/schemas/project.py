@@ -224,7 +224,7 @@ class AchievementBase(BaseModel):
     publish_date: Optional[date] = None
     publisher: Optional[str] = Field(default=None, max_length=255)
     achievement_no: Optional[str] = Field(default=None, max_length=128)
-    level: Optional[int] = Field(default=None, ge=1, le=4)
+    level: Optional[int] = Field(default=None, ge=1, le=3, description="成果级别:1校级2省级3国家级")
     award_level: Optional[str] = Field(default=None, max_length=64)
     summary: Optional[str] = None
 
@@ -242,7 +242,7 @@ class AchievementUpdate(BaseModel):
     publish_date: Optional[date] = None
     publisher: Optional[str] = Field(default=None, max_length=255)
     achievement_no: Optional[str] = Field(default=None, max_length=128)
-    level: Optional[int] = Field(default=None, ge=1, le=4)
+    level: Optional[int] = Field(default=None, ge=1, le=3, description="成果级别:1校级2省级3国家级")
     award_level: Optional[str] = Field(default=None, max_length=64)
     summary: Optional[str] = None
     attachment_ids: List[int] = Field(default_factory=list, description="新增证明材料临时附件IDs（biz_id=0）")

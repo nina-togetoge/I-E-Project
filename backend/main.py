@@ -51,6 +51,7 @@ from app.api.routers.common_router import (
 )
 from app.api.routers.expense_router import router_expense
 from app.api.routers.competition_router import router_competition
+from app.api.routers.certificate_router import router_certificate
 from app.api.routers.announcement_router import router_announcement
 from app.api.routers.notification_router import router_notification
 from app.api.routers.ai_router import router_ai
@@ -118,6 +119,9 @@ def create_app() -> FastAPI:
 
     # 创新创业大赛
     app.include_router(router_competition, prefix=api_prefix)
+
+    # 获奖证书
+    app.include_router(router_certificate, prefix=api_prefix)
 
     # 系统公告
     app.include_router(router_announcement, prefix=api_prefix)

@@ -1,6 +1,7 @@
 """
 创新创业大赛 业务逻辑层
 """
+import logging
 from typing import Optional, Tuple, List
 from datetime import date, datetime
 
@@ -17,6 +18,9 @@ from app.schemas.competition import (
 )
 from app.schemas.review import REVIEW_STAGE_EXPERT
 from app.core.security import is_super_admin
+from app.services.certificate_service import CertificateService
+
+logger = logging.getLogger(__name__)
 
 
 # 自动获奖分配常量
@@ -231,16 +235,19 @@ class CompetitionService:
                     break  # 超出获奖范围，不再奖励
                 title = (f"{comp.title}（{comp.session}）{award}" if comp.session
                          else f"{comp.title}{award}")
-                db.add(ProjAchievement(
+                ach = ProjAchievement(
                     project_id=p.id,
                     achievement_type=4,  # 竞赛获奖
                     title=title,
                     level=1,
                     award_level=award,
                     publisher=comp.organizer,
+                    publish_date=date.today(),
                     summary=(f"{AUTO_AWARD_SUMMARY_PREFIX}比赛:{comp.title} "
                              f"届次:{comp.session or '—'} 名次:{idx} 平均分:{score:.2f}"),
-                ))
+                )
+                db.add(ach)
+                db.flush()
                 items.append({
                     "project_id": p.id,
                     "project_name": p.project_name,
@@ -248,6 +255,11 @@ class CompetitionService:
                     "rank": idx,
                     "award_level": award,
                 })
+                # 校级证书：每个获奖项目生成团队证书 + 每位成员个人证书，并推送站内通知
+                try:
+                    CertificateService.issue_for_achievement(db, ach, p, comp, award, operator)
+                except Exception as exc:  # 证书生成失败不应阻断获奖名单生成
+                    logger.warning("生成获奖证书失败 project=%s: %s", p.id, exc)
                 total_awarded += 1
             result_groups.append({
                 "college_id": college_id,

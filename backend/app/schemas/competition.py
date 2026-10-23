@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, ConfigDict, model_validator
 # 常量
 # ====================================================================
 COMPETITION_TYPE_NAME = {1: "创新训练类", 2: "创业实践类", 3: "学科竞赛类", 4: "综合类"}
-COMPETITION_LEVEL_NAME = {1: "校级", 2: "省级", 3: "国家级", 4: "国际级"}
+COMPETITION_LEVEL_NAME = {1: "校级", 2: "省级", 3: "国家级"}
 COMPETITION_STATUS_NAME = {0: "草稿", 1: "报名中", 2: "进行中", 3: "已结束", 4: "已取消"}
 
 
@@ -21,7 +21,7 @@ class CompetitionCreate(BaseModel):
     title: str = Field(..., max_length=255, description="比赛名称")
     session: Optional[str] = Field(None, max_length=32, description="届次(如 2026届)")
     competition_type: int = Field(1, ge=1, le=4, description="比赛类型")
-    level: int = Field(1, ge=1, le=4, description="比赛级别")
+    level: int = Field(1, ge=1, le=3, description="比赛级别:1校级2省级3国家级")
     organizer: Optional[str] = Field(None, max_length=255)
     co_organizer: Optional[str] = Field(None, max_length=255)
     description: Optional[str] = None

@@ -129,7 +129,7 @@ import { Trophy, Search, Refresh, OfficeBuilding, Location, View, Link } from '@
 import { getCompetitionList, getCompetitionDetail, type CompetitionListItem, type CompetitionDetail } from '@/api/competition'
 
 const typeMap: Record<number, string> = { 1: '创新训练类', 2: '创业实践类', 3: '学科竞赛类', 4: '综合类' }
-const levelMap: Record<number, string> = { 1: '校级', 2: '省级', 3: '国家级', 4: '国际级' }
+const levelMap: Record<number, string> = { 1: '校级', 2: '省级', 3: '国家级' }
 
 const loading = ref(false)
 const list = ref<CompetitionListItem[]>([])
@@ -243,7 +243,6 @@ onMounted(loadData)
 .level-1 { background: #909399; }  /* 校级 灰色 */
 .level-2 { background: #409eff; }  /* 省级 蓝色 */
 .level-3 { background: #f56c6c; }  /* 国家级 红色 */
-.level-4 { background: #e6a23c; }  /* 国际级 橙色 */
 .card-body { padding: 14px; }
 .card-title { margin: 0 0 8px; font-size: 16px; color: #303133; }
 .session-badge {

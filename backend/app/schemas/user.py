@@ -167,6 +167,7 @@ class UserInfo(BaseModel):
     college_id: Optional[int]
     college_name: Optional[str] = None  # 关联查询后赋值
     grade: Optional[str] = None  # 年级（仅学生有值，如 2023）
+    major: Optional[str] = None  # 专业（仅学生有值）
     school_name: str = ""  # 学校名称（系统管理员无学院时显示）
     avatar: Optional[str]
     status: int
@@ -195,6 +196,7 @@ class UserSafeListItem(BaseModel):
     college_id: Optional[int]
     college_name: Optional[str] = None
     grade: Optional[str] = None  # 年级（选团队成员时用于自动填充）
+    major: Optional[str] = None  # 专业（选团队成员时用于自动填充）
     avatar: Optional[str]
 
 

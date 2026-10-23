@@ -315,7 +315,7 @@ import {
 } from '@/api/competition'
 
 const typeMap: Record<number, string> = { 1: '创新训练类', 2: '创业实践类', 3: '学科竞赛类', 4: '综合类' }
-const levelMap: Record<number, string> = { 1: '校级', 2: '省级', 3: '国家级', 4: '国际级' }
+const levelMap: Record<number, string> = { 1: '校级', 2: '省级', 3: '国家级' }
 const statusMap: Record<number, string> = { 0: '草稿', 1: '报名中', 2: '进行中', 3: '已结束', 4: '已取消' }
 
 const loading = ref(false)

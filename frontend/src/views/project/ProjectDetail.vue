@@ -47,9 +47,14 @@
           <span class="abstract-indent">{{ project.project_summary || '暂无摘要' }}</span>
         </div>
         <div class="abstract-keywords">
-          <b>创新点：</b>{{ project.innovation_points || '暂无' }}
-          <span class="kw-divider">　</span>
-          <b>预期成果：</b>{{ project.expected_results || '暂无' }}
+          <div class="kw-row">
+            <b>创新点：</b>
+            <RichText class="kw-text" :content="project.innovation_points || '暂无'" />
+          </div>
+          <div class="kw-row">
+            <b>预期成果：</b>
+            <RichText class="kw-text" :content="project.expected_results || '暂无'" />
+          </div>
         </div>
       </div>
 
@@ -297,6 +302,7 @@ import { ArrowLeft, Document, Collection, Medal, Trophy, Calendar, Wallet } from
 import StatusTag from '@/components/StatusTag.vue'
 import ProjectTimeline from '@/components/ProjectTimeline.vue'
 import ProjectAttachmentList from '@/components/ProjectAttachmentList.vue'
+import RichText from '@/components/RichText.vue'
 import ReviewActionPanel from '@/components/ReviewActionPanel.vue'
 import { useProcessStore } from '@/store/process'
 import { useUserStore } from '@/store/user'
@@ -715,8 +721,17 @@ watch(() => props.projectId, (newId) => {
 .abstract-keywords b {
   color: #333;
 }
-.kw-divider {
-  margin: 0 12px;
+.kw-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+}
+.kw-row + .kw-row {
+  margin-top: 6px;
+}
+.kw-text {
+  flex: 1;
+  min-width: 0;
 }
 
 /* 论文章节 */

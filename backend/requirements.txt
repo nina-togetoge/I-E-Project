@@ -14,3 +14,4 @@ openpyxl==3.1.5
 email-validator==2.2.0
 aiofiles==24.1.0
 APScheduler==3.10.4
+fpdf2==2.8.9

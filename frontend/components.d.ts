@@ -86,6 +86,7 @@ declare module 'vue' {
     ReviewActionPanel: typeof import('./src/components/ReviewActionPanel.vue')['default']
     ReviewTemplatePicker: typeof import('./src/components/ReviewTemplatePicker.vue')['default']
     RichEditor: typeof import('./src/components/RichEditor.vue')['default']
+    RichText: typeof import('./src/components/RichText.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     StagePageShell: typeof import('./src/components/StagePageShell.vue')['default']

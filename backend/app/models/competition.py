@@ -20,7 +20,7 @@ class Competition(BaseModel):
     session: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, comment="届次(如 2026届)")
     # 比赛类型: 1-创新训练类 2-创业实践类 3-学科竞赛类 4-综合类
     competition_type: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, comment="比赛类型")
-    # 级别: 1-校级 2-省级 3-国家级 4-国际级
+    # 级别: 1-校级 2-省级 3-国家级
     level: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, comment="比赛级别")
     organizer: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="主办方")
     co_organizer: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="承办方")

@@ -1,6 +1,6 @@
 <template>
   <div class="rich-editor" :style="{ width: width }">
-    <div class="editor-toolbar">
+    <div class="editor-toolbar" @mousedown.prevent>
       <el-button-group>
         <el-button
           size="small"
@@ -63,8 +63,7 @@
 
       <el-divider direction="vertical" />
 
-      <el-button size="small" @click="insertLink" title="插入链接">🔗</el-button>
-      <el-button size="small" @click="insertImage" title="插入图片">🖼️</el-button>
+      <el-button size="small" @click="insertImage" title="上传并插入图片">🖼️</el-button>
       <el-button size="small" @click="exec('removeFormat')" title="清除格式">✕ 格式</el-button>
     </div>
 
@@ -84,6 +83,8 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUpdate, watch, nextTick } from 'vue'
+import { ElMessage } from 'element-plus'
+import { uploadFiles } from '@/api/common'
 
 const props = withDefaults(
   defineProps<{
@@ -131,40 +132,55 @@ function restoreSelection() {
 }
 
 function exec(cmd: string, arg?: string) {
-  editorRef.value?.focus()
-  restoreSelection()
+  const editor = editorRef.value
+  editor?.focus()
+  // 工具栏已阻止 mousedown 抢焦点，编辑区内的选区通常仍有效；
+  // 只有在选区丢失时才回退到上次保存的位置，避免用过期的 Range 覆盖当前选区
+  const sel = window.getSelection()
+  const hasEditorSelection = !!(sel && sel.rangeCount > 0 && editor && editor.contains(sel.anchorNode))
+  if (!hasEditorSelection) restoreSelection()
   document.execCommand(cmd, false, arg)
   saveSelection()
   handleInput()
   updateActiveFormats()
 }
 
-async function insertLink() {
-  const { value: url } = await (window as any).ElMessageBox?.prompt?.({
-    title: '插入链接',
-    message: '请输入链接URL：',
-    inputPattern: /^https?:\/\/.+/,
-    inputErrorMessage: '请输入以 http:// 或 https:// 开头的有效链接',
-  }) ?? (() => {
-    const input = prompt('请输入链接URL（以 http:// 或 https:// 开头）：')
-    return { value: input }
-  })()
-  if (url) {
-    exec('createLink', url)
+/** 插入图片：选择本地图片上传后，回填服务端图片直链 */
+function insertImage() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = 'image/png,image/jpeg'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) return
+    if (file.size > 5 * 1024 * 1024) {
+      ElMessage.warning('图片大小不能超过 5MB')
+      return
+    }
+    saveSelection()
+    const loading = ElMessage({ message: '图片上传中…', duration: 0, type: 'info' })
+    try {
+      const res: any = await uploadFiles(file, 'editor', 0)
+      const url = res?.data?.image_url
+      if (!url) throw new Error('图片地址为空')
+      editorRef.value?.focus()
+      restoreSelection()
+      const alt = file.name.replace(/["<>]/g, '')
+      document.execCommand(
+        'insertHTML', false,
+        `<img src="${url}" alt="${alt}" style="max-width:100%;">`
+      )
+      saveSelection()
+      handleInput()
+      updateActiveFormats()
+      ElMessage.success('图片已插入')
+    } catch (_) {
+      ElMessage.error('图片上传失败，请重试')
+    } finally {
+      loading.close()
+    }
   }
-}
-
-async function insertImage() {
-  const { value: url } = await (window as any).ElMessageBox?.prompt?.({
-    title: '插入图片',
-    message: '请输入图片URL：',
-  }) ?? (() => {
-    const input = prompt('请输入图片URL：')
-    return { value: input }
-  })()
-  if (url) {
-    exec('insertImage', url)
-  }
+  input.click()
 }
 
 function handleInput() {
@@ -185,6 +201,7 @@ function handlePaste(e: ClipboardEvent) {
 }
 
 function updateActiveFormats() {
+  saveSelection()
   try {
     activeFormats.value = {
       bold: document.queryCommandState('bold'),

@@ -286,4 +286,5 @@ onMounted(loadData)
 .content-html { color: #606266; line-height: 1.8; }
 .content-html :deep(p) { margin: 0 0 10px; }
 .content-html :deep(ul), .content-html :deep(ol) { padding-left: 20px; margin: 0 0 10px; }
+.content-html :deep(img) { max-width: 100%; height: auto; }
 </style>

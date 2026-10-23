@@ -244,7 +244,7 @@ class ProjAchievement(BaseModel):
     publish_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True, comment="发表/授权日期")
     publisher: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, comment="发表刊物/授权机构")
     achievement_no: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, comment="编号")
-    # 级别: 1-校级 2-省级 3-国家级 4-国际级
+    # 级别: 1-校级 2-省级 3-国家级
     level: Mapped[Optional[int]] = mapped_column(SmallInteger, nullable=True, comment="级别")
     award_level: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, comment="获奖等级")
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True, comment="成果简介")

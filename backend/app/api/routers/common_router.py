@@ -3,13 +3,18 @@
 """
 import os
 import uuid
+import zipfile
+import hashlib
+import hmac
 import mimetypes
 from datetime import datetime
+from html import escape as _html_escape
 from typing import Optional
 from urllib.parse import quote as _url_quote
+from xml.etree import ElementTree as ET
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -115,6 +120,21 @@ def _secure_filename(filename: str) -> str:
     if ext not in settings.ALLOWED_EXTENSIONS_LIST:
         raise ParamValidateException(message=f"不允许的文件类型，仅支持 {settings.ALLOWED_EXTENSIONS}")
     return f"{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex}{ext}"
+
+
+# 富文本内嵌图片允许的扩展名（仅图片，且不含 svg 以免脚本注入）
+_IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "bmp", "webp"}
+
+
+def _image_sig(att_id: int) -> str:
+    """为内嵌图片生成长期有效的签名。
+
+    富文本里的 <img> 无法携带 Authorization 头，因此图片直链改为签名访问：
+    签名由密钥派生、不随登录令牌过期，内容页可长期正常显示。
+    """
+    return hmac.new(
+        settings.JWT_SECRET_KEY.encode(), f"files-img:{att_id}".encode(), hashlib.sha256
+    ).hexdigest()[:32]
 
 
 def _resolve_biz_project(db: Session, biz_type: str, biz_id: int):
@@ -242,9 +262,13 @@ async def api_upload(
     db.refresh(att)
     with ctx:
         ctx.set_desc(f"上传附件[{file.filename}]到{biz_type}#{biz_id}")
+    image_url = None
+    if ext.lstrip(".").lower() in _IMAGE_EXTS:
+        image_url = f"/api/files/img/{att.id}?sig={_image_sig(att.id)}"
     return success(data={
         "id": att.id, "file_name": att.file_name, "file_size": att.file_size,
         "file_url": f"/api/files/download/{att.id}",
+        "image_url": image_url,
     })
 
 
@@ -278,6 +302,77 @@ def api_download(
     return FileResponse(path=att.file_path, media_type=mime, filename=att.file_name, headers=headers)
 
 
+_DOCX_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _docx_to_html(path: str, filename: str) -> Optional[str]:
+    """把 .docx 解析为可读 HTML（仅用标准库），供浏览器在线预览。
+
+    浏览器无法内联渲染 docx，直接返回文件会触发下载；这里提取段落与表格，
+    失败时返回 None，由调用方回退为原始文件响应。
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            xml_bytes = zf.read("word/document.xml")
+        body = ET.fromstring(xml_bytes).find(f"{_DOCX_NS}body")
+    except Exception:
+        return None
+    if body is None:
+        return None
+
+    blocks = []
+    for node in body:
+        if node.tag == f"{_DOCX_NS}p":
+            text = "".join(t.text or "" for t in node.iter(f"{_DOCX_NS}t"))
+            if not text.strip():
+                continue
+            style = ""
+            ppr = node.find(f"{_DOCX_NS}pPr")
+            if ppr is not None:
+                st = ppr.find(f"{_DOCX_NS}pStyle")
+                if st is not None:
+                    style = (st.get(f"{_DOCX_NS}val") or "").lower()
+            if style.startswith("heading") or style.startswith("标题"):
+                try:
+                    level = min(int(style.replace("heading", "")) + 1, 4)
+                except ValueError:
+                    level = 2
+                blocks.append(f"<h{level}>{_html_escape(text)}</h{level}>")
+            else:
+                blocks.append(f"<p>{_html_escape(text)}</p>")
+        elif node.tag == f"{_DOCX_NS}tbl":
+            rows = []
+            for tr in node.findall(f"{_DOCX_NS}tr"):
+                cells = []
+                for tc in tr.findall(f"{_DOCX_NS}tc"):
+                    cell_text = "".join(t.text or "" for t in tc.iter(f"{_DOCX_NS}t"))
+                    cells.append(f"<td>{_html_escape(cell_text)}</td>")
+                rows.append("<tr>" + "".join(cells) + "</tr>")
+            if rows:
+                blocks.append("<table>" + "".join(rows) + "</table>")
+
+    if not blocks:
+        return None
+    return (
+        "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        f"<title>{_html_escape(filename)}</title>"
+        "<style>"
+        "body{margin:0;padding:24px;background:#f5f7fa;"
+        "font-family:'Microsoft YaHei','PingFang SC',sans-serif;color:#303133;}"
+        ".page{max-width:880px;margin:0 auto;background:#fff;padding:36px 44px;"
+        "box-shadow:0 2px 12px rgba(0,0,0,.08);border-radius:6px;line-height:1.9;font-size:15px;}"
+        "h1,h2,h3,h4{line-height:1.5;margin:18px 0 10px;}"
+        "p{margin:6px 0;text-indent:2em;word-break:break-all;}"
+        "table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px;}"
+        "td{border:1px solid #dcdfe6;padding:6px 10px;text-indent:0;}"
+        ".notice{max-width:880px;margin:0 auto 12px;color:#909399;font-size:12px;}"
+        "</style></head><body>"
+        f"<div class=\"notice\">{_html_escape(filename)} · 在线预览</div>"
+        f"<div class=\"page\">{''.join(blocks)}</div>"
+        "</body></html>"
+    )
+
+
 @router_upload.get("/preview/{att_id}", summary="在线预览附件（inline）")
 def api_preview(
     att_id: int,
@@ -293,9 +388,45 @@ def api_preview(
     if not os.path.exists(att.file_path):
         raise ResourceNotFoundException(message="服务器上文件已丢失")
 
+    ext = (att.file_ext or os.path.splitext(att.file_name)[1].lstrip(".")).lower().lstrip(".")
+    # Word 文档浏览器无法内联渲染，转 HTML 预览；解析失败则回退原始文件
+    if ext == "docx":
+        html = _docx_to_html(att.file_path, att.file_name)
+        if html:
+            return HTMLResponse(content=html, headers={"Content-Disposition": "inline"})
+
     mime = att.file_type or mimetypes.guess_type(att.file_name)[0] or "application/octet-stream"
     # inline 模式：浏览器直接展示而非下载
     return FileResponse(path=att.file_path, media_type=mime, headers={"Content-Disposition": "inline"})
+
+
+@router_upload.get("/img/{att_id}", summary="富文本内嵌图片（签名直链，免登录）")
+def api_embed_image(
+    att_id: int,
+    sig: str = Query(..., description="图片签名"),
+    db: Session = Depends(get_db),
+):
+    """供富文本 <img src> 使用：<img> 无法携带令牌，改用长期有效的签名校验。
+
+    仅允许图片扩展名，避免把该接口变成任意附件下载通道。
+    """
+    att = db.query(SysAttachment).filter(
+        SysAttachment.id == att_id, SysAttachment.is_deleted == 0
+    ).first()
+    ext = (att.file_ext or "").lower().lstrip(".") if att else ""
+    if not att or ext not in _IMAGE_EXTS:
+        raise ResourceNotFoundException(message="图片不存在")
+    if not hmac.compare_digest(sig, _image_sig(att_id)):
+        raise PermissionDeniedException(message="图片链接无效")
+    if not os.path.exists(att.file_path):
+        raise ResourceNotFoundException(message="服务器上文件已丢失")
+
+    mime = att.file_type if (att.file_type or "").startswith("image/") \
+        else mimetypes.guess_type(att.file_name)[0] or "application/octet-stream"
+    return FileResponse(
+        path=att.file_path, media_type=mime,
+        headers={"Content-Disposition": "inline", "Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router_upload.get("/list/{biz_type}/{biz_id}", response_model=ResponseModel, summary="查询业务下附件列表")
