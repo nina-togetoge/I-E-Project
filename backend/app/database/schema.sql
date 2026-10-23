@@ -5950,3 +5950,66 @@ CREATE OR REPLACE VIEW `v_expert` AS
 SELECT id AS expert_id, username AS expert_no, real_name, password_hash AS password,
        title, direction, organization, phone, email
 FROM sys_user WHERE role = 3 AND is_deleted = 0;
+-- ============================================================
+-- 用户扩展字段种子数据（与角色视图配套）
+-- ============================================================
+UPDATE `sys_user` SET `gender` = CASE WHEN MOD(`id`, 2) = 0 THEN '男' ELSE '女' END
+WHERE `role` = 1 AND `gender` IS NULL;
+
+UPDATE `sys_user` u JOIN `sys_college` c ON u.`college_id` = c.`id`
+SET u.`major` = CASE c.`id`
+    WHEN 1 THEN ELT(MOD(u.`id`, 3) + 1, '计算机科学与技术', '数据科学与大数据技术', '人工智能')
+    WHEN 2 THEN ELT(MOD(u.`id`, 3) + 1, '软件工程', '网络工程', '信息安全')
+    WHEN 3 THEN ELT(MOD(u.`id`, 3) + 1, '电子信息工程', '通信工程', '自动化')
+    WHEN 4 THEN ELT(MOD(u.`id`, 3) + 1, '机械设计制造及其自动化', '工业设计', '机器人工程')
+    WHEN 5 THEN ELT(MOD(u.`id`, 3) + 1, '工商管理', '市场营销', '会计学')
+    WHEN 6 THEN ELT(MOD(u.`id`, 3) + 1, '视觉传达设计', '环境设计', '数字媒体艺术')
+    ELSE '工商管理' END
+WHERE u.`role` = 1 AND u.`major` IS NULL;
+
+UPDATE `sys_user` SET `title` = CASE
+    WHEN MOD(`id`, 10) IN (0, 1) THEN '教授'
+    WHEN MOD(`id`, 10) BETWEEN 2 AND 5 THEN '副教授'
+    WHEN MOD(`id`, 10) BETWEEN 6 AND 8 THEN '讲师'
+    ELSE '助教' END
+WHERE `role` = 2 AND `title` IS NULL;
+
+UPDATE `sys_user` u JOIN `sys_college` c ON u.`college_id` = c.`id`
+SET u.`direction` = CASE c.`id`
+    WHEN 1 THEN ELT(MOD(u.`id`, 3) + 1, '人工智能', '数据挖掘', '计算机视觉')
+    WHEN 2 THEN ELT(MOD(u.`id`, 3) + 1, '软件工程', '分布式系统', '云计算')
+    WHEN 3 THEN ELT(MOD(u.`id`, 3) + 1, '信号与信息处理', '通信工程', '嵌入式系统')
+    WHEN 4 THEN ELT(MOD(u.`id`, 3) + 1, '机械设计及理论', '智能制造', '机器人技术')
+    WHEN 5 THEN ELT(MOD(u.`id`, 3) + 1, '创新创业管理', '企业管理', '技术经济')
+    WHEN 6 THEN ELT(MOD(u.`id`, 3) + 1, '视觉传达设计', '产品设计', '数字媒体艺术')
+    ELSE '创新创业管理' END
+WHERE u.`role` = 2 AND u.`direction` IS NULL;
+
+UPDATE `sys_user` SET `title` = CASE MOD(`id`, 4)
+    WHEN 0 THEN '研究员'
+    WHEN 1 THEN '教授'
+    WHEN 2 THEN '副教授'
+    ELSE '高级工程师' END
+WHERE `role` = 3 AND `title` IS NULL;
+
+UPDATE `sys_user` u LEFT JOIN `sys_college` c ON u.`college_id` = c.`id`
+SET u.`direction` = CASE c.`id`
+    WHEN 1 THEN ELT(MOD(u.`id`, 3) + 1, '人工智能', '数据挖掘', '计算机视觉')
+    WHEN 2 THEN ELT(MOD(u.`id`, 3) + 1, '软件工程', '分布式系统', '云计算')
+    WHEN 3 THEN ELT(MOD(u.`id`, 3) + 1, '信号与信息处理', '通信工程', '嵌入式系统')
+    WHEN 4 THEN ELT(MOD(u.`id`, 3) + 1, '机械设计及理论', '智能制造', '机器人技术')
+    WHEN 5 THEN ELT(MOD(u.`id`, 3) + 1, '创新创业管理', '企业管理', '技术经济')
+    WHEN 6 THEN ELT(MOD(u.`id`, 3) + 1, '视觉传达设计', '产品设计', '数字媒体艺术')
+    ELSE '创新创业管理' END
+WHERE u.`role` = 3 AND u.`direction` IS NULL;
+
+UPDATE `sys_user` u LEFT JOIN `sys_college` c ON u.`college_id` = c.`id`
+SET u.`organization` = CASE c.`id`
+    WHEN 1 THEN '北京航空航天大学'
+    WHEN 2 THEN '中国科学院软件研究所'
+    WHEN 3 THEN '中国电子科技集团公司'
+    WHEN 4 THEN '中国机械科学研究总院'
+    WHEN 5 THEN '北京理工大学管理与经济学院'
+    WHEN 6 THEN '中央美术学院设计学院'
+    ELSE '校内专家库' END
+WHERE u.`role` = 3 AND u.`organization` IS NULL;
