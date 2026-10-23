@@ -76,7 +76,7 @@
       @page-change="handlePageChange"
     >
       <template #operation_type="{ row }">
-        <el-tag :type="opTypeTag(row.operation_type)">{{ row.operation_type }}</el-tag>
+        <el-tag :type="opTypeTag(row.operation_type)">{{ opTypeLabel(row.operation_type) }}</el-tag>
       </template>
       <template #user_role="{ row }">
         <el-tag :type="roleTagType(row.user_role)">{{ roleLabel(row.user_role) }}</el-tag>
@@ -106,7 +106,11 @@ import { useDebounce } from '@/composables/useDebounce'
 
 const showAdvanced = ref(false)
 
-const moduleOptions = ['项目管理', '审核管理', '报销管理', '用户管理', '文件管理', '系统管理', '认证模块']
+const moduleOptions = [
+  '项目管理', '成果管理', '审核管理', '报销管理', '用户管理', '学院管理',
+  '大赛管理', '公告管理', '数据看板', '文件管理', '认证模块', '系统管理',
+  '数据导出', '站内通知', 'AI助手',
+]
 const operationTypeOptions: { value: string; label: string; tagType: string }[] = [
   { value: 'CREATE', label: '新增', tagType: 'success' },
   { value: 'UPDATE', label: '更新', tagType: 'warning' },
@@ -207,9 +211,21 @@ function isSuccess(code: number | null | undefined): boolean {
   return typeof code === 'number' && code >= 200 && code < 300
 }
 
+// 后端 operation_type 为大写枚举，页面统一展示中文
+const OP_TYPE_LABEL: Record<string, string> = {
+  QUERY: '查询', CREATE: '新增', UPDATE: '更新', DELETE: '删除',
+  LOGIN: '登录', EXPORT: '导出', IMPORT: '导入',
+}
+function opTypeLabel(type: string): string {
+  return OP_TYPE_LABEL[String(type || '').toUpperCase()] || type || '-'
+}
+
 function opTypeTag(type: string): string {
-  const map: Record<string, string> = { CREATE: 'success', UPDATE: 'warning', DELETE: 'danger', LOGIN: 'info', EXPORT: 'primary', IMPORT: '' }
-  return map[type] || 'info'
+  const map: Record<string, string> = {
+    QUERY: 'info', CREATE: 'success', UPDATE: 'warning', DELETE: 'danger',
+    LOGIN: 'info', EXPORT: 'primary', IMPORT: '',
+  }
+  return map[String(type || '').toUpperCase()] || 'info'
 }
 
 function roleLabel(role: number) {

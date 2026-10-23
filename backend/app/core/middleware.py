@@ -7,7 +7,8 @@ import time
 import json
 import logging
 from urllib.parse import unquote
-from typing import Optional, Callable, Dict, Any
+from typing import Callable, Dict, Any
+from jose import jwt
 from fastapi import Request, FastAPI
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.cors import CORSMiddleware
@@ -30,6 +31,90 @@ LOG_API_PREFIXES = ("/api/",)
 SKIP_LOG_PATHS = {"/api/health", "/docs", "/redoc", "/openapi.json", "/static/"}
 # 请求体过大时不记录原始body（防内存溢出）
 MAX_LOG_BODY_SIZE = 100 * 1024  # 100KB
+# 只记录写操作与导出请求：普通 GET 查询（列表刷新、轮询、页面加载）不入库，避免淹没真实操作
+MUTATING_METHODS = {"POST", "PUT", "DELETE", "PATCH"}
+
+# URL 模块段 → 页面可读模块名（与前端「操作日志」高级筛选保持一致）
+MODULE_NAME_MAP = {
+    "projects": "项目管理",
+    "achievements": "成果管理",
+    "reviews": "审核管理",
+    "midterm": "审核管理",
+    "changes": "审核管理",
+    "expenses": "报销管理",
+    "users": "用户管理",
+    "auth": "认证模块",
+    "colleges": "学院管理",
+    "logs": "系统管理",
+    "statistics": "数据看板",
+    "files": "文件管理",
+    "excel": "数据导出",
+    "announcements": "公告管理",
+    "competitions": "大赛管理",
+    "notifications": "站内通知",
+    "ai": "AI助手",
+    "common": "系统管理",
+}
+
+
+def _should_log_request(method: str, path: str) -> bool:
+    """写操作、登录/登出、导出才记录；GET 查询请求直接跳过"""
+    if not _path_should_log(path):
+        return False
+    return method.upper() in MUTATING_METHODS or "/export" in path
+
+
+def _infer_module_name(path: str) -> str:
+    """按 /api/{module}/... 的模块段映射为可读模块名"""
+    parts = [p for p in path.split("/") if p]
+    if len(parts) >= 2 and parts[0] == "api":
+        raw = parts[1]
+        return MODULE_NAME_MAP.get(raw, raw)
+    return "系统管理"
+
+
+def _infer_operation_type(method: str, path: str) -> str:
+    """操作类型统一为大写枚举，登录/导出单独识别"""
+    lower_path = path.lower()
+    if lower_path.endswith(("/login", "/logout", "/refresh")):
+        return "LOGIN"
+    if "/export" in lower_path:
+        return "EXPORT"
+    return {
+        "GET": "QUERY", "POST": "CREATE", "PUT": "UPDATE",
+        "DELETE": "DELETE", "PATCH": "UPDATE",
+    }.get(method.upper(), method.upper())
+
+
+# 请求参数中需要脱敏的字段（避免把密码/令牌写入审计日志）
+SENSITIVE_LOG_KEYS = {"password", "old_password", "new_password", "refresh_token", "access_token", "token"}
+
+
+def _mask_sensitive(value: Any) -> Any:
+    """递归脱敏请求参数中的密码、令牌等敏感字段"""
+    if isinstance(value, dict):
+        return {
+            k: "***" if str(k).lower() in SENSITIVE_LOG_KEYS else _mask_sensitive(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_sensitive(v) for v in value]
+    return value
+
+
+def _extract_token_payload(request: Request) -> Dict[str, Any]:
+    """从 Authorization / 下载类 token 中解析操作人信息（仅用于日志，不校验黑名单）"""
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if not token:
+        token = request.query_params.get("token") or request.cookies.get("access_token") or ""
+    if not token:
+        return {}
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+    except Exception:
+        return {}
+    return payload if payload.get("type") == "access" else {}
 
 
 def _extract_ip(request: Request) -> str:
@@ -116,22 +201,17 @@ def _collect_log_data(
         except Exception:
             params_dict["body_raw"] = f"[UNPARSED_BODY, len={len(request_body_bytes)}]"
     if params_dict:
+        params_dict = _mask_sensitive(params_dict)
         try:
             data["request_params"] = json.dumps(params_dict, ensure_ascii=False)[:5000]
         except Exception:
             data["request_params"] = "[UNSERIALIZABLE_PARAMS]"
 
     # 模块名 / 操作类型：根据URL路径推断
-    path_parts = [p for p in request.url.path.split("/") if p]
-    if len(path_parts) >= 3:
-        data["module_name"] = path_parts[2]  # /api/{module}/...
-    else:
-        data["module_name"] = "unknown"
-    method_map = {"GET": "query", "POST": "create", "PUT": "update",
-                  "DELETE": "delete", "PATCH": "patch"}
-    data["operation_type"] = method_map.get(request.method, request.method.lower())
+    data["module_name"] = _infer_module_name(request.url.path)
+    data["operation_type"] = _infer_operation_type(request.method, request.url.path)
 
-    # 操作人信息：从response自定义header中取（由路由层写入）
+    # 操作人信息：优先取路由层写入的响应头，缺失时从请求 token 中解析
     user_id_raw = response.headers.get("X-Log-User-Id", 0) or 0
     try:
         uid = int(user_id_raw)
@@ -146,6 +226,13 @@ def _collect_log_data(
             data["user_role"] = int(role_str)
         except (TypeError, ValueError):
             data["user_role"] = None
+    if not data.get("user_id"):
+        payload = _extract_token_payload(request)
+        if payload:
+            data["user_id"] = payload.get("uid")
+            data["username"] = payload.get("sub")
+            data["real_name"] = payload.get("name")
+            data["user_role"] = payload.get("role")
     data["operation_desc"] = unquote(response.headers.get("X-Log-Desc", "") or "")[:500] or None
     return data
 
@@ -153,13 +240,14 @@ def _collect_log_data(
 class OperationLogMiddleware(BaseHTTPMiddleware):
     """
     操作日志审计中间件
-    自动记录所有API请求的操作人、角色、IP、方法、URL、参数、耗时等
+    记录写操作 / 登录 / 导出的操作人、角色、IP、方法、URL、参数、耗时等；
+    普通 GET 查询不入库，避免列表刷新与轮询淹没真实操作。
     [P1-3] 日志写入改为异步后台任务，绝不阻塞响应返回 / 事件循环
     """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # 跳过不需要记录的请求
-        if not _path_should_log(request.url.path):
+        # 跳过不需要记录的请求（普通 GET 查询也跳过，只留写操作/登录/导出）
+        if not _should_log_request(request.method, request.url.path):
             return await call_next(request)
 
         start_time = time.time()
