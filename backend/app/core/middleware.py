@@ -252,17 +252,18 @@ class OperationLogMiddleware(BaseHTTPMiddleware):
 
         start_time = time.time()
         # ========== 读取请求体（注意：body流只能读一次，需要重新包装）==========
-        request_body_bytes = b""
+        # 请求体只截断“日志记录”用的副本，转发给下游的必须是完整内容，
+        # 否则 >100KB 的上传/大 JSON 会被清空，导致 422 / 文件丢失。
+        body = b""
         try:
             body = await request.body()
-            if len(body) <= MAX_LOG_BODY_SIZE:
-                request_body_bytes = body
         except Exception:
             pass
+        request_body_bytes = body[:MAX_LOG_BODY_SIZE]
 
-        # 重新构造Request，让后续路由仍可读取body
+        # 重新构造Request，让后续路由仍可读取完整body
         async def receive():
-            return {"type": "http.request", "body": request_body_bytes, "more_body": False}
+            return {"type": "http.request", "body": body, "more_body": False}
         new_request = Request(request.scope, receive=receive)
 
         # 执行请求

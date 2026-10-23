@@ -1,6 +1,6 @@
 <!--
   登录页
-  支持账号密码登录、记住密码、验证码
+  支持账号密码登录、记住账号、验证码
 -->
 <template>
   <div class="login-container">
@@ -67,7 +67,7 @@
         </el-form-item>
 
         <el-form-item>
-          <el-checkbox v-model="rememberPassword" class="remember-check">记住密码</el-checkbox>
+          <el-checkbox v-model="rememberPassword" class="remember-check">记住账号</el-checkbox>
         </el-form-item>
 
         <el-form-item>
@@ -158,13 +158,13 @@ async function handleLogin() {
     try {
       await userStore.login(loginForm.username, loginForm.password)
 
+      // 只记住账号，不落盘密码（btoa 可逆，等同明文，存在被窃取风险）
       if (rememberPassword.value) {
         localStorage.setItem('saved_username', loginForm.username)
-        localStorage.setItem('saved_password', btoa(loginForm.password))
       } else {
         localStorage.removeItem('saved_username')
-        localStorage.removeItem('saved_password')
       }
+      localStorage.removeItem('saved_password')
 
       ElMessage.success('登录成功')
       const redirect = (route.query.redirect as string) || '/'
@@ -180,12 +180,12 @@ async function handleLogin() {
 onMounted(() => {
   generateCaptcha()
   const savedUsername = localStorage.getItem('saved_username')
-  const savedPassword = localStorage.getItem('saved_password')
-  if (savedUsername && savedPassword) {
+  if (savedUsername) {
     loginForm.username = savedUsername
-    loginForm.password = atob(savedPassword)
     rememberPassword.value = true
   }
+  // 清理旧版本遗留的可逆密码缓存
+  localStorage.removeItem('saved_password')
   // 启动背景幻灯片，每 3 秒切换一次
   slideTimer = setInterval(() => {
     currentSlide.value = (currentSlide.value + 1) % backgrounds.length

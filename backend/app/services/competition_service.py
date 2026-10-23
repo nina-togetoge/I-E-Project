@@ -10,6 +10,7 @@ from sqlalchemy import or_, func
 
 from app.models import (
     Competition, SysUser, SysCollege, ProjProject, ProjReview, ProjAchievement,
+    ProjCertificate, SysAttachment,
 )
 from app.schemas.competition import (
     CompetitionCreate, CompetitionUpdate,
@@ -194,12 +195,28 @@ class CompetitionService:
         # 幂等刷新：先软删"本比赛关联项目"此前自动生成的获奖成果，再按最新排名重建
         proj_ids = [p.id for p in projects]
         if proj_ids:
-            db.query(ProjAchievement).filter(
+            old_ach_ids = [row[0] for row in db.query(ProjAchievement.id).filter(
                 ProjAchievement.project_id.in_(proj_ids),
                 ProjAchievement.achievement_type == 4,
                 ProjAchievement.summary.like(f"{AUTO_AWARD_SUMMARY_PREFIX}%"),
                 ProjAchievement.is_deleted == 0,
-            ).update({ProjAchievement.is_deleted: 1}, synchronize_session=False)
+            ).all()]
+            if old_ach_ids:
+                # 旧证书/附件一并软删，避免刷新名次后「我的证书」里残留重复证书
+                old_certs = db.query(ProjCertificate).filter(
+                    ProjCertificate.achievement_id.in_(old_ach_ids),
+                    ProjCertificate.is_deleted == 0,
+                ).all()
+                old_att_ids = [c.attachment_id for c in old_certs if c.attachment_id]
+                for c in old_certs:
+                    c.is_deleted = 1
+                if old_att_ids:
+                    db.query(SysAttachment).filter(
+                        SysAttachment.id.in_(old_att_ids)
+                    ).update({SysAttachment.is_deleted: 1}, synchronize_session=False)
+                db.query(ProjAchievement).filter(
+                    ProjAchievement.id.in_(old_ach_ids),
+                ).update({ProjAchievement.is_deleted: 1}, synchronize_session=False)
 
         # 按负责人学院分组（跨院组队归项目负责人学院）
         groups: dict = {}

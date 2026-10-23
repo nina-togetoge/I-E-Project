@@ -264,14 +264,22 @@ const filterSummary = computed(() => {
 async function loadData() {
   loading.value = true
   try {
-    const params: any = { page: 1, page_size: 500, status: 9, keyword: searchForm.keyword }
+    // 后端单页上限 200，归档列表需在前端做筛选/排序，故循环拉取全部页码
+    const params: any = { page_size: 200, status: 9, keyword: searchForm.keyword }
     if (searchForm.project_type != null) params.project_type = searchForm.project_type
     if (searchForm.project_level != null) params.project_level = searchForm.project_level
     if (searchForm.year != null) params.year = searchForm.year
-    const res = await getProjectList(params)
-    rawData.value = res.data.items || []
+    const all: any[] = []
+    for (let p = 1; p <= 50; p++) {
+      const res = await getProjectList({ ...params, page: p })
+      const items: any[] = res.data.items || []
+      all.push(...items)
+      const totalCount = Number(res.data.total || 0)
+      if (all.length >= totalCount || items.length < params.page_size) break
+    }
+    rawData.value = all
     // 一次取回后在前端本地分页，故总数以实际取回的条数为准
-    total.value = rawData.value.length
+    total.value = all.length
   } finally {
     loading.value = false
   }
@@ -291,6 +299,9 @@ function handleReset() {
   searchForm.has_award = undefined
   searchForm.budget_range = [0, 10]
   searchForm.sort_by = undefined
+  page.value = 1
+  searched.value = false
+  loadData()
 }
 
 function handlePageChange(p: number, ps: number) {

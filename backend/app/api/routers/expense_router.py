@@ -39,6 +39,7 @@ def api_expense_list(
 ):
     """POST方式列表查询，支持筛选"""
     applicant_id = data.applicant_id
+    project_id = data.project_id
     status = data.status
     keyword = data.keyword
 
@@ -56,6 +57,7 @@ def api_expense_list(
     items, total = ExpenseService.paginate(
         db, pager.offset, pager.limit,
         applicant_id=applicant_id,
+        project_id=project_id,
         status=status,
         keyword=keyword,
         college_ids=college_ids,

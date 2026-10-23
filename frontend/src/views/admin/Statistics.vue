@@ -403,6 +403,13 @@ const categoryOption = computed((): EChartsOption => ({
   }],
 }))
 
+/** 经费使用率 = 已使用经费 / 经费总额（原实现误用了立项率） */
+const budgetUsageRate = computed(() => {
+  const total = Number(stats.value.total_budget || 0)
+  if (total <= 0) return 0
+  return Math.round((Number(stats.value.total_used || 0) / total) * 100)
+})
+
 const budgetOption = computed((): EChartsOption => ({
   series: [{
     type: 'gauge',
@@ -420,7 +427,7 @@ const budgetOption = computed((): EChartsOption => ({
     anchor: { show: true, itemStyle: { color: '#22d3ee' } },
     detail: { valueAnimation: true, formatter: '{value}%', color: TEXT_MAIN, fontSize: 28, offsetCenter: [0, '70%'] },
     title: { show: false },
-    data: [{ value: Math.round(stats.value.approval_rate || 0) }],
+    data: [{ value: budgetUsageRate.value }],
   }],
 }))
 

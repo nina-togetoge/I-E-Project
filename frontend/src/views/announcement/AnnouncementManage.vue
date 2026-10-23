@@ -143,7 +143,7 @@
         </el-descriptions>
         <div class="section">
           <h4>公告内容</h4>
-          <div class="content-html" v-html="detail.content"></div>
+          <RichText class="content-html" :content="detail.content" />
         </div>
       </div>
     </el-drawer>
@@ -155,6 +155,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Refresh, Plus } from '@element-plus/icons-vue'
 import RichEditor from '@/components/RichEditor.vue'
+import RichText from '@/components/RichText.vue'
 import {
   getAnnouncementList, getAnnouncementDetail, createAnnouncement, updateAnnouncement, deleteAnnouncement,
   type AnnouncementListItem, type AnnouncementDetail, type AnnouncementForm,

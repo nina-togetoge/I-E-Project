@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from fpdf import FPDF
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -293,14 +294,30 @@ class CertificateService:
     def paginate_mine(
         db: Session, user_id: int, page: int, page_size: int
     ) -> Tuple[List[CertificateItem], int]:
-        """我的证书（个人证书；按发证日期倒序）"""
+        """我的证书：本人个人证书 + 本人参与项目的团队证书（按发证日期倒序）"""
+        # 本人负责或参与的项目（团队证书 user_id 为空，需要按项目归属发放给全体成员）
+        my_project_ids = db.query(ProjProject.id).filter(
+            ProjProject.leader_id == user_id,
+            ProjProject.is_deleted == 0,
+        ).union(
+            db.query(ProjTeamMember.project_id).filter(
+                ProjTeamMember.student_id == user_id,
+                ProjTeamMember.is_deleted == 0,
+            )
+        )
         q = (
             db.query(ProjCertificate, SysAttachment)
             .join(SysAttachment, SysAttachment.id == ProjCertificate.attachment_id)
             .filter(
-                ProjCertificate.user_id == user_id,
                 ProjCertificate.is_deleted == 0,
                 SysAttachment.is_deleted == 0,
+                or_(
+                    ProjCertificate.user_id == user_id,
+                    and_(
+                        ProjCertificate.cert_type == CERT_TYPE_TEAM,
+                        ProjCertificate.project_id.in_(my_project_ids),
+                    ),
+                ),
             )
         )
         total = q.count()

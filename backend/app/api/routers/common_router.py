@@ -15,6 +15,7 @@ from xml.etree import ElementTree as ET
 
 from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse, JSONResponse, HTMLResponse
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -287,8 +288,11 @@ def api_download(
     if not os.path.exists(att.file_path):
         raise ResourceNotFoundException(message="服务器上文件已丢失")
 
-    # 下载计数+1
-    att.download_count = (att.download_count or 0) + 1
+    # 下载计数+1（原子自增，避免并发下载相互覆盖计数）
+    db.query(SysAttachment).filter(SysAttachment.id == att.id).update(
+        {SysAttachment.download_count: func.coalesce(SysAttachment.download_count, 0) + 1},
+        synchronize_session=False,
+    )
     db.commit()
 
     # 解析MIME，PDF/图片等浏览器支持预览

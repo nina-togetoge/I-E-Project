@@ -84,16 +84,26 @@ def is_college_admin(user) -> bool:
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def _truncate_bcrypt_password(plain_password: str) -> str:
+    """bcrypt 仅使用前 72 字节；哈希与校验必须采用完全一致的截断方式。
+
+    直接 decode 会在多字节字符被截半时丢字节，导致“注册时能登录、校验时却失败”。
+    这里按字节截断后再以替换方式解码，保证两次调用得到同一字符串。
+    """
+    raw = plain_password.encode("utf-8")
+    if len(raw) <= 72:
+        return plain_password
+    return raw[:72].decode("utf-8", errors="replace")
+
+
 def hash_password(plain_password: str) -> str:
     """明文密码 -> bcrypt哈希"""
-    return pwd_context.hash(plain_password)
+    return pwd_context.hash(_truncate_bcrypt_password(plain_password))
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
     """校验明文密码与哈希是否匹配"""
-    # bcrypt 限制密码最大 72 字节，超出部分截断处理
-    if len(plain_password.encode('utf-8')) > 72:
-        plain_password = plain_password.encode('utf-8')[:72].decode('utf-8', errors='ignore')
+    plain_password = _truncate_bcrypt_password(plain_password)
     try:
         return pwd_context.verify(plain_password, password_hash)
     except ValueError:

@@ -58,10 +58,13 @@ class ExpenseService:
         status: Optional[int] = None,
         keyword: Optional[str] = None,
         college_ids: Optional[list] = None,
+        project_id: Optional[int] = None,
     ) -> Tuple[list, int]:
         q = db.query(ProjExpense).filter(ProjExpense.is_deleted == 0)
         if applicant_id:
             q = q.filter(ProjExpense.applicant_id == applicant_id)
+        if project_id:
+            q = q.filter(ProjExpense.project_id == project_id)
         if status is not None:
             q = q.filter(ProjExpense.status == status)
         # [权限] 按学院范围过滤：join Project 取 college_id

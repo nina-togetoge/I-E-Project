@@ -361,6 +361,7 @@ class ExpenseReviewRequest(BaseModel):
 class ExpenseQueryRequest(BaseModel):
     """[P1-5] 经费列表查询请求（Pydantic校验，替代裸dict）"""
     applicant_id: Optional[int] = Field(default=None, ge=1, description="申请人ID")
+    project_id: Optional[int] = Field(default=None, ge=1, description="项目ID（用于按项目核算预算余额）")
     status: Optional[int] = Field(default=None, ge=1, le=7, description="报销状态 1-7")
     keyword: Optional[str] = Field(default=None, max_length=100, description="关键词(项目名称/单号/说明)")
 
