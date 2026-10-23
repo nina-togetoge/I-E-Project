@@ -17,7 +17,10 @@ from app.schemas.review import (
     REVIEW_STAGE_TEACHER, REVIEW_STAGE_COLLEGE, REVIEW_STAGE_FINAL,
     REVIEW_RESULT_PASS, REVIEW_RESULT_REJECT,
 )
-from app.schemas.project import ExpenseCreate, EXPENSE_STATUS_PENDING_ADVISOR, ProjectUpdate
+from app.schemas.project import (
+    ExpenseCreate, EXPENSE_STATUS_PENDING_ADVISOR, ProjectUpdate,
+    ProjectCreate, TeamMemberCreate, BudgetItemCreate,
+)
 from app.services.project_service import ProjectService
 from app.services.review_service import ReviewService
 from app.services.expense_service import ExpenseService
@@ -544,3 +547,106 @@ def test_operation_log_college_scope(seed, db):
 
     all_items, _ = OperationLogService.paginate(db, pager, OperationLogQueryParams(), super_admin)
     assert {"c1操作", "c2操作"}.issubset({i.operation_desc for i in all_items})
+
+
+# ====================================================================
+# 14. 同一比赛的申报名额限制
+#     负责人仅可申报 1 个有效项目；每名学生（含成员）仅可参与 1 个项目
+# ====================================================================
+def _competition_payload(college, leader, teacher, comp, members=None):
+    return ProjectCreate(
+        project_name="重复申报测试项目",
+        project_type=1,
+        project_level=1,
+        college_id=college.id,
+        leader_id=leader.id,
+        teacher_id=teacher.id,
+        competition_id=comp.id,
+        team_members=[
+            TeamMemberCreate(student_id=m.id, student_name=m.real_name, student_no=m.username)
+            for m in (members or [])
+        ],
+        budgets=[BudgetItemCreate(budget_item="设备费", budget_amount=Decimal("1000.00"))],
+    )
+
+
+def test_same_competition_leader_cannot_create_second_project(seed, db):
+    """同一比赛下同一负责人只能有 1 个有效项目。"""
+    college = seed.college()
+    leader = seed.user(1, college.id)
+    teacher = seed.user(2, college.id)
+    comp = seed.competition()
+    seed.project(college.id, leader.id, teacher_id=teacher.id, status=6,
+                 competition_id=comp.id)
+
+    with pytest.raises(ParamValidateException) as ei:
+        ProjectService.create(
+            db, _competition_payload(college, leader, teacher, comp,
+                                     [seed.user(1, college.id)]),
+            leader, as_draft=False,
+        )
+    assert ei.value.code == 400
+    assert "同一比赛每人仅可申报 1 个有效项目" in ei.value.message
+
+
+def test_same_competition_member_cannot_join_second_project(seed, db):
+    """同一比赛下同一学生作为团队成员也只能参与 1 个项目。"""
+    college = seed.college()
+    leader_a = seed.user(1, college.id)
+    leader_b = seed.user(1, college.id)
+    member = seed.user(1, college.id)
+    teacher = seed.user(2, college.id)
+    comp = seed.competition()
+    p1 = seed.project(college.id, leader_a.id, teacher_id=teacher.id, status=6,
+                      competition_id=comp.id)
+    seed.team_member(p1.id, member)
+
+    with pytest.raises(ParamValidateException) as ei:
+        ProjectService.create(
+            db, _competition_payload(college, leader_b, teacher, comp, [member]),
+            leader_b, as_draft=False,
+        )
+    assert ei.value.code == 400
+    assert member.real_name in ei.value.message
+    assert "同一比赛每名学生仅可参与 1 个项目" in ei.value.message
+
+
+def test_draft_and_rejected_do_not_occupy_competition_slot(seed, db):
+    """草稿/已驳回不占名额，可直接正式提交新项目。"""
+    college = seed.college()
+    leader = seed.user(1, college.id)
+    teacher = seed.user(2, college.id)
+    comp = seed.competition()
+    seed.project(college.id, leader.id, teacher_id=teacher.id, status=0,
+                 competition_id=comp.id)
+    seed.project(college.id, leader.id, teacher_id=teacher.id, status=10,
+                 competition_id=comp.id)
+
+    res = ProjectService.create(
+        db, _competition_payload(college, leader, teacher, comp,
+                                 [seed.user(1, college.id)]),
+        leader, as_draft=False,
+    )
+    assert res.id
+
+
+def test_submit_rechecks_competition_entry(seed, db):
+    """草稿提交时重新校验：团队成员已在同比赛其他有效项目中则拦截。"""
+    college = seed.college()
+    leader = seed.user(1, college.id)
+    leader_other = seed.user(1, college.id)
+    member = seed.user(1, college.id)
+    teacher = seed.user(2, college.id)
+    comp = seed.competition()
+    valid = seed.project(college.id, leader_other.id, teacher_id=teacher.id, status=6,
+                         competition_id=comp.id)
+    seed.team_member(valid.id, member)
+    draft = seed.project(college.id, leader.id, teacher_id=teacher.id, status=0,
+                         competition_id=comp.id)
+    seed.team_member(draft.id, member)
+    seed.budget(draft.id)
+
+    with pytest.raises(ParamValidateException) as ei:
+        ProjectService.submit(db, draft.id, leader)
+    assert ei.value.code == 400
+    assert "同一比赛每名学生仅可参与 1 个项目" in ei.value.message

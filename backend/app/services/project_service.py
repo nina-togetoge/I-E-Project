@@ -23,7 +23,7 @@ from app.schemas.review import (
     REVIEW_STAGE_FINAL, REVIEW_RESULT_REJECT, REVIEW_RESULT_MODIFY,
 )
 from app.models import (
-    ProjProject, SysUser, ProjAchievement, ProjAchievementReview, ProjBudget,
+    ProjProject, ProjTeamMember, SysUser, ProjAchievement, ProjAchievementReview, ProjBudget,
     ProjReview, ProjExpense, ProjChangeRequest, Competition,
 )
 from app.schemas.project import (
@@ -53,6 +53,11 @@ class ProjectService:
     CHANGE_WINDOW_STATUSES = {
         PROJECT_STATUS_PENDING_UNIVERSITY, PROJECT_STATUS_PENDING_EXPERT,
     }
+
+    # 不占用比赛申报名额的状态：草稿 / 已驳回 / 已撤销
+    NON_OCCUPYING_STATUSES = (
+        PROJECT_STATUS_DRAFT, PROJECT_STATUS_REJECTED, PROJECT_STATUS_CANCELLED,
+    )
 
     # ================= 流程截止日（截止日驱动锁定） =================
     @staticmethod
@@ -345,6 +350,66 @@ class ProjectService:
             raise ParamValidateException(message="所选比赛不存在或已被删除，请重新选择")
         if comp.status not in (1, 2):
             raise ParamValidateException(message="所选比赛已结束或未开放报名，请重新选择")
+
+    @staticmethod
+    def _assert_competition_entry_unique(
+        db: Session,
+        competition_id: Optional[int],
+        leader_id: int,
+        member_ids: Optional[List[int]] = None,
+        exclude_project_id: Optional[int] = None,
+    ) -> None:
+        """同一比赛的申报名额校验：
+        - 每名负责人仅可申报 1 个有效项目；
+        - 每名学生（含团队成员）仅可参与 1 个项目；
+        - 草稿/已驳回/已撤销不占用名额。"""
+        if not competition_id:
+            return
+        q = db.query(ProjProject).filter(
+            ProjProject.competition_id == competition_id,
+            ProjProject.is_deleted == 0,
+            ProjProject.status.notin_(ProjectService.NON_OCCUPYING_STATUSES),
+        )
+        if exclude_project_id:
+            q = q.filter(ProjProject.id != exclude_project_id)
+        occupied = q.all()
+        if not occupied:
+            return
+
+        # 学生ID -> (占用名额的项目名称, 是否项目负责人)
+        project_names = {p.id: p.project_name for p in occupied}
+        taken: Dict[int, Tuple[str, bool]] = {
+            p.leader_id: (p.project_name, True) for p in occupied
+        }
+        members = db.query(ProjTeamMember).filter(
+            ProjTeamMember.project_id.in_(list(project_names)),
+            ProjTeamMember.is_deleted == 0,
+        ).all()
+        for tm in members:
+            taken.setdefault(tm.student_id, (project_names.get(tm.project_id, ""), False))
+
+        if leader_id in taken:
+            name, as_leader = taken[leader_id]
+            if as_leader:
+                raise ParamValidateException(
+                    message=f"您已在本次比赛中申报项目「{name}」，"
+                            "同一比赛每人仅可申报 1 个有效项目（草稿/已驳回/已撤销不计）"
+                )
+            raise ParamValidateException(
+                message=f"您已在本次比赛中参与项目「{name}」，"
+                        "同一比赛每名学生仅可参与 1 个项目"
+            )
+
+        for mid in member_ids or []:
+            if mid not in taken:
+                continue
+            name, _ = taken[mid]
+            student = UserCRUD.get_by_id(db, mid)
+            student_name = student.real_name if student else str(mid)
+            raise ParamValidateException(
+                message=f"团队成员「{student_name}」已在本次比赛中参与项目「{name}」，"
+                        "同一比赛每名学生仅可参与 1 个项目"
+            )
 
     @staticmethod
     def _is_eliminated(db: Session, project: ProjProject) -> bool:
@@ -651,6 +716,9 @@ class ProjectService:
             if missing:
                 raise ParamValidateException(message="提交前请完善以下必填项：" + "、".join(missing))
             ProjectService._assert_competition_submittable(db, req.competition_id)
+            ProjectService._assert_competition_entry_unique(
+                db, req.competition_id, data["leader_id"], member_ids
+            )
 
         data["status"] = PROJECT_STATUS_DRAFT if as_draft else PROJECT_STATUS_PENDING_TEACHER
         if not as_draft:
@@ -762,6 +830,13 @@ class ProjectService:
         if missing:
             raise ParamValidateException(message="提交前请完善以下必填项：" + "、".join(missing))
         ProjectService._assert_competition_submittable(db, obj.competition_id)
+        member_ids = [tm.student_id for tm in db.query(ProjTeamMember).filter(
+            ProjTeamMember.project_id == obj.id,
+            ProjTeamMember.is_deleted == 0,
+        ).all()]
+        ProjectService._assert_competition_entry_unique(
+            db, obj.competition_id, obj.leader_id, member_ids, exclude_project_id=obj.id
+        )
 
         obj.submit_time = datetime.now()
         # 重提清除上一轮驳回原因，避免旧状态残留

@@ -16,8 +16,9 @@ from datetime import datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import BigInteger, Integer, create_engine
+from sqlalchemy import BigInteger, Integer, create_engine, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.schema import DefaultClause
 from fastapi.testclient import TestClient
 
 import app.models as M  # noqa: F401  触发所有 ORM 模型注册
@@ -37,6 +38,11 @@ for _table in Base.metadata.tables.values():
     for _col in _table.columns:
         if isinstance(_col.type, BigInteger):
             _col.type = _bigint_sqlite
+        # 字符串形式的 CURRENT_TIMESTAMP 在 SQLite 下会被当作字面量存储，改为 SQL 表达式
+        _sd = _col.server_default
+        if _sd is not None and isinstance(getattr(_sd, "arg", None), str) \
+                and _sd.arg.strip().upper() == "CURRENT_TIMESTAMP":
+            _col.server_default = DefaultClause(text("CURRENT_TIMESTAMP"))
 
 
 # ====================================================================
@@ -137,13 +143,22 @@ class Seeder:
         return u
 
     def project(self, college_id, leader_id, teacher_id=None, status=0, name=None,
-                budget="10000.00", used="0.00", project_no=None, start_date=None):
+                budget="10000.00", used="0.00", project_no=None, start_date=None,
+                competition_id=None):
         return self._add(M.ProjProject(
             project_name=name or self._name("项目"),
             project_type=1, project_level=1,
             college_id=college_id, leader_id=leader_id, teacher_id=teacher_id,
             status=status, budget_amount=Decimal(budget), used_amount=Decimal(used),
             project_no=project_no, submit_time=datetime.now(), start_date=start_date,
+            competition_id=competition_id,
+        ))
+
+    def team_member(self, project_id, student, role_in_team="成员"):
+        return self._add(M.ProjTeamMember(
+            project_id=project_id, student_id=student.id, student_name=student.real_name,
+            student_no=student.username, role_in_team=role_in_team,
+            join_time=datetime.now(),
         ))
 
     def assign_expert(self, project_id, expert_id, stage=3):
