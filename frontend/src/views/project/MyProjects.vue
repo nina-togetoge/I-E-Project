@@ -256,7 +256,7 @@ const competitionOptions = ref<any[]>([])
 const teacherOptions = ref<any[]>([])
 const teacherLoading = ref(false)
 
-async function loadEditForm(id: number) {
+async function loadEditForm(id: number): Promise<boolean> {
   editLoading.value = true
   try {
     const [detailRes, collegeRes, compRes] = await Promise.all([
@@ -292,8 +292,10 @@ async function loadEditForm(id: number) {
         }
       } catch { /* ignore */ }
     }
+    return true
   } catch {
     ElMessage.error('加载项目数据失败')
+    return false
   } finally {
     editLoading.value = false
   }
@@ -523,11 +525,13 @@ function handleAchievement(row: any) {
   router.push(`/projects/${row.id}/achievements`)
 }
 
-function handleEdit(row: any) {
+async function handleEdit(row: any) {
+  // 先拉取详情再打开弹窗，避免请求返回前用户对着旧数据点“确定”
   editingId.value = row.id
   newAttachments.value = []
-  editDialogVisible.value = true
-  loadEditForm(row.id)
+  if (await loadEditForm(row.id)) {
+    editDialogVisible.value = true
+  }
 }
 
 async function handleSubmit(row: any) {

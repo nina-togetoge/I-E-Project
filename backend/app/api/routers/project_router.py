@@ -310,8 +310,16 @@ def api_stats_trend(
 @router_stats.get("/college-breakdown", response_model=ResponseModel[list[CollegeStatisticsItem]],
                   summary="各学院统计数据（雷达图/热力图/学院立项率）")
 def api_stats_college_breakdown(
+    college_id: Optional[int] = Query(default=None, description="学院过滤"),
+    project_type: Optional[int] = Query(default=None, ge=1, le=3, description="项目类别过滤"),
+    start_year: Optional[int] = Query(default=None, description="立项年份起过滤"),
+    end_year: Optional[int] = Query(default=None, description="立项年份止过滤"),
     db: Session = Depends(get_db),
     data_scope: DataScope = Depends(),
     current_user: SysUser = require_login,
 ):
-    return success(data=ProjectService.college_breakdown(db, data_scope))
+    return success(data=ProjectService.college_breakdown(
+        db, data_scope,
+        college_id=college_id, project_type=project_type,
+        start_year=start_year, end_year=end_year,
+    ))

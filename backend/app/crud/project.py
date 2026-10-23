@@ -208,6 +208,7 @@ class ProjectCRUD:
             for b in db.query(ProjBudget).filter(ProjBudget.project_id == obj.id).all():
                 existing.setdefault(b.budget_item, []).append(b)
             total_budget = Decimal("0")
+            leftover: List[ProjBudget] = []
             for bg in budgets_data:
                 total_budget += Decimal(str(bg.get("budget_amount") or 0))
                 rows = existing.get(bg.get("budget_item")) or []
@@ -219,6 +220,21 @@ class ProjectCRUD:
                     db.add(ProjBudget(project_id=obj.id, **bg))
             for rows in existing.values():
                 for b in rows:
+                    leftover.append(b)
+            # 被历史报销单引用的科目不能物理删除（否则 ProjExpense.budget_item_id 悬空），
+            # 保留行并清空预算金额；未被引用的科目正常删除。
+            leftover_ids = [b.id for b in leftover]
+            referenced_ids = set()
+            if leftover_ids:
+                referenced_ids = {
+                    bid for (bid,) in db.query(ProjExpense.budget_item_id)
+                    .filter(ProjExpense.budget_item_id.in_(leftover_ids))
+                    .all()
+                }
+            for b in leftover:
+                if b.id in referenced_ids:
+                    b.budget_amount = 0
+                else:
                     db.delete(b)
             obj.budget_amount = total_budget
         db.flush()

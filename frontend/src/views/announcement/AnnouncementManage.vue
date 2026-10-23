@@ -226,18 +226,22 @@ function handleReset() {
   loadData()
 }
 
-function openDialog(row?: AnnouncementListItem) {
+async function openDialog(row?: AnnouncementListItem) {
   isEdit.value = !!row
   if (row) {
-    editId.value = row.id
-    getAnnouncementDetail(row.id).then((r) => {
+    // 先取详情再打开弹窗，避免请求返回前用户对着旧数据点“确定”
+    try {
+      const r = await getAnnouncementDetail(row.id)
       const d = (r as any).data ?? r
+      editId.value = row.id
       Object.assign(form, {
         title: d.title, content: d.content || '',
         announcement_type: d.announcement_type, status: d.status, priority: d.priority,
         expire_time: d.expire_time || null,
       })
-    })
+    } catch {
+      return
+    }
   } else {
     editId.value = null
     Object.assign(form, defaultForm())
@@ -246,7 +250,11 @@ function openDialog(row?: AnnouncementListItem) {
 }
 
 async function submit() {
-  await formRef.value.validate()
+  try {
+    await formRef.value.validate()
+  } catch {
+    return
+  }
   submitting.value = true
   try {
     if (isEdit.value && editId.value) {
@@ -262,7 +270,11 @@ async function submit() {
 }
 
 async function remove(id: number, title: string) {
-  await ElMessageBox.confirm(`确定删除公告"${title}"？`, '提示', { type: 'warning' })
+  try {
+    await ElMessageBox.confirm(`确定删除公告"${title}"？`, '提示', { type: 'warning' })
+  } catch {
+    return
+  }
   await deleteAnnouncement(id)
   ElMessage.success('删除成功')
   loadData()

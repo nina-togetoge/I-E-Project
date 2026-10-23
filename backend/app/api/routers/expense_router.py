@@ -63,6 +63,17 @@ def api_expense_list(
         college_ids=college_ids,
     )
     item_list = ExpenseService.to_list_items(db, items)
+    # 按当前用户所处审批阶段标记是否可审批，避免前端对无权单据弹出 403
+    proj_map = {}
+    if item_list:
+        proj_map = {
+            pid: (tid, cid)
+            for pid, tid, cid in db.query(
+                ProjProject.id, ProjProject.teacher_id, ProjProject.college_id
+            ).filter(ProjProject.id.in_([it.project_id for it in item_list])).all()
+        }
+    for it in item_list:
+        it.can_approve = _can_user_approve(current_user, it.status, proj_map.get(it.project_id))
     summary = ExpenseService.get_summary(db, applicant_id, college_ids=college_ids)
     return success(data={
         "items": item_list,
@@ -85,6 +96,21 @@ def api_expense_create(
         ctx.set_desc(f"提交报销申请#{exp.expense_no}，金额{exp.expense_amount}元")
         item = ExpenseService.to_list_item(db, exp)
         return success(data=item, message="报销申请已提交")
+
+
+def _can_user_approve(user: SysUser, status: int, project_meta: Optional[tuple]) -> bool:
+    """与审批接口权限保持一致，供列表标记「通过/驳回」按钮是否可用。"""
+    if not project_meta:
+        return False
+    teacher_id, college_id = project_meta
+    if is_super_admin(user):
+        return status in (1, 2, 3, 4, 5)
+    if status == EXPENSE_STATUS_PENDING_ADVISOR:
+        return user.role == RoleEnum.TEACHER and user.id == teacher_id
+    if status in (EXPENSE_STATUS_ADVISOR_APPROVED,
+                  EXPENSE_STATUS_PENDING_COLLEGE, EXPENSE_STATUS_COLLEGE_APPROVED):
+        return is_college_admin(user) and user.college_id == college_id
+    return False
 
 
 # 各级审批可处理的状态范围

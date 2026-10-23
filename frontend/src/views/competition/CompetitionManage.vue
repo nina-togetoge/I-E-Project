@@ -402,12 +402,14 @@ async function loadData() {
 function handleSearch() { searchForm.page = 1; loadData() }
 function handleReset() { searchForm.page = 1; searchForm.keyword = ''; searchForm.status = undefined; loadData() }
 
-function openDialog(row?: CompetitionListItem) {
+async function openDialog(row?: CompetitionListItem) {
   isEdit.value = !!row
   if (row) {
-    editId.value = row.id
-    getCompetitionDetail(row.id).then((r) => {
+    // 先取详情再打开弹窗，避免请求返回前用户对着旧数据点“确定”
+    try {
+      const r = await getCompetitionDetail(row.id)
       const d = (r as any).data ?? r
+      editId.value = row.id
       Object.assign(form, {
         title: d.title, session: d.session || '', competition_type: d.competition_type, level: d.level, status: d.status,
         organizer: d.organizer || '', co_organizer: d.co_organizer || '',
@@ -420,7 +422,9 @@ function openDialog(row?: CompetitionListItem) {
         location: d.location || '', contact: d.contact || '',
         cover_image: d.cover_image || '', official_url: d.official_url || '',
       })
-    })
+    } catch {
+      return
+    }
   } else {
     editId.value = null
     Object.assign(form, defaultForm())

@@ -85,12 +85,18 @@ class AnnouncementService:
             .limit(page_size)
             .all()
         )
+        # 创建人姓名：批量查询，避免列表 N+1
+        creator_ids = {it.created_by for it in items if it.created_by}
+        creator_map = {}
+        if creator_ids:
+            creator_map = dict(
+                db.query(SysUser.id, SysUser.real_name)
+                .filter(SysUser.id.in_(creator_ids))
+                .all()
+            )
         for it in items:
             AnnouncementService._fill_names(it)
-            # 创建人姓名
-            if it.created_by:
-                creator = db.query(SysUser).filter(SysUser.id == it.created_by).first()
-                it.creator_name = creator.real_name if creator else None
+            it.creator_name = creator_map.get(it.created_by)
         return items, total
 
     @staticmethod

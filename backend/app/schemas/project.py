@@ -348,6 +348,7 @@ class ExpenseListItem(BaseModel):
     approval_time: Optional[datetime] = None
     created_at: Optional[datetime] = None
     attachments: List[dict] = Field(default_factory=list, description="报销票据附件")
+    can_approve: bool = Field(default=False, description="当前登录用户是否可审批此单")
 
     model_config = ConfigDict(from_attributes=True)
 

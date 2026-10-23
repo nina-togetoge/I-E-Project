@@ -572,10 +572,13 @@ async function loadData() {
   if (filterForm.project_type) params.project_type = filterForm.project_type
 
   try {
+    const trendParams: any = {}
+    if (params.start_year) trendParams.start_year = params.start_year
+    if (params.end_year) trendParams.end_year = params.end_year
     const [statsRes, trendRes, collegeRes] = await Promise.all([
       getStatistics(params),
-      getTrend(),
-      getCollegeBreakdown(),
+      getTrend(trendParams),
+      getCollegeBreakdown(params),
     ])
     stats.value = statsRes.data
     trendData.value = (trendRes.data || []) as any[]

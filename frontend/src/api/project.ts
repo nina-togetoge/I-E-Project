@@ -173,8 +173,13 @@ export function getTrend(params: {
 }
 
 /** 各学院统计数据（雷达图/热力图/学院立项率） */
-export function getCollegeBreakdown() {
-  return get('/api/statistics/college-breakdown')
+export function getCollegeBreakdown(params?: {
+  start_year?: number
+  end_year?: number
+  college_id?: number
+  project_type?: number
+}) {
+  return get('/api/statistics/college-breakdown', params)
 }
 
 // ========== 项目成果 ==========

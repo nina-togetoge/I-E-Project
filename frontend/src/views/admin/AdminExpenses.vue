@@ -66,8 +66,18 @@
       </template>
       <template #actions="{ row }">
         <el-button link type="primary" size="small" @click="handleView(row)">查看</el-button>
-        <el-button v-if="row.status >= 1 && row.status <= 5" link type="success" size="small" @click="handleApprove(row, true)">通过</el-button>
-        <el-button v-if="row.status >= 1 && row.status <= 5" link type="danger" size="small" @click="handleApprove(row, false)">驳回</el-button>
+        <el-button
+          v-if="row.can_approve"
+          link type="success" size="small"
+          :loading="actionLoadingId === row.id"
+          @click="handleApprove(row, true)"
+        >通过</el-button>
+        <el-button
+          v-if="row.can_approve"
+          link type="danger" size="small"
+          :loading="actionLoadingId === row.id"
+          @click="handleApprove(row, false)"
+        >驳回</el-button>
       </template>
       <template #empty>
         <EmptyIllustration type="file" description="暂无报销数据" />
@@ -121,6 +131,7 @@ const pageSize = ref(10)
 const summary = ref<any>({})
 const showDetail = ref(false)
 const currentExpense = ref<any>(null)
+const actionLoadingId = ref<number | null>(null)
 
 function handleView(row: any) {
   currentExpense.value = row
@@ -159,14 +170,25 @@ function handleSearch() { page.value = 1; loadData() }
 function handlePageChange(p: number, ps: number) { page.value = p; pageSize.value = ps; loadData() }
 
 async function handleApprove(row: any, approve: boolean) {
+  let opinion = '同意'
   if (!approve) {
-    const { value } = await ElMessageBox.prompt('请输入驳回原因', '驳回', { type: 'warning' })
-    await patch(`/api/expenses/${row.id}/review`, { approved: false, opinion: value })
-  } else {
-    await patch(`/api/expenses/${row.id}/review`, { approved: true, opinion: '同意' })
+    try {
+      const { value } = await ElMessageBox.prompt('请输入驳回原因', '驳回', { type: 'warning' })
+      opinion = value || ''
+    } catch {
+      return // 用户取消
+    }
   }
-  ElMessage.success(approve ? '已通过' : '已驳回')
-  loadData()
+  actionLoadingId.value = row.id
+  try {
+    await patch(`/api/expenses/${row.id}/review`, { approved: approve, opinion })
+    ElMessage.success(approve ? '已通过' : '已驳回')
+    loadData()
+  } catch (e: any) {
+    ElMessage.error(e?.message || '审批失败')
+  } finally {
+    actionLoadingId.value = null
+  }
 }
 
 /** 报销状态 → el-tag type 映射（8态模型） */

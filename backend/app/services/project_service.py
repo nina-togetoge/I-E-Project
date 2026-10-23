@@ -1360,8 +1360,12 @@ class ProjectService:
         ]
 
     @staticmethod
-    def college_breakdown(db: Session, data_scope: DataScope) -> List[CollegeStatisticsItem]:
-        """各学院统计数据（雷达图/热力图/学院立项率柱状图）"""
+    def college_breakdown(db: Session, data_scope: DataScope,
+                          college_id: Optional[int] = None,
+                          project_type: Optional[int] = None,
+                          start_year: Optional[int] = None,
+                          end_year: Optional[int] = None) -> List[CollegeStatisticsItem]:
+        """各学院统计数据（雷达图/热力图/学院立项率柱状图），支持与总览一致的筛选条件"""
         from app.models import SysCollege, ProjReview
 
         # 学院列表（按数据权限过滤）：超管全校；学院管理员限本院；学生/教师/专家仅本人所属学院
@@ -1376,26 +1380,38 @@ class ProjectService:
             else:
                 # 无学院归属的受限角色 → 不展示任何学院统计
                 colleges = []
+        if college_id:
+            colleges = [c for c in colleges if c.id == college_id]
+
+        def base_cond(col) -> list:
+            """与总览统计一致的筛选条件（学院 + 类别 + 年份）"""
+            cond = [ProjProject.is_deleted == 0, ProjProject.college_id == col.id]
+            if project_type is not None:
+                cond.append(ProjProject.project_type == project_type)
+            if start_year is not None:
+                cond.append(extract("year", ProjProject.created_at) >= start_year)
+            if end_year is not None:
+                cond.append(extract("year", ProjProject.created_at) <= end_year)
+            return cond
 
         result: List[CollegeStatisticsItem] = []
         for col in colleges:
-            q = db.query(ProjProject).filter(ProjProject.is_deleted == 0, ProjProject.college_id == col.id)
+            q = db.query(ProjProject).filter(*base_cond(col))
 
             total = q.count()
             approved = q.filter(ProjProject.status.in_([6, 7, 8, 9])).count()
             finished = q.filter(ProjProject.status == 9).count()
             denied = q.filter(ProjProject.status == 10).count()
             budget = db.query(func.coalesce(func.sum(ProjProject.budget_amount), 0)).filter(
-                ProjProject.is_deleted == 0, ProjProject.college_id == col.id).scalar() or 0
+                *base_cond(col)).scalar() or 0
             used = db.query(func.coalesce(func.sum(ProjProject.used_amount), 0)).filter(
-                ProjProject.is_deleted == 0, ProjProject.college_id == col.id).scalar() or 0
+                *base_cond(col)).scalar() or 0
 
             # 成果数
             achievements = db.query(func.count(ProjAchievement.id)).join(
                 ProjProject, ProjAchievement.project_id == ProjProject.id
             ).filter(
-                ProjProject.college_id == col.id,
-                ProjProject.is_deleted == 0,
+                *base_cond(col),
                 ProjAchievement.is_deleted == 0,
             ).scalar() or 0
 
@@ -1403,8 +1419,7 @@ class ProjectService:
             avg_score_row = db.query(func.avg(ProjReview.score)).join(
                 ProjProject, ProjReview.project_id == ProjProject.id
             ).filter(
-                ProjProject.college_id == col.id,
-                ProjProject.is_deleted == 0,
+                *base_cond(col),
                 ProjReview.score.isnot(None),
             ).scalar()
             avg_score = round(float(avg_score_row or 0), 2)
