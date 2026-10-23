@@ -5953,7 +5953,15 @@ FROM sys_user WHERE role = 3 AND is_deleted = 0;
 -- ============================================================
 -- 用户扩展字段种子数据（与角色视图配套）
 -- ============================================================
-UPDATE `sys_user` SET `gender` = CASE WHEN MOD(`id`, 2) = 0 THEN '男' ELSE '女' END
+UPDATE `sys_user` SET `gender` = CASE
+    WHEN SUBSTRING(`real_name`, 2) REGEXP '[英秀娟芳静艳娜敏兰霞琪怡佳梦雨思欣丽桂]'
+         AND NOT SUBSTRING(`real_name`, 2) REGEXP '[军明国志强建勇涛刚超杰洋辉永磊鹏伟浩宇]' THEN '女'
+    WHEN SUBSTRING(`real_name`, 2) REGEXP '[军明国志强建勇涛刚超杰洋辉永磊鹏伟浩宇]'
+         AND NOT SUBSTRING(`real_name`, 2) REGEXP '[英秀娟芳静艳娜敏兰霞琪怡佳梦雨思欣丽桂]' THEN '男'
+    WHEN RIGHT(`real_name`, 1) REGEXP '[英秀娟芳静艳娜敏兰霞琪怡佳梦雨思欣丽桂]' THEN '女'
+    WHEN RIGHT(`real_name`, 1) REGEXP '[军明国志强建勇涛刚超杰洋辉永磊鹏伟浩宇]' THEN '男'
+    WHEN MOD(`id`, 2) = 0 THEN '男'
+    ELSE '女' END
 WHERE `role` = 1 AND `gender` IS NULL;
 
 UPDATE `sys_user` u JOIN `sys_college` c ON u.`college_id` = c.`id`
