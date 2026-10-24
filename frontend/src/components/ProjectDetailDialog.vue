@@ -1,9 +1,18 @@
 <!--
-  项目详情弹窗（自定义窗口样式）
-  支持：拖拽移动、拖拽调整大小、最小化、全屏、关闭
+  ==== ProjectDetailDialog ====
+  职责：项目详情弹窗（自定义窗口样式），以"桌面窗口"形态展示项目详情页，
+        支持拖拽移动、右下角拖拽调整大小、最小化、全屏与关闭。
+  复用：项目列表、审核工作台、专家评审、成果管理等页面需要"不离开当前列表就查看详情"的场景。
+  契约：无 props、无 emit、无插槽；显隐与项目 id 由 Pinia 的 projectDetail store 驱动
+        （store.visible / store.projectId / store.close()），因此可在任意页面调用打开。
+  注意：1) 窗口打开时内部才会挂载 ProjectDetail，关闭即卸载，避免详情页重复请求；
+        2) 拖拽与缩放监听挂在 document 上，卸载时必须清理（见 onBeforeUnmount）；
+        3) 拖拽边界：水平至少保留 200px、垂直至少保留 60px 在视口内，防止窗口被拖丢；
+        4) 最小化只保留标题栏高度，全屏优先级高于最小化。
 -->
 <template>
   <transition name="dialog-fade">
+    <!-- 区块：遮罩层，点击空白处关闭；点击窗口内部不会冒泡触发关闭 -->
     <div v-if="store.visible" class="pd-mask" @click.self="store.close()">
       <div
         class="pd-window"
@@ -11,7 +20,7 @@
         :style="windowStyle"
         ref="windowRef"
       >
-        <!-- 标题栏 -->
+        <!-- 区块：标题栏，按住可拖拽移动，双击可切换全屏；右侧为窗口控制按钮 -->
         <div class="pd-titlebar" @mousedown="startDrag" @dblclick="toggleFullscreen">
           <div class="pd-title">
             <el-icon><Document /></el-icon>
@@ -32,17 +41,17 @@
           </div>
         </div>
 
-        <!-- 内容区 -->
+        <!-- 区块：内容区，仅在 projectId 存在时挂载详情页，实现按需加载 -->
         <div v-show="!isMinimized" class="pd-content" ref="contentRef">
           <ProjectDetail v-if="store.projectId" :project-id="store.projectId" />
         </div>
 
-        <!-- 底部操作栏 -->
+        <!-- 区块：底部操作栏，最小化时一并隐藏，只保留统一关闭入口 -->
         <div v-show="!isMinimized" class="pd-footer">
           <el-button type="primary" @click="store.close()">关闭</el-button>
         </div>
 
-        <!-- 右下角拖拽调整大小手柄 -->
+        <!-- 区块：右下角缩放热区，全屏或最小化时隐藏，避免无意义的拉伸操作 -->
         <div v-show="!isFullscreen && !isMinimized" class="pd-resize-handle" @mousedown.stop="startResize"></div>
       </div>
     </div>
@@ -55,20 +64,40 @@ import { Document, Close, FullScreen, Aim, Minus, CopyDocument } from '@element-
 import ProjectDetail from '@/views/project/ProjectDetail.vue'
 import { useProjectDetailStore } from '@/store/projectDetail'
 
+// ==================== 依赖与状态 ====================
+/**
+ * 项目详情弹窗 store：visible 控制显隐、projectId 指定加载哪个项目、close() 统一关闭。
+ * 通过 store 而非 props 传递，任何页面都能以编程方式打开详情窗口。
+ */
 const store = useProjectDetailStore()
 
+/** 窗口根节点引用，预留给需要测量窗口尺寸的扩展逻辑，拖拽不依赖它 */
 const windowRef = ref<HTMLElement>()
+/** 内容滚动容器引用，当前仅用于绑定 DOM，不参与逻辑计算 */
 const contentRef = ref<HTMLElement>()
 
+// ==================== 窗口几何 ====================
+/** 窗口宽度（px），缩放时最小 600 */
 const width = ref(960)
+/** 窗口高度（px），缩放时最小 400 */
 const height = ref(680)
+/** 窗口左偏移；初始按视口居中，小屏时最少留 20px 边距 */
 const left = ref(Math.max(20, (window.innerWidth - 960) / 2))
+/** 窗口上偏移；初始按视口居中，小屏时最少留 20px 边距 */
 const top = ref(Math.max(20, (window.innerHeight - 680) / 2))
 
+/** 是否全屏：全屏时忽略几何值，窗口铺满视口 */
 const isFullscreen = ref(false)
+/** 是否最小化：最小化时高度压缩为标题栏高度 */
 const isMinimized = ref(false)
+/** 进入全屏前的窗口几何快照，退出全屏时还原 */
 const prevState = ref({ width: 960, height: 680, left: 0, top: 0 })
 
+/**
+ * 根据全屏/最小化状态计算窗口内联样式。
+ * 优先级：全屏 > 最小化 > 普通窗口。
+ * @returns 绑定到窗口根节点的定位与尺寸样式
+ */
 const windowStyle = computed(() => {
   if (isFullscreen.value) {
     return { left: '0px', top: '0px', width: '100vw', height: '100vh', borderRadius: '0' }
@@ -84,7 +113,11 @@ const windowStyle = computed(() => {
   }
 })
 
-/* ---------- 全屏切换 ---------- */
+// ==================== 全屏切换 ====================
+/**
+ * 切换全屏：进入前记录当前几何，退出时还原；进入全屏会同时取消最小化。
+ * 副作用：修改 isFullscreen / isMinimized / width / height / left / top / prevState。
+ */
 function toggleFullscreen() {
   if (isFullscreen.value) {
     isFullscreen.value = false
@@ -99,7 +132,12 @@ function toggleFullscreen() {
   }
 }
 
-/* ---------- 最小化切换 ---------- */
+// ==================== 最小化切换 ====================
+/**
+ * 切换最小化：只保留标题栏，内容区与底部栏由 v-show 隐藏；
+ * 最小化会退出全屏，避免全屏与最小化状态互相冲突。
+ * 副作用：修改 isMinimized / isFullscreen。
+ */
 function toggleMinimize() {
   isMinimized.value = !isMinimized.value
   if (isMinimized.value) {
@@ -107,48 +145,89 @@ function toggleMinimize() {
   }
 }
 
-/* ---------- 拖拽移动 ---------- */
+// ==================== 拖拽移动 ====================
+/** 本次拖拽的起点：鼠标坐标 + 当时窗口位置，用差值计算新位置避免累计误差 */
 let dragStart = { x: 0, y: 0, left: 0, top: 0 }
+/** 是否处于拖拽中，防止松手后的 mousemove 继续移动窗口 */
 let dragging = false
 
+/**
+ * 标题栏按下：记录起点并注册 document 级移动/抬起监听。
+ * @param e 鼠标按下事件
+ * 副作用：修改拖拽标记，向 document 注册 onDrag / stopDrag。
+ * 说明：监听挂在 document 而非标题栏，鼠标快速移出窗口时仍能跟随。
+ */
 function startDrag(e: MouseEvent) {
   dragging = true
   dragStart = { x: e.clientX, y: e.clientY, left: left.value, top: top.value }
   document.addEventListener('mousemove', onDrag)
   document.addEventListener('mouseup', stopDrag)
 }
+/**
+ * 拖拽移动：按鼠标位移更新窗口 left/top。
+ * @param e 鼠标移动事件
+ * 副作用：更新 left / top。
+ * 边界：水平至少保留 200px、垂直至少保留 60px 在视口内，防止窗口被拖出屏幕无法找回。
+ */
 function onDrag(e: MouseEvent) {
   if (!dragging) return
   left.value = Math.max(0, Math.min(window.innerWidth - 200, dragStart.left + e.clientX - dragStart.x))
   top.value = Math.max(0, Math.min(window.innerHeight - 60, dragStart.top + e.clientY - dragStart.y))
 }
+/**
+ * 结束拖拽：清除标记并注销 document 监听。
+ * 副作用：修改 dragging，移除 onDrag / stopDrag。
+ */
 function stopDrag() {
   dragging = false
   document.removeEventListener('mousemove', onDrag)
   document.removeEventListener('mouseup', stopDrag)
 }
 
-/* ---------- 拖拽调整大小 ---------- */
+// ==================== 拖拽调整大小 ====================
+/** 本次缩放的起点：鼠标坐标 + 当时窗口宽高 */
 let resizeStart = { x: 0, y: 0, w: 0, h: 0 }
+/** 是否处于缩放中 */
 let resizing = false
 
+/**
+ * 右下角手柄按下：记录起点并注册 document 级监听。
+ * @param e 鼠标按下事件
+ * 副作用：修改缩放标记，向 document 注册 onResize / stopResize。
+ */
 function startResize(e: MouseEvent) {
   resizing = true
   resizeStart = { x: e.clientX, y: e.clientY, w: width.value, h: height.value }
   document.addEventListener('mousemove', onResize)
   document.addEventListener('mouseup', stopResize)
 }
+/**
+ * 缩放中：按鼠标位移计算新宽高并夹取边界。
+ * @param e 鼠标移动事件
+ * 副作用：更新 width / height。
+ * 边界：最小 600x400；最大不超过视口中剩余空间（减去窗口左上偏移）。
+ */
 function onResize(e: MouseEvent) {
   if (!resizing) return
   width.value = Math.max(600, Math.min(window.innerWidth - left.value, resizeStart.w + e.clientX - resizeStart.x))
   height.value = Math.max(400, Math.min(window.innerHeight - top.value, resizeStart.h + e.clientY - resizeStart.y))
 }
+/**
+ * 结束缩放：清除标记并注销 document 监听。
+ * 副作用：修改 resizing，移除 onResize / stopResize。
+ */
 function stopResize() {
   resizing = false
   document.removeEventListener('mousemove', onResize)
   document.removeEventListener('mouseup', stopResize)
 }
 
+// ==================== 生命周期 ====================
+/**
+ * 卸载时兜底清理四个 document 监听。
+ * 正常流程中 mouseup 已清理，此处覆盖"拖拽过程中窗口被强制关闭/路由跳转"的异常场景，
+ * 避免监听残留造成内存泄漏与卸载后操作已销毁的响应式状态。
+ */
 onBeforeUnmount(() => {
   document.removeEventListener('mousemove', onDrag)
   document.removeEventListener('mouseup', stopDrag)
@@ -187,7 +266,7 @@ onBeforeUnmount(() => {
   border-radius: 0;
 }
 
-/* 标题栏 */
+/* 标题栏：整条可拖拽，禁止文字选中避免拖动时误选标题 */
 .pd-titlebar {
   height: 42px;
   background: #409eff;
@@ -262,7 +341,7 @@ onBeforeUnmount(() => {
   text-align: right;
 }
 
-/* 拖拽调整大小手柄 */
+/* 缩放热区：右下角 16px 斜纹角标，光标提示可对角线拖拽 */
 .pd-resize-handle {
   position: absolute;
   right: 0;

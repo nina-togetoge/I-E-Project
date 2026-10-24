@@ -1,15 +1,33 @@
 <!--
-  项目成果面板
-  结项工作台 Tab 与「项目成果」旧路由共用，只负责成果列表与登记/认定弹窗，
-  项目详情与页头由外层页面（StagePageShell）提供。
+  组件名称：项目成果面板
+  面向角色：项目负责人（登记 / 编辑 / 删除未认定成果）、项目指导教师（认定 / 撤销认定）、
+           学院管理员与超级管理员（管理本院 / 全校成果）
+  核心功能：成果列表、按类型自适应的登记 / 编辑弹窗、证明材料上传与查看、
+           成果认定 / 撤销认定、成果详情查看。
+  调用 API：listAchievements、createAchievement、updateAchievement、deleteAchievement、
+           reviewAchievement、revokeAchievement、deleteAttachment。
+  权限 / 状态约束：
+    - 登记：项目处于已立项及之后（6/7/8/9），且为负责人、指导教师或管理员。
+    - 删除：负责人或管理员；教师不可删除（与后端 delete 一致）。
+    - 认定：指导教师、学院管理员、超管；负责人不可自认。
+    - 已认定成果对负责人锁定：负责人不能编辑或删除，认定人仍可修改（修改后需重新认定）。
+    - 无认定记录的历史成果按「已认定」处理，避免旧数据被误开放编辑。
+  关键交互：
+    - 弹窗与面板共用，结项工作台 Tab 与旧路由 /projects/:id/achievements 都复用它。
+    - 成果类型切换会清空不再适用的字段并重建校验规则，减少无意义字段提交。
+    - 新上传证明材料先以 biz_id=0 暂存，保存成果时通过 attachment_ids 绑定。
+    - 撤销认定后成果回到「待认定」，可重新走认定流程。
 -->
 <template>
   <div v-loading="loading">
+    <!-- 工具栏：登记入口仅负责人 / 指导教师 / 管理员可见，
+         且项目必须已进入可登记阶段；普通成员只能查看 -->
     <div class="achievement-toolbar">
       <span class="achievement-count">共 {{ achievements.length }} 项成果</span>
       <el-button v-if="canRegister" type="primary" @click="openCreate">登记成果</el-button>
     </div>
 
+    <!-- 成果表格：认定状态列在「不通过」时用 tooltip 展示认定意见，避免追加一列 -->
     <div class="table-wrap" v-if="achievements.length > 0">
       <table class="paper-table">
         <thead>
@@ -60,6 +78,11 @@
               >{{ reviewStatusLabel(a.review_status) }}</el-tag>
             </td>
             <td align="center">
+              <!-- 操作说明：
+                   查看：所有人可见；
+                   认定：有认定权限且当前不是「已认定」；
+                   撤销认定：有认定权限且当前已认定；
+                   编辑 / 删除：受认定锁定与角色双重限制 -->
               <el-button link type="primary" size="small" @click="openDetail(a)">查看</el-button>
               <el-button
                 v-if="canReview && reviewStatusOf(a) !== 1"
@@ -78,7 +101,7 @@
     </div>
     <el-empty v-else description="暂无成果" :image-size="60" />
 
-    <!-- 成果登记/编辑弹窗 -->
+    <!-- 成果登记 / 编辑弹窗：字段随成果类型动态显隐，避免论文、专利、竞赛共用一张巨表 -->
     <el-dialog center v-model="showDialog" :title="editingId ? '编辑项目成果' : '登记项目成果'" width="600px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-form-item label="成果类型" prop="achievement_type">
@@ -93,6 +116,7 @@
           <el-input v-model="form.author" :placeholder="labelOf('author')" maxlength="255" />
         </el-form-item>
         <el-form-item v-if="isFieldVisible('publish_date')" :label="labelOf('publish_date')">
+          <!-- 日期限制：不早于项目开始日、不晚于今天，防止登记项目周期外的成果 -->
           <el-date-picker
             v-model="form.publish_date"
             type="date"
@@ -124,6 +148,7 @@
           <el-input v-model="form.summary" type="textarea" :rows="3" placeholder="成果简介（选填）" />
         </el-form-item>
         <el-form-item label="证明材料">
+          <!-- 证明材料：已保存附件可直接删除；新上传附件先暂存，提交时随成果绑定 -->
           <div class="attachment-block">
             <ProjectAttachmentList
               v-if="dialogAttachments.length"
@@ -140,12 +165,13 @@
         </el-form-item>
       </el-form>
       <template #footer>
+        <!-- 提交前由动态 rules 校验；保存失败由全局拦截器提示，按钮 loading 防重复 -->
         <el-button @click="showDialog = false">取消</el-button>
         <el-button type="primary" :loading="submitting" @click="handleSubmit">提交</el-button>
       </template>
     </el-dialog>
 
-    <!-- 成果认定弹窗 -->
+    <!-- 成果认定弹窗：不通过必须填写意见，便于负责人修改后重新提交 -->
     <el-dialog center v-model="reviewDialog" title="成果认定" width="480px">
       <div class="review-target">成果：{{ reviewTarget?.title }}</div>
       <el-form label-width="88px">
@@ -172,12 +198,12 @@
       </template>
     </el-dialog>
 
-    <!-- 证明材料查看弹窗 -->
+    <!-- 证明材料查看弹窗：只读列表，预览 / 下载沿用统一的鉴权拼接 -->
     <el-dialog center v-model="attDialog" :title="`成果证明材料 - ${attTitle}`" width="600px">
       <ProjectAttachmentList :attachments="attList" />
     </el-dialog>
 
-    <!-- 成果详情查看弹窗 -->
+    <!-- 成果详情弹窗：集中展示认定人、认定时间与认定意见，便于申诉时核对 -->
     <el-dialog center v-model="detailDialog" :title="detailRow?.title || '成果详情'" width="640px">
       <template v-if="detailRow">
         <el-descriptions :column="2" border>
@@ -218,21 +244,29 @@ import FileUpload from '@/components/FileUpload.vue'
 import { formatDate } from '@/utils/format'
 import { useUserStore } from '@/store/user'
 
+// ==================== 依赖 / 项目上下文 ====================
+// 面板由外层页面传入完整 project，所有阶段与权限判断都基于它，面板本身不再请求项目详情。
 const props = defineProps<{ project: any }>()
 
 const userStore = useUserStore()
 const pid = computed(() => Number(props.project?.id))
 
-// 权限判定（与后端 AchievementService.create/delete 保持一致）
+// ==================== 权限判定 ====================
+// 与后端 AchievementService.create / delete 保持一致，避免前端出现可点但必失败的按钮。
+
+/** 是否项目负责人本人（可登记、可编辑未认定成果、可删除，但不可认定） */
 const isLeader = computed(() => !!props.project && Number(props.project.leader_id) === Number(userStore.userInfo?.id))
+/** 是否该项目指导教师本人（可登记、可认定与撤销认定，但不可删除） */
 const isProjectTeacher = computed(() => userStore.isTeacher && !!props.project && Number(props.project.teacher_id) === Number(userStore.userInfo?.id))
+/** 是否管理员：超管全校；学院管理员仅限本院项目 */
 const isProjectAdmin = computed(() => {
   if (userStore.isSuperAdmin) return true
   if (userStore.isCollegeAdmin) return !!props.project && Number(props.project.college_id) === Number(userStore.collegeId)
   return false
 })
 
-// 成果登记仅在「已立项及之后」阶段（6/7/8/9）且具备权限时可用
+// 成果登记仅在「已立项及之后」阶段（6/7/8/9）且具备权限时可用；
+// 使用白名单而不是 >=6，避免驳回(10)、撤销(11)、待教师确认(12) 误入
 const REGISTER_STATUS = [6, 7, 8, 9]
 const canRegister = computed(() => !!props.project && REGISTER_STATUS.includes(Number(props.project.status))
   && (isLeader.value || isProjectTeacher.value || isProjectAdmin.value))
@@ -241,23 +275,43 @@ const canDelete = computed(() => isLeader.value || isProjectAdmin.value)
 // 成果认定：项目指导教师 / 学院管理员 / 超级管理员（负责人不可自认）
 const canReview = computed(() => !!props.project && REGISTER_STATUS.includes(Number(props.project.status))
   && (isProjectTeacher.value || isProjectAdmin.value))
+
+// ==================== 列表与弹窗状态 ====================
+/** 当前项目成果列表，由 listAchievements 拉取 */
 const achievements = ref<any[]>([])
+/** 列表加载态 */
 const loading = ref(false)
+/** 登记 / 编辑弹窗显隐 */
 const showDialog = ref(false)
+/** 成果保存 loading */
 const submitting = ref(false)
+/** 正在编辑的成果 ID；为空表示新建 */
 const editingId = ref<number | null>(null)
+/** 编辑时回显的已保存证明材料 */
 const existingAttachments = ref<any[]>([])
+/** 本次新上传、尚未保存的证明材料 */
 const newAttachments = ref<any[]>([])
+/** 证明材料查看弹窗 */
 const attDialog = ref(false)
+/** 证明材料弹窗标题（成果名称） */
 const attTitle = ref('')
+/** 证明材料查看列表 */
 const attList = ref<any[]>([])
+/** 成果详情弹窗 */
 const detailDialog = ref(false)
+/** 详情弹窗当前成果 */
 const detailRow = ref<any>(null)
+/** 认定弹窗 */
 const reviewDialog = ref(false)
+/** 认定提交 loading */
 const reviewing = ref(false)
+/** 当前正在认定的成果 */
 const reviewTarget = ref<any>(null)
+/** 认定表单：result 1 通过、2 不通过 */
 const reviewForm = reactive({ result: 1, comment: '' })
+/** 认定状态文案：后端可能不返回 review_status，历史数据按「已认定」兼容 */
 const REVIEW_STATUS_LABEL: Record<number, string> = { 0: '待认定', 1: '已认定', 2: '不通过' }
+/** 状态 → 标签颜色：待认定 warning、不通过 danger、已认定 success */
 function reviewStatusLabel(status?: number): string {
   return REVIEW_STATUS_LABEL[Number(status ?? 1)] || '已认定'
 }
@@ -272,16 +326,20 @@ function reviewStatusTagType(status?: number): string {
 function reviewStatusOf(row: any): number {
   return Number(row.review_status ?? 1)
 }
-// 已认定成果锁定负责人：仅认定人（指导教师/管理员）仍可编辑
+// 已认定成果锁定负责人：仅认定人（指导教师/管理员）仍可编辑；
+// 这样既保护认定结果不被负责人随意改动，又允许认定人修正录入错误
 function canEditRow(row: any): boolean {
   return canRegister.value && (reviewStatusOf(row) !== 1 || canReview.value)
 }
-// 已认定成果负责人不可删除，管理员不受限
+// 已认定成果负责人不可删除，管理员不受限；避免删除已认定成果导致认定记录悬空
 function canDeleteRow(row: any): boolean {
   if (!canDelete.value) return false
   if (isProjectAdmin.value) return true
   return reviewStatusOf(row) !== 1
 }
+
+// ==================== 登记表单 ====================
+// 表单与列表解耦：弹窗打开时按行数据回填，关闭时统一重置，避免脏字段残留。
 const formRef = ref<FormInstance>()
 const form = reactive({
   achievement_type: undefined as number | undefined,
@@ -294,6 +352,7 @@ const form = reactive({
   award_level: '',
   summary: '',
 })
+/** 成果类型码到名称的映射，与后端 AchievementType 保持一致 */
 const achievementTypeMap: Record<number, string> = {
   1: '论文', 2: '专利', 3: '软件著作权', 4: '竞赛获奖', 5: '创业成果', 6: '其他',
 }
@@ -301,6 +360,7 @@ const achievementTypeMap: Record<number, string> = {
 const achievementLevelMap: Record<number, string> = {
   1: '校级', 2: '省级', 3: '国家级',
 }
+/** 类型下拉选项：由映射表派生，保证展示与提交值同源 */
 const typeOptions = Object.entries(achievementTypeMap).map(([key, label]) => ({
   value: Number(key), label,
 }))
@@ -342,22 +402,31 @@ const ACHIEVEMENT_TYPE_CONFIG: Record<number, TypeFieldConfig> = {
     labels: {},
   },
 }
+/** 字段默认文案：类型配置没有覆盖时使用，保证每个字段都有可读标签 */
 const DEFAULT_FIELD_LABELS: Record<string, string> = {
   author: '作者', publish_date: '日期', publisher: '发表刊物',
   achievement_no: '编号', level: '级别', award_level: '获奖等级',
 }
+/** 获奖等级为自由文本枚举，允许筛选；与后端 award_level 字符串字段一致 */
 const awardLevelOptions = ['特等奖', '一等奖', '二等奖', '三等奖', '优秀奖'].map((v) => ({ value: v, label: v }))
+/** 当前所选类型的字段配置；未选类型时返回空配置，表单只显示类型与标题 */
 const currentTypeConfig = computed<TypeFieldConfig>(() => {
   const t = form.achievement_type
   if (t == null) return { fields: [], required: [], labels: {} }
   return ACHIEVEMENT_TYPE_CONFIG[t] || { fields: [], required: [], labels: {} }
 })
+/** 判断字段在当前类型下是否展示 */
 function isFieldVisible(key: string) {
   return currentTypeConfig.value.fields.includes(key)
 }
+/** 取字段标签：优先类型专属文案，其次通用文案，最后空串 */
 function labelOf(key: string) {
   return currentTypeConfig.value.labels[key] || DEFAULT_FIELD_LABELS[key] || ''
 }
+/**
+ * 切换成果类型：清空新类型不再使用的字段并清除旧校验。
+ * 说明：防止论文残留的「论文编号」被带到专利提交里，造成后端字段语义错乱。
+ */
 function onTypeChange() {
   const cfg = currentTypeConfig.value
   if (!cfg.fields.includes('author')) form.author = ''
@@ -368,6 +437,10 @@ function onTypeChange() {
   if (!cfg.fields.includes('award_level')) form.award_level = ''
   formRef.value?.clearValidate()
 }
+/**
+ * 动态校验规则：类型与标题必填，编号 / 级别 / 获奖等级按类型配置追加。
+ * 说明：规则随类型实时变化，切换类型后需 clearValidate 才能消除旧提示。
+ */
 const rules = computed<FormRules>(() => {
   const cfg = currentTypeConfig.value
   const r: FormRules = {
@@ -380,6 +453,10 @@ const rules = computed<FormRules>(() => {
   return r
 })
 
+/**
+ * 加载当前项目成果列表。
+ * 说明：project id 为空时直接返回；失败降级为空列表，避免面板整体报错。
+ */
 async function loadAchievements() {
   if (!pid.value) return
   loading.value = true
@@ -396,7 +473,10 @@ async function loadAchievements() {
 /** 弹窗内展示的证明材料 = 已保存的 + 本次新上传的 */
 const dialogAttachments = computed(() => [...existingAttachments.value, ...newAttachments.value])
 
-/** 成果日期下限：项目开始日期；上限：今天 */
+/**
+ * 成果日期限制：不早于项目开始日期、不晚于今天。
+ * 说明：项目周期外的成果通常不属于本项目，前端先做提示性限制，最终仍由后端校验。
+ */
 function disabledPublishDate(d: Date) {
   const today = new Date()
   today.setHours(23, 59, 59, 999)
@@ -408,11 +488,16 @@ function disabledPublishDate(d: Date) {
   }
   return false
 }
+/** 日期选择提示：告诉用户可选的区间，减少反复试错 */
 const publishDateTip = computed(() => {
   const start = props.project?.start_date ? String(props.project.start_date).slice(0, 10) : ''
   return start ? `不早于项目开始日期（${start}），不晚于今天` : '不晚于今天'
 })
 
+/**
+ * 重置登记表单到初始态：清空编辑 ID、附件缓存、字段值与校验结果。
+ * 说明：新建与编辑共用弹窗，必须在每次打开前重置，防止上一条成果的字段泄漏。
+ */
 function resetDialogForm() {
   editingId.value = null
   existingAttachments.value = []
@@ -429,11 +514,18 @@ function resetDialogForm() {
   formRef.value?.clearValidate()
 }
 
+/** 打开「登记成果」弹窗：先重置表单，再显示弹窗 */
 function openCreate() {
   resetDialogForm()
   showDialog.value = true
 }
 
+/**
+ * 打开「编辑成果」弹窗并回填行数据。
+ * 说明：已认定成果仅认定人可进入；进入后修改会使认定失效，因此先二次确认。
+ * 参数 row：成果行数据。
+ * 失败处理：用户取消确认时直接返回，不重置表单。
+ */
 async function openEdit(row: any) {
   // 认定人修改已认定成果时，修改后认定将失效并需重新认定
   if (reviewStatusOf(row) === 1) {
@@ -461,6 +553,10 @@ async function openEdit(row: any) {
   showDialog.value = true
 }
 
+/**
+ * 证明材料上传成功：暂存并补充上传人、下载 / 预览地址。
+ * 参数 file：FileUpload 返回的文件对象；缺少 id 时忽略，避免提交空附件。
+ */
 function handleFileUpload(file: any) {
   if (!file?.id) return
   newAttachments.value.push({
@@ -471,6 +567,11 @@ function handleFileUpload(file: any) {
   })
 }
 
+/**
+ * 删除证明材料。
+ * 说明：已保存附件需二次确认并调用后端删除；新上传附件直接本地移除。
+ * 后端删除失败不阻断表单（临时文件后续仍会随成果绑定），仅做兜底。
+ */
 async function handleRemoveAttachment(att: any) {
   const isNew = newAttachments.value.some((a) => a.id === att.id)
   if (!isNew) {
@@ -489,12 +590,18 @@ async function handleRemoveAttachment(att: any) {
   newAttachments.value = newAttachments.value.filter((a) => a.id !== att.id)
 }
 
+/** 打开证明材料弹窗：缓存当前成果标题与附件列表，避免表格数据刷新后弹窗内容变化 */
 function viewAttachments(row: any) {
   attTitle.value = row.title
   attList.value = row.attachments || []
   attDialog.value = true
 }
 
+/**
+ * 保存成果：新建走 createAchievement（带 project_id），编辑走 updateAchievement。
+ * 说明：附件只下发本次新增的 id；空字符串字段统一转 undefined，避免后端存空串。
+ * 失败处理：校验失败直接返回；接口异常由全局拦截器提示，finally 复位 loading。
+ */
 async function handleSubmit() {
   if (!formRef.value) return
   const valid = await formRef.value.validate().catch(() => false)
@@ -530,6 +637,7 @@ async function handleSubmit() {
   }
 }
 
+/** 删除成果：不可恢复，需二次确认；已认定成果对负责人不可见删除入口 */
 async function handleDelete(row: any) {
   try {
     await ElMessageBox.confirm(`确认删除成果「${row.title}」？`, '提示', { type: 'warning' })
@@ -545,11 +653,16 @@ async function handleDelete(row: any) {
   }
 }
 
+/** 打开成果详情弹窗：直接使用行数据，不再额外请求详情接口 */
 function openDetail(row: any) {
   detailRow.value = row
   detailDialog.value = true
 }
 
+/**
+ * 撤销成果认定：撤销后回到「待认定」，需重新走认定流程。
+ * 失败处理：取消确认直接返回；接口异常由全局拦截器提示。
+ */
 async function handleRevoke(row: any) {
   try {
     await ElMessageBox.confirm(
@@ -568,6 +681,7 @@ async function handleRevoke(row: any) {
   }
 }
 
+/** 打开认定弹窗：默认「通过」且清空意见，避免沿用上一条成果的认定结论 */
 function openReview(row: any) {
   reviewTarget.value = row
   reviewForm.result = 1
@@ -575,6 +689,12 @@ function openReview(row: any) {
   reviewDialog.value = true
 }
 
+/**
+ * 提交认定结果。
+ * 说明：不通过必须填写意见，便于负责人修改后重新提交；
+ * 通过时意见可选，提交成功后关闭弹窗并刷新列表。
+ * 失败处理：意见缺失仅提示；接口异常由全局拦截器提示。
+ */
 async function handleReviewSubmit() {
   if (!reviewTarget.value) return
   if (reviewForm.result === 2 && !reviewForm.comment.trim()) {
@@ -597,6 +717,7 @@ async function handleReviewSubmit() {
   }
 }
 
+// 项目切换时重新加载成果；immediate 保证首次挂载也能拉到数据
 watch(() => props.project?.id, (id) => {
   if (id) loadAchievements()
 }, { immediate: true })

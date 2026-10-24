@@ -64,10 +64,18 @@ export function normalizePassword(raw: unknown): string {
  *  手机号：严格模式，必须去空白后是纯数字+长度11+pattern通过
  * ============================================================ */
 
+/**
+ * 判断密码是否为严格 6 位纯数字。
+ * @returns 合法返回 true；空字符串、含字母/符号、位数不足均返回 false
+ */
 export function isValidPassword(v: unknown): boolean {
   return REGEX_PASSWORD_6_DIGITS.test(normalizePassword(v))
 }
 
+/**
+ * 判断手机号是否合法。
+ * @returns 空值视为合法（可选字段）；非空时必须是去除空白后的 11 位纯数字且符合大陆号段
+ */
 export function isValidPhone(v: unknown): boolean {
   const s = normalizePhone(v)
   if (s === '') return true  // 空手机号在可选字段合法
@@ -76,6 +84,10 @@ export function isValidPhone(v: unknown): boolean {
   return REGEX_PHONE_CN.test(s)
 }
 
+/**
+ * 判断邮箱是否合法。
+ * @returns 空值视为合法（可选字段）；非空时按简化 RFC 正则校验
+ */
 export function isValidEmail(v: unknown): boolean {
   // 空邮箱在可选字段是合法的，这里只判断"非空时是否合法"
   const e = normalizeEmail(v)
@@ -89,10 +101,15 @@ export function isValidEmail(v: unknown): boolean {
  *     optional=true 时，空值直接放行（cb()）；非空再校验
  * ============================================================ */
 
+/** Element Plus 传入的 rule 对象中本项目实际用到的字段，仅作类型收敛 */
 type RuleLike = { required?: boolean; message?: string; field?: string }
+/** 校验回调：传 Error 表示失败，空调用表示通过 */
 type Callback = (e?: Error) => void
 
-/** 必填通用：空字符串/undefined/null 拦截 */
+/**
+ * 生成必填校验器：空字符串/undefined/null 拦截，白名单之外的纯空白也视为空。
+ * @param label 字段中文名，用于拼接提示语“请输入xx”
+ */
 export function requiredValidator(label: string) {
   return (_rule: RuleLike, value: unknown, cb: Callback) => {
     const v = value == null ? '' : String(value).trim()
@@ -156,7 +173,12 @@ export function emailValidator(required = false, label = '邮箱') {
   }
 }
 
-/** 两次密码一致校验。配合 changePassword 场景 */
+/**
+ * 生成“两次密码一致”校验器，配合修改密码场景使用。
+ * @param getNewPwd 惰性读取新密码的函数，避免把旧值闭包进校验器
+ * @param label 确认密码字段的展示名
+ * 边界：确认密码为空时优先提示“请再次输入”，而不是提示不一致。
+ */
 export function confirmPasswordValidator(getNewPwd: () => string, label = '确认密码') {
   return (_rule: RuleLike, value: unknown, cb: Callback) => {
     const v = normalizePassword(value)

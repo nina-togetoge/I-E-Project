@@ -1,25 +1,64 @@
+/**
+ * 项目申报模板静态配置
+ *
+ * 模块职责：
+ *  - 为“新建项目”页提供一键套用的申报书骨架，覆盖大创、挑战杯、互联网+ 三类常见赛事。
+ *  - 表单页读取模板后把 summary / innovation_points / expected_results 等字段填充到对应富文本编辑器，
+ *    预算列表直接映射到经费明细表格；用户可在此基础上修改后提交。
+ *
+ * 使用方：ProjectCreate 页面（模板选择卡片）、需要预填申报内容的表单组件。
+ * 关键约定：
+ *  - id 为前端唯一标识，仅用于选中态与埋点，不是后端数据库主键；
+ *  - category / level 使用数字编码，category_name / level_name 是展示文案，两者需同步维护；
+ *  - summary、innovation_points、expected_results 为 HTML 片段，填充后需经 richText 安全渲染。
+ */
+
+/** 预算明细项：与项目经费表的字段命名保持一致，便于直接映射提交 */
 export interface ProjectBudgetItem {
+  /** 预算科目名称，如材料费、差旅费、劳务费 */
   budget_item: string
+  /** 预算金额（元） */
   budget_amount: number
+  /** 科目说明，解释该笔经费的用途 */
   remark?: string
 }
 
+/** 单个项目申报模板的结构 */
 export interface ProjectTemplate {
+  /** 模板唯一标识（前端用） */
   id: string
+  /** 模板名称，展示在模板选择卡片上 */
   name: string
+  /** 项目类别编码，1 创新训练 / 2 创业训练 / 3 创业实践 */
   category: number
+  /** 项目类别展示名，与 category 对应 */
   category_name: string
+  /** 项目级别编码，模板中按 2 校级、4 国家级配置 */
   level: number
+  /** 项目级别展示名，与 level 对应 */
   level_name: string
+  /** 项目简介（HTML），预填到申报书“项目简介”栏 */
   summary: string
+  /** 创新点（HTML），预填到“项目创新点”栏 */
   innovation_points: string
+  /** 预期成果（HTML），预填到“预期成果”栏 */
   expected_results: string
+  /** 预算明细列表，预填到经费预算表格 */
   budgets: ProjectBudgetItem[]
+  /** 模板适用场景说明，帮助用户选择 */
   description: string
+  /** 检索标签，用于模板筛选与搜索 */
   tags: string[]
 }
 
+/**
+ * 内置项目模板列表，按赛事场景划分。
+ * 所有正文均为占位式示例（含 XX），目的是给出结构而非可直接提交的内容。
+ */
 export const projectTemplates: ProjectTemplate[] = [
+  // 大创模板：创新训练类，正文按“研究背景 + 创新点 + 成果 + 预算”组织
+  // 适合以技术研发、论文专利为主要产出的小组
+  // 预算按材料费/差旅费/劳务费三项示例，可按实际科目增删
   {
     id: 'dachuang',
     name: '国家级大学生创新创业训练计划模板',
@@ -38,6 +77,7 @@ export const projectTemplates: ProjectTemplate[] = [
       '<p>2. <b>知识产权</b>：申请软件著作权1-2项，形成技术文档1套。</p>' +
       '<p>3. <b>系统原型</b>：完成可演示的原型系统1套，包含XX核心功能模块，通过用户验收测试。</p>' +
       '<p>4. <b>竞赛获奖</b>：争取在XX创新创业赛事中获得省级以上奖项。</p>',
+    // 示例预算：材料、差旅、劳务三类，合计 1.2 万元，可按项目实际调整
     budgets: [
       { budget_item: '材料费', budget_amount: 5000, remark: '实验耗材、元器件采购' },
       { budget_item: '差旅费', budget_amount: 3000, remark: '调研、参加学术会议差旅' },
@@ -46,6 +86,8 @@ export const projectTemplates: ProjectTemplate[] = [
     description: '适用于国家级、省级大创项目申报，涵盖创新训练类项目完整申报结构。',
     tags: ['大创', '创新训练', '国家级', '省级'],
   },
+  // 挑战杯偏向创业计划，正文按“公司介绍 + 商业模式 + 竞赛目标”组织
+  // 预算侧重原型制作与市场调研，适合已有初步产品形态的团队
   {
     id: 'tiaozhanbei',
     name: '挑战杯创业计划竞赛模板',
@@ -64,6 +106,7 @@ export const projectTemplates: ProjectTemplate[] = [
       '<p>2. <b>原型产品</b>：完成MVP最小可行产品开发，获得首批XX名种子用户验证。</p>' +
       '<p>3. <b>竞赛目标</b>：冲击挑战杯省赛金奖，争取进入国赛。</p>' +
       '<p>4. <b>创业落地</b>：赛后注册成立公司，对接天使轮融资，启动正式商业化运营。</p>',
+    // 创业类预算：更侧重原型制作、市场调研与核心团队激励
     budgets: [
       { budget_item: '材料费', budget_amount: 3000, remark: '产品原型制作、样品打样' },
       { budget_item: '差旅费', budget_amount: 4000, remark: '市场调研、用户访谈差旅' },
@@ -72,6 +115,8 @@ export const projectTemplates: ProjectTemplate[] = [
     description: '适用于挑战杯、创青春等创业计划类竞赛申报。',
     tags: ['挑战杯', '创业计划', '商业计划书', '创业实践'],
   },
+  // 互联网+ 模板强调平台模式、技术驱动与社会价值，预算包含云服务采购
+  // 适合平台型、可快速验证用户增长与商业闭环的项目
   {
     id: 'hulianwangjia',
     name: '互联网+大学生创新创业大赛模板',
@@ -90,6 +135,7 @@ export const projectTemplates: ProjectTemplate[] = [
       '<p>2. <b>用户增长</b>：6个月内实现注册用户XX人，月活用户XX人，付费转化率XX%。</p>' +
       '<p>3. <b>赛事成绩</b>：冲击互联网+省赛金奖，力争国赛奖牌。</p>' +
       '<p>4. <b>收入验证</b>：完成XX万元营收验证，实现正向现金流。</p>',
+    // 平台型项目预算：材料费实际用于服务器/云服务/域名等基础设施
     budgets: [
       { budget_item: '材料费', budget_amount: 4000, remark: '服务器、云服务、域名采购' },
       { budget_item: '差旅费', budget_amount: 3500, remark: '行业调研、供应链对接' },

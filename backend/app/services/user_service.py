@@ -1,7 +1,22 @@
-"""
-用户管理模块 业务逻辑层(Service)
-封装用户CRUD业务规则、认证逻辑、数据权限判断，调用CRUD层完成数据库操作
-"""
+# ============================================================================
+# 用户管理模块 业务逻辑层(Service)
+# ----------------------------------------------------------------------------
+# 业务功能：登录认证（账号/手机/邮箱 + 双 Token）、Token 刷新与吊销、用户增删改查、
+#           批量导入、学院维护、操作日志查询，并在各入口落实角色与学院数据权限。
+# 核心表：
+#   sys_user         用户（账号、密码哈希、角色、学院、状态、登录信息、软删除）
+#   sys_college      学院（编码、名称、启用状态）
+#   sys_operation_log 操作日志（模块、操作类型、用户、学院、结果）
+# 上游路由：app/api/v1/auth.py、user.py、college.py、log.py
+# 下游依赖：app.crud.user（数据访问）、app.core.security（密码/Token/角色判断）、
+#           app.core.deps（分页与数据范围）、app.utils.redis_cache（Token 黑名单、学院缓存）。
+# 关键约束：
+#   1) 角色分级：ADMIN(超管) > 学院管理员 > 教师 > 学生/专家；学院管理员仅限本院；
+#   2) 非管理员不得查看超管资料；教师/专家跨院访问一律拒绝；
+#   3) 学生端用户查询仅允许“学生/教师”白名单且返回脱敏字段，禁止拉取全校 PII；
+#   4) 用户删除为软删除；登录/刷新令牌采用 Redis 黑名单，登出与轮换后立即失效；
+#   5) 密码只存哈希，任何明文密码字段不得落库或返回。
+# ============================================================================
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 
@@ -31,11 +46,25 @@ from app.utils.redis_cache import TokenBlacklist, redis_client, CacheKeys
 
 
 class AuthService:
-    """认证相关业务服务"""
+    """认证相关业务服务：登录、刷新令牌、登出、用户信息组装。"""
 
     @staticmethod
     def login(db: Session, req: LoginRequest, client_ip: str) -> LoginResponse:
-        """用户登录：校验账号密码 -> 生成双Token -> 更新登录信息"""
+        """用户登录：校验账号密码 -> 生成双 Token -> 更新登录信息。
+
+        参数：
+            db: 数据库会话。
+            req: 登录请求（username 可填账号/手机号/邮箱，password 明文）。
+            client_ip: 客户端 IP，用于记录最近登录来源。
+        返回：
+            LoginResponse：access_token、refresh_token、有效期（秒）与用户信息。
+        异常：
+            用户不存在 / 密码错误 / 账号被禁用 → AuthException。
+        副作用：
+            更新最后登录 IP 与时间后提交，并刷新 ORM 对象。
+        注意：
+            账号不存在与密码错误返回同一提示，避免账号枚举；密码使用哈希校验。
+        """
         # 1. 查找用户（账号 / 手机号 / 邮箱 均可登录）
         user = db.query(SysUser).filter(
             SysUser.is_deleted == 0,
@@ -73,7 +102,21 @@ class AuthService:
 
     @staticmethod
     def refresh_token(db: Session, req: RefreshTokenRequest) -> LoginResponse:
-        """使用RefreshToken换取新的AccessToken"""
+        """使用 RefreshToken 换取新的 AccessToken，并轮换 RefreshToken。
+
+        参数：
+            db: 数据库会话。
+            req: 包含 refresh_token 的请求。
+        返回：
+            新的双 Token 与用户信息。
+        异常：
+            令牌类型错误 / 已被吊销 / 载荷缺失 / 用户不存在或被禁用 → AuthException。
+        副作用：
+            将旧 RefreshToken 的 jti 加入 Redis 黑名单，剩余有效期过后自动清理。
+        注意：
+            刷新属于“令牌轮换”：旧 refresh 立即作废，防止泄露后被重放；
+            黑名单依赖 Redis，若 Redis 不可用则由底层缓存实现抛出异常（不降级放行）。
+        """
         payload = decode_token(req.refresh_token)
         if payload.get("type") != "refresh":
             raise AuthException(message="刷新令牌类型错误")
@@ -105,6 +148,16 @@ class AuthService:
     def logout(current_user: SysUser, access_token_raw: str, refresh_token_raw: Optional[str] = None) -> None:
         """
         [P1-8] 登出：将当前 access & refresh token 加入 Redis 黑名单
+
+        参数：
+            current_user: 当前登录用户（仅用于语义标识，黑名单按令牌 jti 处理）。
+            access_token_raw: 请求携带的 AccessToken 原文。
+            refresh_token_raw: 可选的 RefreshToken 原文，前端主动登出时应一并传入。
+        返回：无。
+        副作用：向 Redis 写入两条带剩余 TTL 的黑名单记录。
+        注意：
+            令牌解析失败（如已过期）直接忽略，登出接口保持幂等；
+            AccessToken 不落库，只依赖黑名单实现“主动失效”。
         """
         # 1. Access Token 吊销
         try:
@@ -126,7 +179,14 @@ class AuthService:
 
     @staticmethod
     def _build_user_info(user: SysUser) -> UserInfo:
-        """构建UserInfo响应，含角色名、学院名（通过关联对象）"""
+        """构建 UserInfo 响应，含角色中文名、学院名与学校名。
+
+        参数：user 用户 ORM 对象。
+        返回：UserInfo 模型。
+        注意：
+            角色名来自 ROLE_NAME_MAP；未知角色保留原始值便于排查；
+            学院名通过 ORM 关联对象读取，调用方需保证会话仍打开。
+        """
         from app.core.config import settings
         info = UserInfo.model_validate(user, from_attributes=True)
         info.role_name = ROLE_NAME_MAP.get(user.role, f"未知({user.role})")
@@ -138,7 +198,12 @@ class AuthService:
 
     @staticmethod
     def _build_safe_list_item(user: SysUser) -> UserSafeListItem:
-        """学生端用户列表：仅返回非敏感字段（用于选人，隐藏邮箱/手机/状态等）"""
+        """学生端用户列表：仅返回非敏感字段（用于选团队成员/指导教师）。
+
+        参数：user 用户 ORM 对象。
+        返回：UserSafeListItem，隐藏邮箱/手机/状态等 PII。
+        注意：学院关系读取失败时静默忽略，保证选人列表不因脏数据报错。
+        """
         item = UserSafeListItem.model_validate(user, from_attributes=True)
         item.role_name = ROLE_NAME_MAP.get(user.role, f"未知({user.role})")
         try:
@@ -150,14 +215,26 @@ class AuthService:
 
 
 class UserService:
-    """用户管理业务服务"""
+    """用户管理业务服务。
+
+    负责用户 CRUD、批量导入与状态变更，所有写方法内部提交事务。
+    权限模型分层执行：超管全校、学院管理员本院、教师本院、本人仅自助字段。
+    """
 
     # ====================================================================
     # 管理员 CRUD
     # ====================================================================
     @staticmethod
     def get_detail(db: Session, user_id: int, operator: SysUser) -> UserInfo:
-        """查询单个用户详情，含行级权限校验"""
+        """查询单个用户详情，含行级权限校验。
+
+        参数：db 会话、目标用户 id、当前操作人。
+        返回：UserInfo（含角色/学院中文名）。
+        权限：
+            管理员可看全部；教师/专家仅可看同院且非超管账号；学生仅可看自己。
+        异常：用户不存在 → ResourceNotFoundException；越权 → PermissionDeniedException。
+        注意：学院为空时一律拒绝，避免“空学院”被当作同院而泄漏资料。
+        """
         user = UserCRUD.get_by_id(db, user_id)
         if not user:
             raise ResourceNotFoundException(message="用户不存在")
@@ -178,7 +255,22 @@ class UserService:
     @staticmethod
     def paginate(db: Session, pager: PaginationParams, params: UserQueryParams,
                  data_scope: DataScope) -> Tuple[List, int]:
-        """分页查询用户列表，自动按角色注入数据权限 & 学生端脱敏返回"""
+        """分页查询用户列表，自动注入数据权限并按调用方角色脱敏。
+
+        参数：
+            db: 数据库会话。
+            pager: 分页/排序参数。
+            params: 查询条件（关键词、角色、学院、状态）。
+            data_scope: 当前用户的数据范围（角色、学院、可见范围）。
+        返回：
+            (用户列表, 总条数)；学生端返回 UserSafeListItem，其余返回 UserListItem。
+        权限：
+            学生仅可查学生/教师白名单且跨院可选人；专家一律拒绝；
+            未绑定学院的教师拒绝，避免数据范围退化为全校。
+        注意：
+            学生端构造一个“全开放但带角色白名单”的临时 DataScope，
+            只用于控制查询范围，返回字段仍做 PII 脱敏。
+        """
         is_student_caller = (data_scope.role == RoleEnum.STUDENT)
 
         # ----------------------------------------------------------------
@@ -279,7 +371,16 @@ class UserService:
 
     @staticmethod
     def batch_create(db: Session, users: List[Dict[str, Any]], operator: SysUser) -> ImportResultResponse:
-        """批量创建用户（Excel导入调用）"""
+        """批量创建用户（Excel 导入调用），逐行容错。
+
+        参数：db 会话、用户字典列表（已解析的表格行）、当前操作人。
+        返回：ImportResultResponse（总数/成功数/失败数/逐行错误信息）。
+        权限：每行复用 UserService.create 的分级权限校验，越权行计入失败。
+        副作用：成功行各自提交；失败行回滚后继续处理下一行。
+        注意：
+            数据库异常会使 session 失效，因此每行失败都必须 rollback，
+            否则后续行无法继续执行；最终再整体 commit 兜底。
+        """
         total = len(users)
         success = 0
         errors: List[str] = []
@@ -301,6 +402,16 @@ class UserService:
 
     @staticmethod
     def update(db: Session, user_id: int, req: UserUpdate, operator: SysUser) -> UserInfo:
+        """更新用户资料（按传入字段部分更新，含分级权限）。
+
+        参数：db 会话、目标用户 id、更新表单、当前操作人。
+        返回：更新后的 UserInfo。
+        权限：
+            超管可改任意字段；学院管理员仅可改本院非超管用户，且不得改角色/密码/学院；
+            普通用户仅可改本人非敏感资料，密码必须走 update_profile 校验原密码。
+        异常：用户不存在 / 越权 → 对应业务异常。
+        注意：权限分支通过后统一使用 exclude_unset 更新，未传字段保持不变。
+        """
         user = UserCRUD.get_by_id(db, user_id)
         if not user:
             raise ResourceNotFoundException(message="用户不存在")
@@ -339,7 +450,18 @@ class UserService:
 
     @staticmethod
     def update_profile(db: Session, current_user: SysUser, req: UserProfileUpdate) -> UserInfo:
-        """用户自助修改个人资料（含密码修改）"""
+        """用户自助修改个人资料（含修改密码）。
+
+        参数：db 会话、当前用户、资料表单（可含 old_password/new_password）。
+        返回：更新后的 UserInfo。
+        异常：原密码错误 → ParamValidateException。
+        副作用：
+            1) 修改密码时写入新的 password_hash；
+            2) 同时把 force_change_pwd 置 0，表示已完成首次强制改密。
+        注意：
+            密码相关字段从 update_data 中排除，避免把明文/旧密码写入模型；
+            不带 new_password 时仅更新普通资料。
+        """
         update_data = req.model_dump(exclude_unset=True, exclude={"old_password", "new_password"})
         # 处理密码修改
         if req.new_password:
@@ -355,7 +477,14 @@ class UserService:
 
     @staticmethod
     def delete(db: Session, user_id: int, operator: SysUser) -> None:
-        """软删除用户"""
+        """软删除用户。
+
+        参数：db 会话、目标用户 id、当前操作人。
+        返回：无。
+        权限：超管可删任意用户（不能删自己）；学院管理员仅可删本院非超管用户。
+        异常：删除自己 / 越权 / 用户不存在 → 对应业务异常。
+        注意：UserCRUD.soft_delete 返回受影响行数，为 0 表示目标不存在。
+        """
         if operator.id == user_id:
             raise ParamValidateException(message="不能删除自己的账号")
         # ---- 分级权限 ----
@@ -381,6 +510,15 @@ class UserService:
 
     @staticmethod
     def batch_update_status(db: Session, user_ids: List[int], status: int, operator: SysUser) -> int:
+        """批量启用/禁用用户。
+
+        参数：db 会话、目标用户 id 列表、目标状态（1=启用，0=禁用）、当前操作人。
+        返回：实际更新的行数。
+        权限：超管全校；学院管理员仅限本院且不能包含超管账号。
+        注意：
+            学院管理员场景先逐条校验，任一目标越权则整批拒绝（事务内不会更新），
+            避免部分成功造成权限边界不一致。
+        """
         if is_super_admin(operator):
             pass  # 全校无限制
         elif is_college_admin(operator):
@@ -399,15 +537,32 @@ class UserService:
 
 
 class CollegeService:
-    """学院管理业务服务"""
+    """学院管理业务服务。
+
+    学院属于组织架构基础数据，仅超级管理员可增改；变更后清 Redis 缓存，
+    避免公共接口 /api/common/colleges 返回旧数据。
+    """
 
     @staticmethod
     def list_all(db: Session, include_disabled: bool = False) -> List[CollegeResponse]:
+        """查询学院列表。
+
+        参数：db 会话、include_disabled 是否包含已禁用学院。
+        返回：CollegeResponse 列表，供下拉选择与筛选使用。
+        """
         colleges = CollegeCRUD.list_all(db, include_disabled=include_disabled)
         return [CollegeResponse.model_validate(c) for c in colleges]
 
     @staticmethod
     def create(db: Session, req: CollegeCreate, operator: SysUser) -> CollegeResponse:
+        """新增学院。
+
+        参数：db 会话、创建表单、当前操作人。
+        返回：新建的学院响应。
+        权限：仅超级管理员（学院管理员不得管理组织架构）。
+        异常：非超管 → PermissionDeniedException；编码重复 → DataConflictException。
+        副作用：提交事务并清除学院列表缓存。
+        """
         # 仅真超级管理员可新增学院（学院管理员不得跨院管理组织架构）
         if not is_super_admin(operator):
             raise PermissionDeniedException(message="仅超级管理员可新增学院")
@@ -421,6 +576,14 @@ class CollegeService:
 
     @staticmethod
     def update(db: Session, college_id: int, req: CollegeUpdate, operator: SysUser) -> CollegeResponse:
+        """修改学院信息。
+
+        参数：db 会话、学院 id、更新表单、当前操作人。
+        返回：更新后的学院响应。
+        权限：仅超级管理员。
+        异常：非超管 / 学院不存在 → 对应业务异常。
+        副作用：提交事务并清除学院列表缓存。
+        """
         # 仅真超级管理员可修改学院；学院管理员不得修改本院/他院组织架构
         if not is_super_admin(operator):
             raise PermissionDeniedException(message="仅超级管理员可修改学院")
@@ -435,7 +598,10 @@ class CollegeService:
 
     @staticmethod
     def _clear_cache() -> None:
-        """学院变动后清除缓存，避免 /api/common/colleges 返回陈旧数据"""
+        """学院变动后清除缓存，避免 /api/common/colleges 返回陈旧数据。
+
+        注意：Redis 不可用时静默忽略，组织架构写操作不能因缓存问题失败。
+        """
         try:
             redis_client.delete(CacheKeys.COLLEGE_LIST)
         except Exception:
@@ -443,11 +609,26 @@ class CollegeService:
 
 
 class OperationLogService:
-    """操作日志业务服务"""
+    """操作日志业务服务。"""
 
     @staticmethod
     def paginate(db: Session, pager: PaginationParams, params: OperationLogQueryParams,
                  operator: SysUser):
+        """分页查询操作日志。
+
+        参数：
+            db: 数据库会话。
+            pager: 分页与排序参数。
+            params: 日志筛选条件（关键词/模块/操作类型/用户/时间/角色/状态）。
+            operator: 当前操作人，用于确定数据范围。
+        返回：
+            (日志列表, 总条数)。
+        权限：
+            仅管理员可查看；超管看全部，学院管理员仅看本院用户日志。
+        注意：
+            college_id 为 None 表示不过滤学院（超管）；学院管理员无学院时
+            会退化为 None，存在越权风险，故前置已要求其为 ADMIN 角色。
+        """
         if operator.role != RoleEnum.ADMIN:
             raise PermissionDeniedException(message="仅管理员可查看操作日志")
         # 数据范围：真超级管理员看全部日志；学院管理员仅看本院用户日志

@@ -1,7 +1,17 @@
 /**
  * 系统公告/通知状态管理（Pinia）
- * 管理顶栏通知列表：管理员公告 + 站内业务通知（审核结果、成果认定等）
- * 公告已读状态存 localStorage；站内通知已读状态由后端维护
+ *
+ * 管理顶栏通知列表：管理员公告 + 站内业务通知（审核结果、成果认定、经费审批等）。
+ * 生命周期：NoticeBell 挂载时调用 fetchNotices 拉取一次，不做轮询；
+ * 用户点击通知时 markRead，点击「全部已读」时 markAllRead，页面刷新后重新拉取。
+ *
+ * 已读状态的两种持久化方式：
+ *   - 公告：后端无 per-user 已读表，前端把公告 ID 集合存 localStorage
+ *     （key=system_notices_read），仅在本机生效；
+ *   - 站内通知：is_read/read_time 由后端维护，调用标记已读接口后即时生效。
+ *
+ * 合并策略：公告取已发布(status=1)前 50 条，通知取前 50 条，
+ * 统一映射为 Notice 后按 created_at 倒序；任一侧失败不阻塞另一侧（Promise.allSettled）。
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
@@ -12,22 +22,39 @@ import {
   markAllNotificationsRead,
 } from '@/api/notification'
 
+/** 通知视觉类型：info 普通 / warning 警告 / success 成功，决定圆点与标签颜色 */
 export type NoticeType = 'info' | 'warning' | 'success'
+/** 通知优先级：high 高 / medium 中 / low 低，顶栏标签文案与颜色使用 */
 export type NoticePriority = 'high' | 'medium' | 'low'
+/** 通知来源：announcement 管理员公告 / notification 站内业务通知，决定已读实现方式 */
 export type NoticeSource = 'announcement' | 'notification'
 
+/**
+ * 顶栏统一通知视图：由公告与站内通知映射而来。
+ * 注意 id 在不同 source 下可能重复，列表 key 必须用 noticeKey(source-id)。
+ */
 export interface Notice {
+  /** 来源表主键 */
   id: number
+  /** 来源类型，决定已读状态存 localStorage 还是调后端 */
   source: NoticeSource
+  /** 标题 */
   title: string
+  /** 纯文本正文（公告已剥离 HTML） */
   content: string
+  /** 视觉类型，映射自公告类型或通知 level */
   type: NoticeType
+  /** 优先级，映射自公告 priority 或通知 level */
   priority: NoticePriority
+  /** 发布时间/通知创建时间，用于倒序与相对时间展示 */
   created_at: string
+  /** 当前用户是否已读 */
   isRead: boolean
+  /** 点击跳转路由，公告通常为空 */
   link?: string | null
 }
 
+/** localStorage 中公告已读 ID 集合的键名（仅本机生效） */
 const READ_STORAGE_KEY = 'system_notices_read'
 
 /** 公告类型 → 通知类型映射 */
@@ -98,17 +125,31 @@ function saveReadIds(ids: Set<number>) {
 }
 
 export const useNoticeStore = defineStore('notice', () => {
+  /** 合并后的通知列表，按时间倒序；NoticeBell 列表直接渲染 */
   const notices = ref<Notice[]>([])
+  /** 本机已读公告 ID 集合，初始化时从 localStorage 恢复 */
   const readIds = ref<Set<number>>(loadReadIds())
+  /** 拉取中标记，控制顶栏「暂无通知/加载中」展示 */
   const loading = ref(false)
 
+  /** 未读数：由 notices 派生，任一条 isRead=false 即计数；驱动铃铛角标 */
   const unreadCount = computed(() => notices.value.filter((n) => !n.isRead).length)
 
+  /**
+   * 生成列表唯一键：source + id，避免公告与通知 ID 相同时 key 冲突。
+   * 供 NoticeBell 的 v-for key 与 markRead 查找使用。
+   */
   function noticeKey(n: Notice): string {
     return `${n.source}-${n.id}`
   }
 
-  /** 拉取公告 + 站内通知，合并后按时间倒序 */
+  /**
+   * 拉取公告 + 站内通知并合并
+   * 请求：getAnnouncementList(status=1, 50) 与 getNotificationList(50) 并行，
+   * 用 allSettled 保证单侧失败时另一侧仍可展示；公告正文去 HTML 后放入 content。
+   * 结果按 created_at 倒序写回 notices，loading 在结束时复位。
+   * 调用方：NoticeBell 的 onMounted。
+   */
   async function fetchNotices() {
     loading.value = true
     const results = await Promise.allSettled([
@@ -160,6 +201,13 @@ export const useNoticeStore = defineStore('notice', () => {
     loading.value = false
   }
 
+  /**
+   * 标记单条已读
+   * @param target 通知对象或其 source-id 键（NoticeBell 点击时传对象）
+   * 公告：写入 readIds 并持久化 localStorage；
+   * 站内通知：调用 POST /api/notifications/{id}/read，失败回滚 isRead 等下次刷新。
+   * 已读的记录直接返回，避免重复请求。
+   */
   async function markRead(target: Notice | string) {
     const n = typeof target === 'string'
       ? notices.value.find((x) => noticeKey(x) === target)
@@ -179,6 +227,12 @@ export const useNoticeStore = defineStore('notice', () => {
     }
   }
 
+  /**
+   * 全部标记已读
+   * 本地先把公告 ID 写入 readIds/localStorage，并即时更新所有 isRead（乐观更新）；
+   * 若含站内通知，再调用 POST /api/notifications/read-all 同步后端，失败静默忽略。
+   * 调用方：NoticeBell 顶部「全部已读」；无未读时直接返回，不发请求。
+   */
   async function markAllRead() {
     const unread = notices.value.filter((n) => !n.isRead)
     if (unread.length === 0) return

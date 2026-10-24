@@ -1,10 +1,19 @@
 <!--
-  归档项目库
-  历史项目检索、详情查看、成果预览
-  F22 新增：高级搜索（类别/级别/获奖/经费/排序）+ 筛选汇总 + 展开收起
+  ==== 归档项目库 ====
+
+  页面职责：检索、查看历史已归档项目（结题完成），支持基础筛选与高级筛选
+            （类别 / 级别 / 获奖 / 经费区间 / 排序）、筛选结果汇总与展开收起。
+  角色与路由：meta.roles 为 [1,2,3,4]，各角色均可访问；
+            路由 /admin/archive（name: ProjectArchive）。
+  调用接口：GET /api/projects（status=9 表示已结题归档，page_size=200 循环拉取全部页码）
+  关键交互：后端单页上限 200，且高级筛选与排序需要在前端完成，因此一次性取回全部
+            归档数据后本地筛选、排序、分页；翻页只切换显示切片，不再发起请求；
+            执行查询后展示筛选条件汇总，帮助用户确认当前结果口径。
+  说明：项目级别 project_level 与比赛级别不同，取值为 1 院级 / 2 校级 / 3 省级 / 4 国家级。
 -->
 <template>
   <div class="page-container">
+    <!-- 区块：基础筛选区（关键词 / 年份，以及高级筛选展开开关） -->
     <el-card shadow="never" class="search-card">
       <el-form :inline="true" :model="searchForm">
         <el-form-item label="关键词">
@@ -26,6 +35,7 @@
         </el-form-item>
       </el-form>
 
+      <!-- 区块：高级筛选区（类别 / 级别 / 获奖 / 经费区间 / 排序，展开后才显示） -->
       <el-form v-show="showAdvanced" :inline="true" :model="searchForm" style="margin-top: 12px; border-top: 1px solid #ebeef5; padding-top: 12px;">
         <el-form-item label="项目类别">
           <el-select v-model="searchForm.project_type" placeholder="全部类别" clearable style="width: 140px">
@@ -72,6 +82,7 @@
       </el-form>
     </el-card>
 
+    <!-- 区块：筛选结果汇总（仅在执行查询后展示，包含条件与命中条数） -->
     <el-alert
       v-if="searched && filterSummary"
       type="info"
@@ -82,6 +93,7 @@
       <span v-html="filterSummary"></span>
     </el-alert>
 
+    <!-- 区块：归档列表（通用分页表格，插槽自定义类别/级别/获奖标签与操作列） -->
     <PaginationTable
       :data="displayData"
       :columns="columns"
@@ -96,9 +108,11 @@
         <el-tag size="small" :type="levelTagType(row.project_level)">{{ row.project_level_name || projectLevelLabel(row.project_level) }}</el-tag>
       </template>
       <template #has_award="{ row }">
+        <!-- 获奖判定：成果数 award_count 或兼容字段 has_award 大于 0 即视为获奖 -->
         <el-tag v-if="row.award_count > 0 || row.has_award === 1" type="success" size="small">🏆 获奖</el-tag>
         <el-tag v-else type="info" size="small">未获奖</el-tag>
       </template>
+      <!-- 操作列仅提供查看入口，详情由全局 projectDetailStore 统一打开 -->
       <template #actions="{ row }">
         <el-button link type="primary" size="small" @click="projectDetailStore.open(row.id)">查看</el-button>
       </template>
@@ -110,6 +124,7 @@
 </template>
 
 <script setup lang="ts">
+// ==================== 导入区 ====================
 import { ref, reactive, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search, Refresh } from '@element-plus/icons-vue'
@@ -120,12 +135,21 @@ import { getProjectList } from '@/api/project'
 import { formatDateTime } from '@/utils/format'
 import { useProjectDetailStore } from '@/store/projectDetail'
 
+// ==================== 依赖与路由 ====================
+// router 当前未直接使用（项目详情统一通过 projectDetailStore 打开），保留以便后续扩展跳转
 const router = useRouter()
+// 全局项目详情抽屉：open(id) 负责按 id 加载并展示归档项目详情
 const projectDetailStore = useProjectDetailStore()
 
+// ==================== 状态与查询条件 ====================
+// 高级筛选面板是否展开；默认收起，保持首屏简洁
 const showAdvanced = ref(false)
+// 是否已执行过查询：为 true 才启用前端筛选、排序与筛选汇总；重置后回到 false
 const searched = ref(false)
 
+// 筛选条件集合（reactive 便于直接绑定表单）：
+// keyword 关键词、year 年份、project_type 类别、project_level 级别、
+// has_award 是否获奖（1 获奖 / 0 未获奖）、budget_range 经费区间（单位万元）、sort_by 排序键
 const searchForm = reactive({
   keyword: '',
   year: undefined as number | undefined,
@@ -136,15 +160,31 @@ const searchForm = reactive({
   sort_by: undefined as string | undefined,
 })
 
+// ==================== 数据与分页状态 ====================
+// 一次拉取的全部归档项目（后端 status=9），作为前端筛选与排序的数据源
 const rawData = ref<any[]>([])
+// 归档项目总数，取自实际拉取条数，因为后续分页完全在前端完成
 const total = ref(0)
+// 列表加载态：控制通用表格 v-loading
 const loading = ref(false)
+// 当前页码（本地分页）
 const page = ref(1)
+// 每页条数（本地分页），由 PaginationTable 翻页事件更新
 const pageSize = ref(10)
 
+// ==================== 年份选项（计算属性） ====================
+// 页面生命周期内固定不变的当前年份，作为候选年份的基准
 const currentYear = new Date().getFullYear()
+/**
+ * 年份下拉候选：当前年份向前 5 年。
+ * 依赖模块级 currentYear（打开页面后不变），首次求值后由 computed 缓存，
+ * 避免每次渲染都重新构造数组。
+ */
 const years = computed(() => Array.from({ length: 5 }, (_, i) => currentYear - i))
 
+// ==================== 表格列配置 ====================
+// 列定义交给 PaginationTable 渲染；slot 列由下方同名插槽自定义标签，
+// formatter 列负责金额与时间格式化（预算保留两位小数，created_at 作为结题时间展示）
 const columns: TableColumn[] = [
   { prop: 'project_name', label: '项目名称', minWidth: 200 },
   { prop: 'project_type', label: '类别', slot: 'project_type', width: 100 },
@@ -157,18 +197,27 @@ const columns: TableColumn[] = [
   { prop: 'created_at', label: '结题时间', minWidth: 160, formatter: (val: string) => formatDateTime(val) },
 ]
 
+// ==================== 枚举展示辅助函数 ====================
+/** 项目类别：1 创新训练 / 2 创业训练 / 3 创业实践；未知值返回 '-' */
 function projectTypeLabel(t: number): string {
   return { 1: '创新训练', 2: '创业训练', 3: '创业实践' }[t] || '-'
 }
 
+/** 项目级别：1 院级 / 2 校级 / 3 省级 / 4 国家级；未知值返回 '-' */
 function projectLevelLabel(l: number): string {
   return { 1: '院级', 2: '校级', 3: '省级', 4: '国家级' }[l] || '-'
 }
 
+/** 项目级别转 el-tag 颜色：院级灰、校级默认、省级绿、国家级红，用于快速区分层级 */
 function levelTagType(l: number): string {
   return { 1: 'info', 2: '', 3: 'success', 4: 'danger' }[l] || 'info'
 }
 
+/**
+ * 推断项目所属年份：依次尝试 created_at、submit_time、end_date。
+ * @param d 项目行数据
+ * @returns 四位年份；三个字段都无法解析时返回 0，从而不会被年份筛选命中
+ */
 function projectYearOf(d: any): number {
   const s = d.created_at || d.submit_time || d.end_date || ''
   if (!s) return 0
@@ -176,6 +225,11 @@ function projectYearOf(d: any): number {
   return m ? Number(m[1]) : 0
 }
 
+/**
+ * 前端筛选：类别、级别、年份、是否获奖、经费区间。
+ * @param items 全量归档项目
+ * @returns 满足全部已选条件的项目数组；未选择的条件自动跳过
+ */
 function frontendFilter(items: any[]): any[] {
   return items.filter((item) => {
     if (searchForm.project_type != null && Number(item.project_type) !== Number(searchForm.project_type)) return false
@@ -186,6 +240,7 @@ function frontendFilter(items: any[]): any[] {
       if (searchForm.has_award === 1 && !awarded) return false
       if (searchForm.has_award === 0 && awarded) return false
     }
+    // 预算以元存储，滑块单位为万元，先换算再比较区间
     const budgetWan = Number(item.budget_amount || 0) / 10000
     if (searchForm.budget_range && Array.isArray(searchForm.budget_range) && searchForm.budget_range.length === 2) {
       const [lo, hi] = searchForm.budget_range
@@ -195,6 +250,12 @@ function frontendFilter(items: any[]): any[] {
   })
 }
 
+/**
+ * 前端排序。
+ * @param items 已筛选的项目数组
+ * @returns 排序后的新数组；sort_by 为空时原样返回
+ * 支持结题时间、经费、项目级别三类字段的正反序，内部先复制数组避免污染原始数据。
+ */
 function frontendSort(items: any[]): any[] {
   const key = searchForm.sort_by
   if (!key) return items
@@ -228,23 +289,45 @@ function frontendSort(items: any[]): any[] {
   return arr
 }
 
+// ==================== 派生数据（前端筛选 / 排序 / 分页 / 汇总） ====================
+/**
+ * 过滤后的归档数据。
+ * 依赖：rawData（全量归档）与 searchForm 的类别、级别、年份、获奖、经费条件。
+ * 输出：先筛选再排序的项目数组，供 displayData 与 filterSummary 复用。
+ * 缓存原因：模板中 displayData、filterSummary 都会读取它，computed 避免重复过滤。
+ */
 const filteredData = computed(() => {
   let list = frontendFilter(rawData.value)
   list = frontendSort(list)
   return list
 })
 
+/**
+ * 表格显示的总条数。
+ * 未查询时取后端返回的 total；已查询时取前端过滤后的条数，
+ * 保证分页组件页数与实际展示结果一致。
+ */
 const displayTotal = computed(() => {
   if (searched.value) return filteredData.value.length
   return total.value
 })
 
+/**
+ * 当前页数据切片。
+ * 未查询时直接展示后端原始数据；已查询时从 filteredData 按页码切片，
+ * 实现「一次拉全量、前端本地分页」，翻页不需要再次请求。
+ */
 const displayData = computed(() => {
   const source = searched.value ? filteredData.value : rawData.value
   const start = (page.value - 1) * pageSize.value
   return source.slice(start, start + pageSize.value)
 })
 
+/**
+ * 筛选条件汇总文案。
+ * 依赖 searched 与 searchForm 各字段，输出 el-alert 中展示的 HTML 片段。
+ * 缓存原因：条件未变化时复用同一字符串，避免每次渲染重复拼接。
+ */
 const filterSummary = computed(() => {
   if (!searched.value) return ''
   const parts: string[] = []
@@ -261,10 +344,17 @@ const filterSummary = computed(() => {
   return `已筛选：${parts.join('，')}，共 ${count} 项`
 })
 
+// ==================== 数据加载与筛选事件 ====================
+/**
+ * 加载全部归档项目。
+ * 后端单页上限 200，故用 page_size=200 循环翻页，直到取满 total 或返回不足一页；
+ * 一次取回后由前端完成筛选、排序与分页。
+ * 副作用：写入 loading、rawData、total。
+ */
 async function loadData() {
   loading.value = true
   try {
-    // 后端单页上限 200，归档列表需在前端做筛选/排序，故循环拉取全部页码
+    // status=9 表示已结题归档；后端单页上限 200，且筛选/排序在前端完成，故循环拉取全部页码
     const params: any = { page_size: 200, status: 9, keyword: searchForm.keyword }
     if (searchForm.project_type != null) params.project_type = searchForm.project_type
     if (searchForm.project_level != null) params.project_level = searchForm.project_level
@@ -285,12 +375,18 @@ async function loadData() {
   }
 }
 
+/**
+ * 执行查询：回到第 1 页、标记已查询（启用前端筛选与汇总），再重新拉取全量数据。
+ */
 function handleSearch() {
   page.value = 1
   searched.value = true
   loadData()
 }
 
+/**
+ * 重置全部筛选条件与排序，退出已查询状态并重新加载全部归档数据。
+ */
 function handleReset() {
   searchForm.keyword = ''
   searchForm.year = undefined
@@ -304,12 +400,19 @@ function handleReset() {
   loadData()
 }
 
+/**
+ * 本地翻页：数据已全部在内存，仅更新页码与每页条数，不触发请求。
+ * @param p 新页码
+ * @param ps 新每页条数
+ */
 function handlePageChange(p: number, ps: number) {
   // 数据已在本地，翻页仅切换显示切片，无需重新请求
   page.value = p
   pageSize.value = ps
 }
 
+// ==================== 生命周期 ====================
+// 首次进入即拉取全量归档数据，之后筛选、排序、翻页均在前端完成
 onMounted(() => loadData())
 </script>
 

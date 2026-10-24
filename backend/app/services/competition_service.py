@@ -1,6 +1,26 @@
-"""
-创新创业大赛 业务逻辑层
-"""
+# ============================================================================
+# 创新创业大赛 业务逻辑层
+# ----------------------------------------------------------------------------
+# 业务功能：大赛信息（校级/省级/国家级）的增删改查与状态流转；校级比赛结束后，
+#           按学院分组、按专家评审平均分排名，自动生成获奖成果与获奖证书。
+# 核心表：
+#   competition        大赛主表（类型、级别、状态、届次、主办方、创建人）
+#   proj_project       参赛项目（competition_id、competition_session、college_id、status）
+#   proj_review        专家评审记录（review_stage=专家、score、review_result）
+#   proj_achievement   成果表（achievement_type=4 表示竞赛获奖）
+#   proj_certificate   获奖证书（团队/个人）
+#   sys_college        学院（获奖名单按学院分组展示）
+#   sys_user           系统用户（创建人姓名、权限判断）
+# 上游路由：app/api/v1/competition.py（列表/详情/维护/状态/生成获奖名单）
+# 下游依赖：CertificateService 签发 PDF 证书、NotificationService 推送通知、
+#           schemas.competition 的类型/级别/状态名称映射、security 超管判定。
+# 关键约束：
+#   1) 大赛的新增/编辑/删除/改状态仅超级管理员可操作；
+#   2) 学生端只展示报名中/进行中（status=1/2），已结束/已取消视为下架；
+#   3) 自动获奖仅支持校级比赛（level=1），省级/国家级只能手工登记证书；
+#   4) 排名池按“同一比赛 + 同一届次 + 已立项及之后”筛选，跨院组队归负责人学院；
+#   5) 自动生成可重复触发，触发时先清理上一轮自动成果及证书，保证幂等。
+# ============================================================================
 import logging
 from typing import Optional, Tuple, List
 from datetime import date, datetime
@@ -25,20 +45,32 @@ logger = logging.getLogger(__name__)
 
 
 # 自动获奖分配常量
+# 名次 → 奖项名称：只对前 3 名授予一/二/三等奖，其余获奖项目统一为参与奖。
 AWARD_LEVEL_NAMES = {1: "校级一等奖", 2: "校级二等奖", 3: "校级三等奖"}
 PARTICIPATION_AWARD_NAME = "参与奖"
 PARTICIPATION_AWARD_COUNT = 7  # 三等奖之后顺次取的参与奖数量（不并列）
+# 自动生成成果的摘要前缀，用于重复触发时识别并清理上一轮自动数据
 AUTO_AWARD_SUMMARY_PREFIX = "[自动生成]"
 # 参与自动分配的项目状态：已立项及之后（专家评审已完成，具备评分）
+# 6=已立项 7=中期检查中 8=中期检查通过 9=已结题，均属于“已立项之后”的有效项目
 AWARD_ELIGIBLE_STATUS = (6, 7, 8, 9)
 
 
 class CompetitionService:
-    """大赛服务"""
+    """大赛业务服务。
+
+    查询类方法为只读；创建/更新/删除/生成获奖名单等写操作在方法内提交事务。
+    获奖分配规则集中在 generate_awards，便于审计与调整。
+    """
 
     @staticmethod
     def _fill_names(item: Competition) -> Competition:
-        """填充类型/级别/状态名称"""
+        """把数据库中的枚举值翻译成中文名称，供前端直接展示。
+
+        参数：item 大赛 ORM 对象（会被原地写入三个名称属性）。
+        返回：同一个对象，便于链式调用。
+        注意：未知取值统一返回“未知”，避免前端出现空白或报错。
+        """
         item.competition_type_name = COMPETITION_TYPE_NAME.get(item.competition_type, "未知")
         item.level_name = COMPETITION_LEVEL_NAME.get(item.level, "未知")
         item.status_name = COMPETITION_STATUS_NAME.get(item.status, "未知")
@@ -55,7 +87,19 @@ class CompetitionService:
         status: Optional[int] = None,
         only_published: bool = False,
     ) -> Tuple[List[Competition], int]:
-        """分页查询大赛列表"""
+        """分页查询大赛列表。
+
+        参数：
+            db: 数据库会话。
+            page / page_size: 页码（从 1 开始）与每页条数。
+            keyword: 模糊匹配标题 / 主办方 / 描述。
+            competition_type / level / status: 按类型、级别、状态精确筛选。
+            only_published: 学生端视角，仅返回可参与的比赛（报名中/进行中）。
+        返回：
+            (当前页大赛列表, 总条数)。
+        注意：
+            名称字段在查询后逐条填充；列表按创建时间倒序，最新比赛优先展示。
+        """
         query = db.query(Competition).filter(Competition.is_deleted == 0)
 
         if only_published:
@@ -92,7 +136,21 @@ class CompetitionService:
     @staticmethod
     def get_detail(db: Session, comp_id: int, increment_view: bool = False,
                    only_published: bool = False) -> Competition:
-        """获取大赛详情；only_published=True 时未发布(草稿/已取消)视为不存在"""
+        """获取大赛详情。
+
+        参数：
+            db: 数据库会话。
+            comp_id: 大赛 id。
+            increment_view: 是否累加浏览量（详情页首次打开时使用）。
+            only_published: 学生端视角，仅允许查看报名中/进行中/已结束，
+                            草稿(0)与已取消(4)视为不存在。
+        返回：
+            填充了中文名称与创建人姓名的大赛对象。
+        异常：
+            不存在、已软删除或不可见 → BizException("比赛不存在或已删除")。
+        副作用：
+            increment_view=True 时会写库并刷新对象。
+        """
         comp = (
             db.query(Competition)
             .filter(Competition.id == comp_id, Competition.is_deleted == 0)
@@ -114,7 +172,14 @@ class CompetitionService:
 
     @staticmethod
     def create(db: Session, req: CompetitionCreate, operator: SysUser) -> Competition:
-        """创建大赛（仅超级管理员）"""
+        """创建大赛。
+
+        参数：db 会话、创建表单、当前操作人。
+        返回：已落库并填充名称的新大赛对象。
+        权限：仅超级管理员。
+        异常：非超管 → BizException("仅超级管理员可创建比赛")。
+        副作用：写入 created_by 并提交事务。
+        """
         if not is_super_admin(operator):
             from app.core.exceptions import BizException
             raise BizException("仅超级管理员可创建比赛")
@@ -127,7 +192,14 @@ class CompetitionService:
 
     @staticmethod
     def update(db: Session, comp_id: int, req: CompetitionUpdate, operator: SysUser) -> Competition:
-        """更新大赛（仅超级管理员）"""
+        """更新大赛信息（全字段覆盖式更新）。
+
+        参数：db 会话、大赛 id、更新表单、当前操作人。
+        返回：更新后并填充名称的大赛对象。
+        权限：仅超级管理员。
+        异常：非超管 → BizException；大赛不存在 → 由 get_detail 抛出。
+        注意：req.model_dump() 未排除未设置字段，调用方需传入完整表单。
+        """
         if not is_super_admin(operator):
             from app.core.exceptions import BizException
             raise BizException("仅超级管理员可编辑比赛")
@@ -141,7 +213,13 @@ class CompetitionService:
 
     @staticmethod
     def delete(db: Session, comp_id: int, operator: SysUser) -> None:
-        """删除大赛（软删除，仅超级管理员）"""
+        """删除大赛（软删除）。
+
+        参数：db 会话、大赛 id、当前操作人。
+        返回：无。
+        权限：仅超级管理员。
+        注意：只置 is_deleted=1，保留历史项目关联与获奖数据，便于追溯。
+        """
         if not is_super_admin(operator):
             from app.core.exceptions import BizException
             raise BizException("仅超级管理员可删除比赛")
@@ -151,7 +229,14 @@ class CompetitionService:
 
     @staticmethod
     def update_status(db: Session, comp_id: int, status: int, operator: SysUser) -> Competition:
-        """更新比赛状态（仅超级管理员）"""
+        """修改大赛状态（草稿/报名中/进行中/已结束/已取消）。
+
+        参数：db 会话、大赛 id、目标状态值、当前操作人。
+        返回：更新后的大赛对象。
+        权限：仅超级管理员。
+        异常：非超管 / 状态值不在枚举内 → BizException。
+        注意：状态值必须存在于 COMPETITION_STATUS_NAME，防止写入脏数据。
+        """
         if not is_super_admin(operator):
             from app.core.exceptions import BizException
             raise BizException("仅超级管理员可修改比赛状态")
@@ -174,11 +259,31 @@ class CompetitionService:
         分数取专家评审平均分；名次 1/2/3 → 校级一/二/三等奖，其后顺次取 7 个参与奖（不并列）；
         省级/国家级比赛不支持自动分配，仅可手工登记获奖证书。
         生成的获奖成果(类型=竞赛获奖)会计入项目结题的成果数量门槛。
+
+        参数：
+            db: 数据库会话。
+            comp_id: 大赛 id，必须是校级（level=1）。
+            operator: 当前操作人，仅超级管理员可触发。
+        返回：
+            统计字典：比赛信息、获奖总数、按学院分组的明细
+            （项目 id/名称、平均分、名次、奖项）。
+        异常：
+            非超管 / 非校级比赛 → BizException。
+        副作用：
+            1) 软删除上一轮自动生成的获奖成果及其证书、证书附件；
+            2) 新增获奖成果（achievement_type=4）；
+            3) 逐项目签发团队/个人证书并推送站内通知；
+            4) 结束时统一提交事务。
+        注意：
+            证书生成失败只记 warning、不中断名单生成，保证主流程可用；
+            同分时按提交时间、项目 id 升序兜底，避免名次并列导致奖项边界不稳定。
         """
         from app.core.exceptions import BizException
         if not is_super_admin(operator):
             raise BizException("仅超级管理员可生成获奖名单")
         comp = CompetitionService.get_detail(db, comp_id)
+        # 自动分配依赖校级统一排名规则；省级/国家级获奖名额由主办方决定，改为手工登记
+        # level=1 是校级，其余（2 省级 / 3 国家级）不进入自动分配流程
         if comp.level != 1:
             raise BizException("仅校级比赛支持自动生成获奖名单，省级/国家级请手工登记获奖证书")
 
@@ -193,6 +298,7 @@ class CompetitionService:
         projects = q.all()
 
         # 幂等刷新：先软删"本比赛关联项目"此前自动生成的获奖成果，再按最新排名重建
+        # 通过 summary 前缀区分自动/手工数据，只清理自动生成部分，不误删管理员手工登记的获奖
         proj_ids = [p.id for p in projects]
         if proj_ids:
             old_ach_ids = [row[0] for row in db.query(ProjAchievement.id).filter(
@@ -225,12 +331,16 @@ class CompetitionService:
         college_names = dict(db.query(SysCollege.id, SysCollege.college_name).filter(
             SysCollege.id.in_(list(groups.keys()) or [0])
         ).all())
+        # 用 [0] 兜底空分组，避免 in_([]) 生成非法 SQL；查询结果转 dict 供返回时取名
 
         result_groups = []
         total_awarded = 0
+        # 每个学院独立排名、独立分配奖项，避免小学院项目被大院项目挤占名额
         for college_id, plist in groups.items():
             scored = []
             for p in plist:
+                # 专家评审平均分：排除无效评审(review_result=99)与空分数，
+                # 避免被撤回/作废的评分拉低平均分，影响名次与奖项边界
                 avg = db.query(func.avg(ProjReview.score)).filter(
                     ProjReview.project_id == p.id,
                     ProjReview.review_stage == REVIEW_STAGE_EXPERT,
@@ -240,9 +350,11 @@ class CompetitionService:
                 ).scalar()
                 scored.append((p, float(avg) if avg is not None else 0.0))
             # 排序：分数降序；同分按提交时间/ID 升序，保证名次不并列
+            # 提交时间缺失的历史数据回退到 datetime.min，再由 id 兜底，排序结果始终确定
             scored.sort(key=lambda t: (-t[1], t[0].submit_time or datetime.min, t[0].id))
 
             items = []
+            # 奖项切分：1~3 名 → 一/二/三等奖；4~10 名 → 参与奖；11 名及以后不获奖
             for idx, (p, score) in enumerate(scored, start=1):
                 if idx <= 3:
                     award = AWARD_LEVEL_NAMES[idx]
@@ -273,6 +385,7 @@ class CompetitionService:
                     "award_level": award,
                 })
                 # 校级证书：每个获奖项目生成团队证书 + 每位成员个人证书，并推送站内通知
+                # 签发放在 try 中隔离：字体缺失/磁盘异常只影响当前项目，不阻断整批名单
                 try:
                     CertificateService.issue_for_achievement(db, ach, p, comp, award, operator)
                 except Exception as exc:  # 证书生成失败不应阻断获奖名单生成
@@ -281,6 +394,7 @@ class CompetitionService:
             result_groups.append({
                 "college_id": college_id,
                 "college_name": college_names.get(college_id),
+                # 每院的 items 保持按名次升序，前端可直接渲染“学院-名次-奖项”表格
                 "items": items,
             })
 

@@ -1,3 +1,20 @@
+# ====================================================================
+# 答辩演示数据生成脚本（backend/seed_demo_data.py）
+# --------------------------------------------------------------------
+# 解决什么问题：
+#   重建空库后，手工造 4 个项目的完整流程数据非常耗时。本脚本一次性写入
+#   申报、审核、中期、成果、报销、结项等数据，并生成可下载的 docx/png 附件，
+#   用于毕业答辩时演示“全生命周期管理”。
+# 前置条件：
+#   1. 数据库已建表（main.py 启动或 schema.sql）；
+#   2. 基础账号/学院/大赛已由初始化脚本写入（脚本按学号/姓名查找，缺失会报错）；
+#   3. 运行环境安装 python-docx、Pillow，且 Windows 字体文件存在。
+# 运行方式：
+#   在 backend 目录执行 python seed_demo_data.py。
+# 重要警告：
+#   脚本会 TRUNCATE 项目相关业务表并清空上传目录，只可用于演示/测试库，
+#   严禁对生产库执行。
+# ====================================================================
 """
 答辩演示数据生成脚本（重建库后使用）
 
@@ -34,21 +51,35 @@ from app.models import (
 from app.services.certificate_service import CertificateService
 
 BASE_DIR = Path(__file__).resolve().parent
+# 上传目录解析：配置为相对路径时以脚本所在目录（backend）为基准，
+# 保证从任意工作目录运行都能把文件写到同一位置
 UPLOAD_DIR = Path(settings.UPLOAD_DIR)
 if not UPLOAD_DIR.is_absolute():
     UPLOAD_DIR = BASE_DIR / UPLOAD_DIR
 
+# 附件 MIME 类型：与前端预览/下载时后端返回的 Content-Type 保持一致
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 PNG_MIME = "image/png"
 
+# 证书绘制所需字体：仅适配 Windows 开发机；Linux 容器需换成 Noto/思源字体路径
 FONT_PATH = "C:/Windows/Fonts/msyh.ttc"
 FONT_BOLD_PATH = "C:/Windows/Fonts/msyhbd.ttc"
 
 
 # ================================================================
 # 文档生成工具
+# 说明：这些函数只负责排版，业务内容由下方 build_* 函数传入
 # ================================================================
 def _init_doc():
+    """
+    创建统一版式的 Word 文档对象。
+
+    返回：
+        python-docx Document，已设置页边距、宋体正文、10.5pt 字号与 1.35 倍行距。
+    说明：
+        统一版式让生成的申报书/中期/结项报告看起来像正式公文，
+        答辩演示时更可信；返回值供后续 _add_* 函数继续追加内容。
+    """
     doc = Document()
     section = doc.sections[0]
     section.top_margin = Cm(2.2)
@@ -65,7 +96,18 @@ def _init_doc():
 
 
 def _set_run_font(run, name="宋体", size=None, bold=None, color=None):
+    """
+    设置一段文字的字体、字号、加粗与颜色。
+
+    参数：
+        run：python-docx 的 Run 对象。
+        name：中文字体名，同时写入 eastAsia 属性，避免 Word 回退到默认字体。
+        size：字号（磅），None 表示沿用样式默认值。
+        bold：是否加粗，None 表示不修改。
+        color：RGBColor 对象，None 表示不修改。
+    """
     run.font.name = name
+    # 仅设置 run.font.name 对中文不生效，必须同时设置 w:eastAsia
     run._element.rPr.rFonts.set(qn("w:eastAsia"), name)
     if size:
         run.font.size = Pt(size)
@@ -76,6 +118,14 @@ def _set_run_font(run, name="宋体", size=None, bold=None, color=None):
 
 
 def _add_title(doc, text, subtitle=None):
+    """
+    添加居中大标题与可选副标题。
+
+    参数：
+        doc：Document 对象。
+        text：标题内容（如“项目申报书”）。
+        subtitle：副标题（如“项目编号：01”），可选。
+    """
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run(text)
@@ -90,6 +140,7 @@ def _add_title(doc, text, subtitle=None):
 
 
 def _add_heading(doc, text):
+    """添加黑体小标题（12pt 加粗），用于“一、项目基本情况”这类章节标题。"""
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(10)
     run = p.add_run(text)
@@ -97,6 +148,16 @@ def _add_heading(doc, text):
 
 
 def _add_para(doc, text, indent=True):
+    """
+    添加正文段落。
+
+    参数：
+        doc：Document 对象。
+        text：段落文本。
+        indent：是否首行缩进两字符，默认 True（中文公文习惯）。
+    返回：
+        新建的 Paragraph，便于调用方继续调整。
+    """
     p = doc.add_paragraph()
     if indent:
         p.paragraph_format.first_line_indent = Cm(0.74)
@@ -106,6 +167,14 @@ def _add_para(doc, text, indent=True):
 
 
 def _add_bullets(doc, items):
+    """
+    添加项目符号列表。
+
+    参数：
+        doc：Document 对象。
+        items：字符串列表，或 (编号, 内容) 元组列表；
+               元组会渲染为“（1）内容”，字符串会渲染为“· 内容”。
+    """
     for item in items:
         p = doc.add_paragraph()
         p.paragraph_format.left_indent = Cm(0.74)
@@ -115,6 +184,17 @@ def _add_bullets(doc, items):
 
 
 def _add_table(doc, header, rows, widths=None):
+    """
+    添加带表头的网格表格。
+
+    参数：
+        doc：Document 对象。
+        header：表头文本列表，数量决定列数。
+        rows：二维数据列表，每行元素个数应与表头一致。
+        widths：各列宽度（厘米）列表，可选。
+    说明：
+        首列与短文本居中，长文本左对齐，避免预算说明等长内容被挤压。
+    """
     table = doc.add_table(rows=1, cols=len(header))
     table.style = "Table Grid"
     table.alignment = 1
@@ -141,6 +221,15 @@ def _add_table(doc, header, rows, widths=None):
 
 
 def _add_signature(doc, role, name, day):
+    """
+    添加右对齐的签字栏与日期。
+
+    参数：
+        doc：Document 对象。
+        role：签字角色（如“项目负责人”“指导教师”）。
+        name：签字人姓名。
+        day：日期对象，格式化为“YYYY年MM月DD日”。
+    """
     doc.add_paragraph()
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
@@ -153,12 +242,34 @@ def _add_signature(doc, role, name, day):
 
 
 def _new_stored_path(ext):
+    """
+    生成“数据库相对路径 + 磁盘绝对路径”二元组。
+
+    参数：
+        ext：文件扩展名（不含点）。
+    返回：
+        (rel, abs_path)：rel 形如 static/uploads/20261024_xxx.docx，
+        仅相对路径入库，绝对路径用于本次写文件。
+    说明：
+        文件名使用“日期 + uuid”避免重名覆盖，也避免中文文件名在 URL 中编码问题；
+        与生产上传服务保持“磁盘存实体、数据库只存相对路径”的约定。
+    """
     name = f"{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex}.{ext}"
     rel = f"static/uploads/{name}"
     return rel, UPLOAD_DIR / name
 
 
 def _save_docx(doc, original_name):
+    """
+    保存 Word 文档并返回附件元数据。
+
+    参数：
+        doc：Document 对象。
+        original_name：用户看到的原始文件名（含项目编号与项目名）。
+    返回：
+        含 file_name/file_path/file_size/file_type/file_ext 的字典，
+        可直接交给 add_attachment 登记到 sys_attachment。
+    """
     rel, abs_path = _new_stored_path("docx")
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     doc.save(abs_path)
@@ -193,6 +304,15 @@ def _draw_wrapped(draw, text, font, max_width, start_y, fill, line_gap=14, cente
 
 
 def _save_png(image, original_name):
+    """
+    保存 PNG 图片并返回附件元数据。
+
+    参数：
+        image：Pillow Image 对象。
+        original_name：原始文件名（如“01-xxx-获奖证书.png”）。
+    返回：
+        附件元数据字典，结构同 _save_docx，供 add_attachment 使用。
+    """
     rel, abs_path = _new_stored_path("png")
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     image.save(abs_path, format="PNG")
@@ -203,7 +323,18 @@ def _save_png(image, original_name):
 
 
 def make_copyright_certificate(project, ach):
-    """生成软件著作权登记证书图片"""
+    """
+    生成软件著作权登记证书图片。
+
+    参数：
+        project：项目上下文字典（提供编号与名称，用于文件命名）。
+        ach：成果配置字典，提供登记号、软件名称、发布日期。
+    返回：
+        _save_png 的附件元数据。
+    说明：
+        纯代码绘制，不依赖扫描件，保证演示库中每份成果都有可预览的证明材料。
+    """
+    # 1. 创建米白色画布并绘制双层红色边框，模拟证书版式
     img = Image.new("RGB", (1240, 860), "#fffdf7")
     draw = ImageDraw.Draw(img)
     title_font = ImageFont.truetype(FONT_BOLD_PATH, 44)
@@ -238,7 +369,18 @@ def make_copyright_certificate(project, ach):
 
 
 def make_award_certificate(project, ach):
-    """生成竞赛获奖证书图片"""
+    """
+    生成竞赛获奖证书图片。
+
+    参数：
+        project：项目上下文字典（编号、名称）。
+        ach：成果配置字典，提供作者、赛事主办方、获奖级别与日期。
+    返回：
+        _save_png 的附件元数据。
+    说明：
+        正文中的获奖年份取发布日期，奖项等级取 award_level，
+        用于演示“成果获奖”类附件的预览效果。
+    """
     img = Image.new("RGB", (1240, 860), "#fffdf6")
     draw = ImageDraw.Draw(img)
     title_font = ImageFont.truetype(FONT_BOLD_PATH, 52)
@@ -269,7 +411,18 @@ def make_award_certificate(project, ach):
 
 
 def make_expense_receipt(project, expense):
-    """生成经费报销凭证图片"""
+    """
+    生成经费报销凭证图片。
+
+    参数：
+        project：项目上下文字典（编号、名称）。
+        expense：报销配置字典，提供报销单号、报销人、金额、发票号与审批时间。
+    返回：
+        _save_png 的附件元数据。
+    说明：
+        金额格式化带千分位，审批状态固定为“已完成”，与种子数据中
+        报销 status=6（已通过财务审批）保持一致。
+    """
     img = Image.new("RGB", (1240, 900), "white")
     draw = ImageDraw.Draw(img)
     title_font = ImageFont.truetype(FONT_BOLD_PATH, 38)
@@ -307,8 +460,20 @@ def make_expense_receipt(project, expense):
 
 # ================================================================
 # 各类文档内容
+# 说明：每个 build_* 函数对应业务中一种正式附件，入参统一为 project 字典
 # ================================================================
 def build_application_doc(project):
+    """
+    生成《项目申报书》docx。
+
+    参数：
+        project：项目演示配置（名称、类别、成员、预算、进度等）。
+    返回：
+        _save_docx 的附件元数据。
+    说明：
+        按学校申报书常见章节组织：基本情况、简介、背景、研究内容、
+        创新点、预期成果、进度、预算、成员分工、承诺与签字。
+    """
     doc = _init_doc()
     _add_title(doc, "大学生创新创业训练计划项目申报书", f"项目编号：{project['no']}")
     _add_heading(doc, "一、项目基本情况")
@@ -358,7 +523,18 @@ def build_application_doc(project):
 
 
 def build_plan_doc(project):
-    """实施方案 / 商业计划书"""
+    """
+    生成实施方案或商业计划书 docx。
+
+    参数：
+        project：项目演示配置；is_business=True 时输出商业计划书，
+                  False 时输出技术实施方案。
+    返回：
+        _save_docx 的附件元数据。
+    说明：
+        同一函数根据项目类型切换章节，创业类项目需要市场/商业模式/财务预测，
+        创新训练类项目则侧重技术路线、开发环境与里程碑。
+    """
     doc = _init_doc()
     if project["is_business"]:
         _add_title(doc, "商业计划书", project["name"])
@@ -403,6 +579,17 @@ def build_plan_doc(project):
 
 
 def build_teacher_recommendation(project):
+    """
+    生成《指导教师推荐意见》docx。
+
+    参数：
+        project：项目演示配置（名称、负责人、类别、教师评语）。
+    返回：
+        _save_docx 的附件元数据。
+    说明：
+        对应申报流程中的“待指导教师确认”环节，附件与 proj_review 的
+        stage=0（教师确认）记录相互印证。
+    """
     doc = _init_doc()
     _add_title(doc, "指导教师推荐意见")
     _add_para(doc, f"项目名称：{project['name']}")
@@ -419,6 +606,17 @@ def build_teacher_recommendation(project):
 
 
 def build_midterm_doc(project):
+    """
+    生成《中期检查报告》docx。
+
+    参数：
+        project：项目演示配置，必须包含 midterm 子字典。
+    返回：
+        _save_docx 的附件元数据。
+    说明：
+        经费使用率由 used/budget 现算，保证与项目表、预算表数字一致；
+        报告签字日期取中期提交时间，缺失时回退到项目申报日期。
+    """
     doc = _init_doc()
     mid = project["midterm"]
     _add_title(doc, "大学生创新创业训练计划项目中期检查报告", f"项目编号：{project['no']}")
@@ -450,6 +648,17 @@ def build_midterm_doc(project):
 
 
 def build_final_doc(project):
+    """
+    生成《结项验收报告》docx。
+
+    参数：
+        project：项目演示配置，必须包含 final 子字典。
+    返回：
+        _save_docx 的附件元数据。
+    说明：
+        经费决算表逐项列出预算/实际/结余，并给出合计，
+        对应项目状态 9（已结题）的归档材料。
+    """
     doc = _init_doc()
     _add_title(doc, "大学生创新创业训练计划项目结项验收报告", f"项目编号：{project['no']}")
     _add_heading(doc, "一、项目完成情况")
@@ -475,6 +684,17 @@ def build_final_doc(project):
 
 
 def build_paper_notice(project, ach):
+    """
+    生成《论文录用通知》docx（论文类成果证明）。
+
+    参数：
+        project：项目演示配置（编号、名称）。
+        ach：成果配置字典，提供题目、作者、期刊、录用日期与 DOI。
+    返回：
+        _save_docx 的附件元数据。
+    说明：
+        用录用通知替代论文全文，既保护版权，又能演示成果认定附件的完整性。
+    """
     doc = _init_doc()
     _add_title(doc, "论文录用通知")
     _add_para(doc, f"{ach['author'].split('、')[0]} 同志：")
@@ -499,8 +719,17 @@ def build_paper_notice(project, ach):
 
 # ================================================================
 # 演示项目定义
+# --------------------------------------------------------------------
+# 每个字典 = 一个答辩演示项目，字段分四类：
+#   1. 项目主体：no/name/type/level/status/competition/leader/teacher/日期/预算；
+#   2. 文档素材：summary/background/content_points/innovation_points/schedule/
+#      budget_items/members/tech_route/tech_stack/milestones/risks 等；
+#   3. 流程数据：reviews（各审核阶段）、midterm、achievements、expense、final；
+#   4. 内部回填：_pid/_midterm_id/_achievements/_expense 由 seed() 运行中写入。
+# 四个项目分别覆盖：草稿、已立项+中期进行中、待结题、已结题四种演示状态。
 # ================================================================
 PROJECTS = [
+    # 项目01：刚提交、尚未进入审核（status=0 草稿），用于演示学生端“继续编辑”
     {
         "no": "01",
         "name": "基于Vue+FastAPI的校园创新创业项目管理平台",
@@ -591,6 +820,8 @@ PROJECTS = [
         "final": None,
         "reviews": [],
     },
+    # 项目02：已通过三级审核并立项（status=6），有软著成果与一笔已审批报销，
+    #         中期已提交但尚未审核（midterm.status=0），用于演示过程管理
     {
         "no": "02",
         "name": "面向校园的智能垃圾分类回收系统",
@@ -750,6 +981,8 @@ PROJECTS = [
              "time": datetime(2026, 7, 8, 16, 10)},
         ],
     },
+    # 项目03：已立项且中期检查通过（midterm.status=2），项目状态 8（待结题），
+    #         含软著+论文两项成果，用于演示成果认定与结项前的材料准备
     {
         "no": "03",
         "name": "基于知识图谱的课程学习推荐平台",
@@ -908,6 +1141,8 @@ PROJECTS = [
              "time": datetime(2026, 6, 28, 15, 20)},
         ],
     },
+    # 项目04：全流程闭环（status=9 已结题），含论文、竞赛获奖、团队证书、
+    #         结项报告与报销，用于演示归档、证书生成与统计看板
     {
         "no": "04",
         "name": "校园二手交易小程序的设计与实现",
@@ -1109,7 +1344,14 @@ PROJECTS = [
 
 # ================================================================
 # 主流程
+# --------------------------------------------------------------------
+# 执行顺序：清空业务表 -> 逐项目写入主体/预算/成员/审核/中期/成果/报销
+#          -> 生成附件文件并登记 -> 提交事务。
+# 每处理完一个项目立即 commit，避免 4 个项目共用一个超长事务；
+# 失败时由 main() 统一回滚当前事务并抛出，便于定位问题。
 # ================================================================
+# 需要清空的表：按“子表 -> 父表”列出，配合 FOREIGN_KEY_CHECKS=0 可任意顺序 TRUNCATE；
+# 未列出的系统表（用户/学院/大赛等基础数据）保留
 PROJECT_TABLES = [
     "proj_certificate", "proj_achievement_review", "proj_achievement", "proj_expense", "proj_budget",
     "proj_review", "proj_midterm_check", "proj_change_request",
@@ -1118,13 +1360,28 @@ PROJECT_TABLES = [
 
 
 def clear_tables(db):
+    """
+    清空项目相关业务表与上传目录。
+
+    参数：
+        db：数据库会话。
+    副作用：
+        1. 临时关闭外键检查后 TRUNCATE 业务表，快速清空且重置自增ID；
+        2. 删除证书类站内通知，避免指向已不存在的成果；
+        3. 删除上传目录中的实体文件并重建目录。
+    注意：
+        仅用于演示/测试库，生产执行会造成数据丢失。
+    """
+    # 1. 关闭外键检查，保证按任意顺序清表不报 1451/1217
     db.execute(text("SET FOREIGN_KEY_CHECKS=0"))
     for table in PROJECT_TABLES + ["sys_attachment"]:
         db.execute(text(f"TRUNCATE TABLE `{table}`"))
+    # 2. 恢复外键检查，避免后续写入绕过约束校验
     db.execute(text("SET FOREIGN_KEY_CHECKS=1"))
     # 证书相关的站内通知会随成果重建而失效，一并清理
     db.execute(text("DELETE FROM sys_notification WHERE biz_type = 'certificate'"))
     db.commit()
+    # 3. 清空上传目录实体文件：数据库记录已删，残留文件会成为孤儿文件
     if UPLOAD_DIR.exists():
         for item in UPLOAD_DIR.iterdir():
             if item.is_file():
@@ -1133,6 +1390,17 @@ def clear_tables(db):
 
 
 def get_user(db, username):
+    """
+    按学号/工号取用户。
+
+    参数：
+        db：数据库会话。
+        username：登录账号（学生为学号，教师为工号，管理员为编号）。
+    返回：
+        SysUser 实例。
+    异常：
+        RuntimeError：基础账号未初始化时抛出，提示先执行账号初始化脚本。
+    """
     user = db.query(SysUser).filter(SysUser.username == username).first()
     if not user:
         raise RuntimeError(f"账号 {username} 不存在")
@@ -1140,7 +1408,18 @@ def get_user(db, username):
 
 
 def get_competition(db, title, fallback_id):
-    """按名称取大赛，避免重建库后自增 ID 变化导致挂错赛事"""
+    """
+    按名称取大赛，避免重建库后自增 ID 变化导致挂错赛事。
+
+    参数：
+        db：数据库会话。
+        title：大赛全称。
+        fallback_id：按名称查不到时的兜底 ID（旧库固定ID）。
+    返回：
+        Competition 实例。
+    异常：
+        RuntimeError：名称与兜底 ID 都查不到时抛出。
+    """
     comp = db.query(Competition).filter(Competition.title == title).first()
     if comp is None:
         comp = db.get(Competition, fallback_id)
@@ -1150,6 +1429,21 @@ def get_competition(db, title, fallback_id):
 
 
 def add_attachment(db, meta, biz_type, biz_id, uploader, created_at):
+    """
+    登记一条附件元数据到 sys_attachment。
+
+    参数：
+        db：数据库会话。
+        meta：_save_docx/_save_png 返回的文件元数据。
+        biz_type：业务类型（project/midterm/achievement/expense）。
+        biz_id：对应业务记录主键，前端按此反查附件列表。
+        uploader：上传人 SysUser，冗余保存姓名便于列表直接展示。
+        created_at：附件创建时间，与业务发生时间保持一致。
+    返回：
+        新增但未提交的 SysAttachment 对象。
+    说明：
+        数据库只存相对路径，实体文件已在生成元数据时写入磁盘。
+    """
     row = SysAttachment(
         biz_type=biz_type,
         biz_id=biz_id,
@@ -1170,17 +1464,33 @@ def add_attachment(db, meta, biz_type, biz_id, uploader, created_at):
 
 
 def seed(db):
+    """
+    写入全部演示项目数据。
+
+    参数：
+        db：数据库会话，由 main() 创建并负责提交/回滚。
+    副作用：
+        清空业务表与上传目录，写入 4 个项目的完整流程数据与附件文件。
+    说明：
+        每个项目内部通过 flush 获取自增主键，供预算/成员/审核等子表关联；
+        每完成一个项目提交一次，随后继续下一个，避免单事务过大。
+    """
     clear_tables(db)
 
     for cfg in PROJECTS:
+        # 1. 解析该项目的固定参与人：负责人、指导教师、两名专家、
+        #    学院管理员（学院初审）与超管（校级复审/证书签发）
         leader = get_user(db, cfg["leader_no"])
         teacher = get_user(db, cfg["teacher_no"])
         expert1 = get_user(db, "0101")
         expert2 = get_user(db, "0201")
         college_admin = get_user(db, "11111")
         super_admin = get_user(db, "00000")
+        # 2. 大赛按名称匹配，避免库重建后 ID 漂移
         comp = get_competition(db, cfg["competition_name"], cfg["competition_id"])
 
+        # 3. 写入项目主体：status 决定前端展示的阶段页与可执行操作；
+        #    college_id 取负责人所属学院，保证学院管理员能看到本院项目
         project = ProjProject(
             project_no=cfg["no"],
             project_name=cfg["name"],
@@ -1215,6 +1525,8 @@ def seed(db):
         cfg["_pid"] = pid
 
         # 预算
+        # 4. 预算按科目逐条写入；budget_rows 记录“科目名 -> 主键”，
+        #    报销记录需要按科目名关联 budget_item_id
         budget_rows = {}
         for item in cfg["budget_items"]:
             row = ProjBudget(
@@ -1229,6 +1541,8 @@ def seed(db):
             budget_rows[item["name"]] = row.id
 
         # 团队成员
+        # 5. 成员按姓名反查学生账号，冗余保存学号/专业/角色/分工，
+        #    这样即使学生账号后续改名，历史项目成员信息仍可追溯
         for m in cfg["members"]:
             user = get_user_by_name(db, m["name"])
             db.add(ProjTeamMember(
@@ -1244,6 +1558,9 @@ def seed(db):
             ))
 
         # 审核记录
+        # 6. reviewer 是配置里的角色代号（teacher/college/university/expert1/expert2），
+        #    映射到真实用户后写入 proj_review，stage 对应审核环节：
+        #    0 教师确认、1 学院初审、2 校级复审、3 专家评审、4 结项评审
         reviewer_map = {
             "teacher": teacher, "college": college_admin,
             "university": super_admin, "expert1": expert1, "expert2": expert2,
@@ -1267,6 +1584,8 @@ def seed(db):
         db.flush()
 
         # 中期检查
+        # 7. 中期记录 status：0 待审核、1 驳回、2 通过；
+        #    只有 status=2 的项目才能继续进入结项流程（与状态机约束一致）
         midterm_cfg = cfg["midterm"]
         if midterm_cfg:
             reviewer = teacher if midterm_cfg.get("reviewer_id") == "teacher" else None
@@ -1293,6 +1612,8 @@ def seed(db):
             cfg["_midterm_id"] = midterm.id
 
         # 成果及认定
+        # 8. 每项成果同时写 proj_achievement 与 proj_achievement_review，
+        #    认定状态固定为 1（已认定），审核人固定为该项目指导教师
         cfg["_achievements"] = []
         for ach_cfg in cfg["achievements"]:
             ach = ProjAchievement(
@@ -1325,6 +1646,8 @@ def seed(db):
             cfg["_achievements"].append((ach, ach_cfg))
 
         # 报销
+        # 9. 报销 status=6 表示财务审批已完成；提交时间由审批时间倒推 8 天，
+        #    使时间线看起来完整（提交 -> 逐级审批 -> 通过）
         expense_cfg = cfg["expense"]
         if expense_cfg:
             expense = ProjExpense(
@@ -1348,6 +1671,9 @@ def seed(db):
             cfg["_expense"] = (expense, expense_cfg)
 
         # 结项报告占位记录
+        # 10. 结项报告正文没有独立表，复用 proj_review 的 stage=4 记录，
+        #     review_result=99 作为“报告正文”标记，review_comment 前缀 [结项报告]；
+        #     真正的结项评审结论另有 stage=4、result=1 的记录
         if cfg["final"]:
             final = cfg["final"]
             report_time = datetime.combine(final["submit_date"], datetime.min.time()) + timedelta(hours=10)
@@ -1368,8 +1694,12 @@ def seed(db):
             cfg["_final_report"] = report
 
         db.flush()
+        # 11. 生成并登记附件（docx/pdf 图片等实体文件），
+        #     必须在项目/中期/成果/报销主键都已 flush 后执行
         generate_attachments(db, cfg, leader, teacher)
         # 校级竞赛获奖：平台自动生成团队证书 + 每位成员个人证书（与后台"生成获奖名单"一致）
+        # 仅对 level=1（校级）大赛且成果类型为 4（竞赛获奖）触发，
+        # 复用真实业务服务，保证证书编号/落款逻辑与线上一致
         for ach, ach_cfg in cfg["_achievements"]:
             if ach_cfg.get("type") != 4:
                 continue
@@ -1383,6 +1713,19 @@ def seed(db):
 
 
 def get_user_by_name(db, real_name):
+    """
+    按姓名取学生账号（仅 role=1）。
+
+    参数：
+        db：数据库会话。
+        real_name：学生真实姓名。
+    返回：
+        该姓名下 id 最小的学生账号（同名时保证结果稳定）。
+    异常：
+        RuntimeError：学生不存在时抛出，提示检查基础账号数据。
+    说明：
+        演示配置里成员用姓名书写更直观，这里承担姓名 -> 账号的转换。
+    """
     user = db.query(SysUser).filter(
         SysUser.real_name == real_name, SysUser.role == 1
     ).order_by(SysUser.id).first()
@@ -1392,7 +1735,20 @@ def get_user_by_name(db, real_name):
 
 
 def generate_attachments(db, cfg, leader, teacher):
-    """生成真实附件文件并登记"""
+    """
+    生成真实附件文件并登记到 sys_attachment。
+
+    参数：
+        db：数据库会话。
+        cfg：单个项目配置（seed 运行中已回填 _pid/_midterm_id/_achievements/_expense）。
+        leader：项目负责人，负责申报/中期/结项/成果/报销类附件。
+        teacher：指导教师，负责教师推荐意见附件。
+    副作用：
+        在 UPLOAD_DIR 写入 docx/png 实体文件，并向会话新增多条 SysAttachment。
+    说明：
+        先构造一个扁平 project 字典，供各 build_* / make_* 函数直接取字段，
+        避免这些纯排版函数依赖整个 cfg 结构。
+    """
     project = {
         "no": cfg["no"], "name": cfg["name"], "type_name": cfg["type_name"],
         "level_name": cfg["level_name"], "leader_name": leader.real_name,
@@ -1413,6 +1769,7 @@ def generate_attachments(db, cfg, leader, teacher):
         "midterm": cfg["midterm"], "final": cfg["final"],
     }
     # 成员信息补充学号/专业
+    # 1. 文档里需要学号/专业，配置中只写了姓名，这里查库补齐
     members = []
     for m in cfg["members"]:
         user = get_user_by_name(db, m["name"])
@@ -1424,27 +1781,35 @@ def generate_attachments(db, cfg, leader, teacher):
 
     pid = cfg["_pid"]
     created = cfg["submit_time"] or datetime(2026, 6, 18, 9, 0)
+    # metas 元素：(文件元数据, 业务类型, 业务ID, 上传人, 附件创建时间)
     metas = []
 
+    # 2. 申报书：项目级附件，上传人为负责人
     meta = build_application_doc(project)
     metas.append((meta, "project", pid, leader, created))
 
+    # 3. 实施方案/商业计划书：比申报书晚 1 小时，模拟同一晚连续上传
     meta = build_plan_doc(project)
     metas.append((meta, "project", pid, leader, created + timedelta(hours=1)))
 
+    # 4. 教师推荐意见：上传人必须是指导教师，体现“教师确认”环节
     meta = build_teacher_recommendation(project)
     metas.append((meta, "project", pid, teacher, created + timedelta(hours=5)))
 
+    # 5. 中期报告：仅当项目有中期记录时才生成，业务类型为 midterm
     if cfg["midterm"] and cfg["_midterm_id"]:
         meta = build_midterm_doc(project)
         metas.append((meta, "midterm", cfg["_midterm_id"], leader,
                       cfg["midterm"]["submit_date"] or datetime(2026, 9, 12, 10, 0)))
 
+    # 6. 结项报告：仅已提交结项的项目生成，附件挂在项目级
     if cfg["final"]:
         meta = build_final_doc(project)
         metas.append((meta, "project", pid, leader,
                       datetime.combine(cfg["final"]["submit_date"], datetime.min.time()) + timedelta(hours=9)))
 
+    # 7. 成果证明：按 certificate 字段选择软著证书/获奖证书/论文录用通知，
+    #    业务类型为 achievement，前端在成果详情页按 achievement_id 展示
     for ach, ach_cfg in cfg["_achievements"]:
         if ach_cfg["certificate"] == "copyright":
             meta = make_copyright_certificate(project, ach_cfg)
@@ -1455,16 +1820,25 @@ def generate_attachments(db, cfg, leader, teacher):
         metas.append((meta, "achievement", ach.id, leader,
                       datetime.combine(ach_cfg["publish_date"], datetime.min.time()) + timedelta(days=2)))
 
+    # 8. 报销凭证：业务类型为 expense，挂在报销记录主键下
     if cfg["expense"]:
         expense, expense_cfg = cfg["_expense"]
         meta = make_expense_receipt(project, expense_cfg)
         metas.append((meta, "expense", expense.id, leader, expense_cfg["approval_time"] - timedelta(days=1)))
 
+    # 9. 统一登记：此时文件已写盘，仅需插入数据库记录
     for meta, biz_type, biz_id, uploader, ts in metas:
         add_attachment(db, meta, biz_type, biz_id, uploader, ts)
 
 
 def main():
+    """
+    脚本入口：创建独立会话执行 seed，成功提交，异常回滚后重新抛出。
+
+    说明：
+        使用独立 SessionLocal 而非 FastAPI 依赖，因为脚本不在请求上下文中；
+        失败时先 rollback 再 raise，保证控制台能看到完整堆栈。
+    """
     db = SessionLocal()
     try:
         seed(db)

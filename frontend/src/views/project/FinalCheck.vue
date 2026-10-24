@@ -1,8 +1,21 @@
 <!--
-  结项验收（结项工作台）
-  顶部固定「结项条件检查」，下方 Tab 分为「成果登记」与「结项报告与验收」。
-  待结题(8)：负责人填写结项验收报告并提交，等待专家验收；驳回后可直接修改重提（不受截止日限制）
-  已结题(9)：展示验收结果与报告正文
+  页面名称：结项验收（结项工作台）
+  面向角色：项目负责人（填写 / 提交 / 撤回结项报告）、评审专家（验收打分 / 投票）、
+           超级管理员（代验收、导出归档）
+  核心功能：结项条件检查清单、成果登记 Tab、结项报告填写与提交、专家验收进度、
+           多人验收投票、已结题归档包导出。
+  调用 API：getProjectDetail、submitFinal、withdrawFinal、downloadProjectArchive、submitReview。
+  权限 / 状态约束：
+    - 编辑报告：仅负责人 + 待结题(8) + 未提交(0) / 已驳回(3)。
+    - 提交截止日后锁定，但「已驳回(3)」允许修改重提，不受截止日限制。
+    - 撤回提交：报告待验收(1) + 待结题(8) + 未过截止日 + 负责人或超管。
+    - 专家验收入口：后端返回 final_can_accept 且本轮未提交意见、报告待验收。
+    - 多人验收时全部提交后按多数意见判定；驳回必须填写意见。
+    - 归档导出只对已结题(9)开放。
+  关键交互：
+    - ?tab=achievements 可直达成果登记 Tab，并监听 query 变化。
+    - 成果登记复用 AchievementPanel，与旧路由 /projects/:id/achievements 共用同一面板。
+    - 报告状态变化后重新拉取详情，保证进度条与按钮条件同步刷新。
 -->
 <template>
   <StagePageShell
@@ -13,6 +26,7 @@
     :status-text="reportStatusText"
     :status-type="reportStatusTagType"
   >
+    <!-- 页头操作：归档包包含报告与材料，只在已结题(9)后开放 -->
     <template #actions>
       <el-button
         v-if="project?.status === 9"
@@ -22,7 +36,8 @@
       >导出结项归档</el-button>
     </template>
 
-    <!-- 截止日提示（已驳回时不受截止日限制） -->
+    <!-- 截止日提示：已驳回(3) 的文案会说明「修改重提不受截止日限制」，
+         避免用户误以为过期后仍被永久锁定 -->
     <el-alert
       v-if="finalDeadlineText && project?.status === 8"
       :title="finalDeadlineText"
@@ -32,7 +47,8 @@
       show-icon
     />
 
-    <!-- 状态提示 -->
+    <!-- 状态提示：按报告状态展示通过 / 驳回 / 待验收 / 未进入阶段；
+         报告状态与项目状态分开判断，避免把「未结题」误显示成「未提交」 -->
     <el-alert
       v-if="reportStatus === 2"
       title="结项验收已通过，项目已完成结题"
@@ -66,7 +82,8 @@
       class="mb-16"
     />
 
-    <!-- 结项条件检查（固定在 Tab 上方，提交报告前可随时核对） -->
+    <!-- 结项条件检查：清单由后端计算（成果数量、中期结论等），
+         提交报告前可随时核对未通过项 -->
     <el-card v-if="checklist.length && isFinalStage" shadow="never" class="mb-16">
       <template #header><span class="card-title">结项条件检查</span></template>
       <div v-for="item in checklist" :key="item.key" class="check-item">
@@ -79,6 +96,7 @@
       </div>
     </el-card>
 
+    <!-- 双 Tab：成果登记与结项报告；成果 Tab 使用 lazy，避免未进入时提前请求成果列表 -->
     <el-tabs v-model="activeTab" class="final-tabs">
       <!-- 成果登记：与旧路由 /projects/:id/achievements 共用同一面板 -->
       <el-tab-pane label="成果登记" name="achievements" lazy>
@@ -86,7 +104,7 @@
       </el-tab-pane>
 
       <el-tab-pane label="结项报告与验收" name="final">
-        <!-- 专家验收进度 -->
+        <!-- 专家验收进度：仅报告待验收且存在验收人时展示，用于告知负责人还差几位专家 -->
         <el-card v-if="reportStatus === 1 && reviewTotal > 0" shadow="never" class="mb-16">
           <template #header><span class="card-title">专家验收进度</span></template>
           <div class="review-progress">
@@ -99,11 +117,12 @@
           </div>
         </el-card>
 
-        <!-- 结项报告 -->
+        <!-- 结项报告：可编辑区与只读区互斥，避免非负责人在只读区看到表单控件 -->
         <el-card shadow="never" class="mb-16">
           <template #header><span class="card-title">结项验收报告</span></template>
 
-          <!-- 可编辑：待结题 + 负责人 + 未提交/已驳回 -->
+          <!-- 可编辑：待结题(8) + 负责人 + 未提交(0) / 已驳回(3)；
+               已驳回时按钮文案改为「重新提交」，且不受截止日限制 -->
           <el-form
             v-if="canEdit"
             ref="finalFormRef"
@@ -138,7 +157,7 @@
             </el-form-item>
           </el-form>
 
-          <!-- 只读：已提交/已结题/非负责人 -->
+          <!-- 只读：已提交 / 已结题 / 非负责人；非负责人且报告未提交时给出权限说明 -->
           <template v-else>
             <div v-if="project?.final_report" class="report-text">{{ project.final_report }}</div>
             <div v-else class="report-empty">
@@ -162,7 +181,8 @@
           </template>
         </el-card>
 
-        <!-- 专家验收区：被分配到该项目的专家 / 超级管理员，且报告待验收 -->
+        <!-- 专家验收：由后端 final_can_accept 决定是否为本轮验收人；
+             多人验收时提示「全部提交后按多数意见判定」 -->
         <el-card v-if="canAcceptNow" shadow="never">
           <template #header><span class="card-title">专家验收</span></template>
           <el-alert
@@ -216,25 +236,35 @@ import AchievementPanel from '@/components/AchievementPanel.vue'
 import { useProcessStore } from '@/store/process'
 import { useUserStore } from '@/store/user'
 
+// ==================== 路由 / Store / 项目标识 ====================
+// 结项页按项目 ID 独立成页；project 驱动阶段、截止日与验收人判断。
 const route = useRoute()
 const processStore = useProcessStore()
 const userStore = useUserStore()
 
 const pid = computed(() => Number(route.params.id))
+/** 项目详情：包含结项报告状态、条件清单、验收进度等后端计算字段 */
 const project = ref<any>(null)
+/** 首屏加载态 */
 const loading = ref(true)
+/** 报告提交 / 撤回按钮 loading */
 const finalLoading = ref(false)
+/** 专家验收提交按钮 loading */
 const acceptLoading = ref(false)
+/** 归档包导出按钮 loading */
 const archiving = ref(false)
 const finalFormRef = ref<FormInstance>()
+/** 结项报告表单：仅负责人可编辑，其余角色只读展示 project.final_report */
 const finalForm = reactive({ final_report: '' })
+/** 专家验收意见：驳回时必填 */
 const acceptComment = ref('')
+/** 本次新上传的验收材料 id，提交时随报告一起下发 */
 const finalAttachmentIds = ref<number[]>([])
 const finalRules: FormRules = {
   final_report: [{ required: true, message: '请填写结项验收报告', trigger: 'blur' }],
 }
 
-/** 当前 Tab：默认结项报告，支持 ?tab=achievements 直达成果登记 */
+/** 当前 Tab：默认结项报告；?tab=achievements 可直达成果登记，并随 query 变化同步 */
 type FinalTab = 'achievements' | 'final'
 const activeTab = ref<FinalTab>(route.query.tab === 'achievements' ? 'achievements' : 'final')
 watch(
@@ -249,8 +279,9 @@ const isLeader = computed(() =>
 
 /** 结项报告状态：0未提交 1待验收 2已通过 3已驳回 */
 const reportStatus = computed(() => Number(project.value?.final_report_status ?? 0))
-/** 是否已进入结项验收阶段（待结题8 / 已结题9） */
+/** 项目状态是否已进入结项阶段（待结题 8 / 已结题 9） */
 const isFinalStage = computed(() => [8, 9].includes(Number(project.value?.status)))
+/** 页头状态文案：未进入结项阶段时统一显示「未开始」，避免误报为「未提交」 */
 const reportStatusText = computed(() => {
   const map: Record<number, string> = { 0: '未提交', 1: '待专家验收', 2: '验收通过', 3: '验收驳回' }
   if (reportStatus.value === 0 && !isFinalStage.value) return '未开始'
@@ -263,15 +294,16 @@ const reportStatusTagType = computed<'primary' | 'success' | 'info' | 'warning' 
   return map[reportStatus.value] || 'info'
 })
 
-/** 结项条件检查清单 */
+/** 结项条件检查清单：由后端统一计算，前端只负责展示通过 / 未通过 */
 const checklist = computed(() => project.value?.final_checklist || [])
+/** 验收专家总数与已提交数，用于计算进度百分比 */
 const reviewTotal = computed(() => Number(project.value?.final_review_total || 0))
 const reviewDone = computed(() => Number(project.value?.final_review_done || 0))
 const reviewPercent = computed(() =>
   reviewTotal.value ? Math.round((reviewDone.value / reviewTotal.value) * 100) : 0
 )
 
-/** 结项验收截止日（截止日驱动锁定） */
+/** 结项验收截止日（截止日驱动锁定）；只比较日期，忽略时分秒 */
 const finalLocked = computed(() => {
   const d = project.value?.final_deadline
   if (!d) return false
@@ -298,7 +330,7 @@ const canWithdrawFinal = computed(() =>
   && !finalLocked.value
   && (isLeader.value || userStore.isSuperAdmin)
 )
-/** 专家验收入口：后端返回可验收 + 本轮未提交意见 + 报告待验收 */
+/** 专家验收入口：后端返回可验收 + 本轮未提交意见 + 报告待验收 + 项目待结题 */
 const canAcceptNow = computed(() =>
   !!project.value?.final_can_accept
   && !project.value?.final_reviewed_by_me
@@ -306,12 +338,21 @@ const canAcceptNow = computed(() =>
   && project.value?.status === 8
 )
 
+/**
+ * 验收材料上传成功：按 id 去重后暂存，提交报告时一并绑定。
+ * 参数 file：FileUpload 返回的文件对象。
+ */
 function handleFinalFileUpload(file: any) {
   if (file?.id && !finalAttachmentIds.value.includes(file.id)) {
     finalAttachmentIds.value.push(file.id)
   }
 }
 
+/**
+ * 提交结项报告：先做表单校验，再携带本次新增附件 id 一起提交。
+ * 失败处理：校验失败由 el-form 提示并中止；接口异常由全局拦截器提示，
+ *           finally 复位 loading，成功后清空附件缓存并刷新详情。
+ */
 async function handleSubmitFinal() {
   await finalFormRef.value?.validate()
   finalLoading.value = true
@@ -328,6 +369,10 @@ async function handleSubmitFinal() {
   }
 }
 
+/**
+ * 撤回结项报告：报告退回未提交状态，项目仍为待结题。
+ * 失败处理：取消确认直接返回；接口异常由全局拦截器提示。
+ */
 async function handleWithdrawFinal() {
   try {
     await ElMessageBox.confirm(
@@ -348,6 +393,10 @@ async function handleWithdrawFinal() {
   }
 }
 
+/**
+ * 导出结项归档包（报告 + 材料），文件名带项目编号便于归档。
+ * 失败处理：捕获异常并提示「导出失败，请稍后重试」，避免下载失败时无反馈。
+ */
 async function handleExportArchive() {
   archiving.value = true
   try {
@@ -361,6 +410,12 @@ async function handleExportArchive() {
   }
 }
 
+/**
+ * 专家提交验收意见。
+ * 参数 type：pass 通过、reject 驳回；驳回必须填写意见。
+ * 说明：多人验收时按多数意见判定，因此提示文案会区分「等待其他专家」与「最终结果」。
+ * 失败处理：意见缺失仅提示；接口异常由全局拦截器提示，成功后刷新详情。
+ */
 async function handleAccept(type: 'pass' | 'reject') {
   if (type === 'reject' && !acceptComment.value.trim()) {
     ElMessage.warning('驳回时必须填写验收意见')
@@ -386,6 +441,11 @@ async function handleAccept(type: 'pass' | 'reject') {
   }
 }
 
+/**
+ * 加载项目详情并同步侧边栏阶段。
+ * 说明：仅在可编辑时回填报告正文，避免覆盖只读态下展示的后端最终文本。
+ * 失败处理：提示「加载失败」，finally 复位 loading。
+ */
 async function loadData() {
   loading.value = true
   try {

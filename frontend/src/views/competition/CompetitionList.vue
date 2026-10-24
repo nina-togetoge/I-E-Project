@@ -1,9 +1,19 @@
 <!--
-  创新创业大赛 - 学生端列表页
-  所有登录用户可查看已发布的比赛
+  ==== 创新创业大赛（浏览端） ====
+
+  页面职责：以卡片网格展示学校发布的赛事，支持关键词/类型/级别筛选、分页浏览、
+            点击卡片查看详情，并可跳转赛事官方链接。
+  角色与路由：roles [1,2,3,4] 均可访问，路由 /competitions（name: CompetitionList）。
+            学生、教师、专家主要在此浏览赛事并判断是否可申报。
+  调用接口：GET /api/competitions        分页列表（page / page_size，返回 items + total）
+            GET /api/competitions/:id    详情（后端同时累加浏览次数）
+  关键交互：点击卡片打开右侧详情抽屉；详情返回后把 view_count 回写列表对应项，
+            使卡片浏览数无需刷新即可更新；封面缺省时按比赛类型从默认海报池取图；
+            列表仅展示报名中(1)、进行中(2)，已结束(3)/已取消(4) 由后端按下架处理。
 -->
 <template>
   <div class="page-container">
+    <!-- 区块：页面标题与说明 -->
     <el-card shadow="never" class="header-card">
       <div class="header">
         <div class="title-area">
@@ -14,6 +24,7 @@
       </div>
     </el-card>
 
+    <!-- 区块：筛选区（关键词 / 比赛类型 / 级别；回车即可查询） -->
     <el-card shadow="never" class="filter-card">
       <el-form :inline="true" :model="searchForm">
         <el-form-item label="关键词">
@@ -36,8 +47,10 @@
       </el-form>
     </el-card>
 
+    <!-- 区块：赛事卡片网格（整卡可点击进入详情，无数据时显示空状态） -->
     <div class="competition-grid" v-loading="loading">
       <div v-for="item in list" :key="item.id" class="competition-card" @click="goDetail(item.id)">
+        <!-- 封面区：左上状态角标（0 草稿 / 1 报名中 / 2 进行中 / 3 已结束 / 4 已取消），右上级别角标（1 校级 / 2 省级 / 3 国家级） -->
         <div class="card-cover">
           <img :src="coverUrl(item)" class="cover-img" alt="" />
           <el-tag :type="statusTagType(item.status)" effect="dark" class="status-tag">{{ item.status_name }}</el-tag>
@@ -71,6 +84,7 @@
       <el-empty v-if="!loading && list.length === 0" description="暂无比赛" />
     </div>
 
+    <!-- 区块：分页区（每页 9 条，与三列卡片布局一一对应） -->
     <div class="pagination-wrap" v-if="total > 0">
       <el-pagination
         v-model:current-page="searchForm.page"
@@ -83,7 +97,7 @@
       />
     </div>
 
-    <!-- 详情抽屉 -->
+    <!-- 区块：详情抽屉（基础信息、简介/要求/奖项，及官方链接入口） -->
     <el-drawer v-model="detailVisible" :title="detail?.title || '比赛详情'" size="50%" direction="rtl">
       <div v-if="detail" class="detail-content">
         <div class="detail-cover">
@@ -124,22 +138,35 @@
 </template>
 
 <script setup lang="ts">
+// ==================== 导入区 ====================
 import { ref, onMounted } from 'vue'
 import { Trophy, Search, Refresh, OfficeBuilding, Location, View, Link } from '@element-plus/icons-vue'
 import { getCompetitionList, getCompetitionDetail, type CompetitionListItem, type CompetitionDetail } from '@/api/competition'
 
+// ==================== 枚举与展示映射 ====================
+// 比赛类型 competition_type：1 创新训练类 / 2 创业实践类 / 3 学科竞赛类 / 4 综合类
 const typeMap: Record<number, string> = { 1: '创新训练类', 2: '创业实践类', 3: '学科竞赛类', 4: '综合类' }
+// 比赛级别 level：1 校级 / 2 省级 / 3 国家级
 const levelMap: Record<number, string> = { 1: '校级', 2: '省级', 3: '国家级' }
 
+// ==================== 响应式状态 ====================
+// 卡片列表加载态：控制网格区域 v-loading
 const loading = ref(false)
+// 当前页比赛数据，对应 GET /api/competitions 返回的 items
 const list = ref<CompetitionListItem[]>([])
+// 列表总数，对应接口返回的 total，用于分页组件
 const total = ref(0)
+// 当前查看的比赛详情，对应 GET /api/competitions/:id
 const detail = ref<CompetitionDetail | null>(null)
+// 详情抽屉显隐
 const detailVisible = ref(false)
 
+// ==================== 查询条件与分页 ====================
+// 列表查询参数，作为 GET /api/competitions 的 query；page_size=9 与三列卡片布局匹配
 const searchForm = ref({ page: 1, page_size: 9, keyword: '', competition_type: undefined as number | undefined, level: undefined as number | undefined })
 
-// 默认封面图池（大赛宣传海报），按比赛类型分配
+// 默认封面图池（大赛宣传海报），按比赛类型分配：
+// key 为 competition_type（1 创新训练 / 2 创业实践 / 3 学科竞赛 / 4 综合），value 为候选海报路径
 const defaultCovers: Record<number, string[]> = {
   1: ['/images/competitions/poster_innovation_experience.jpg', '/images/competitions/poster_school_training.jpg'],
   2: ['/images/competitions/poster_cxcyds.jpg', '/images/competitions/poster_chuangqingchun.jpg', '/images/competitions/poster_ec_san_chuang.jpg'],
@@ -147,6 +174,11 @@ const defaultCovers: Record<number, string[]> = {
   4: ['/images/competitions/poster_internet_plus.jpg', '/images/competitions/poster_tiaozhanbei.jpg', '/images/competitions/poster_ican.jpg'],
 }
 
+/**
+ * 计算卡片/详情封面地址。
+ * @param item 比赛数据（需要 cover_image / competition_type / id）
+ * @returns 有封面图时直接使用，否则按类型从海报池中按 id 取模选择一张，保证视觉不空
+ */
 function coverUrl(item: any): string {
   if (item.cover_image) {
     return item.cover_image
@@ -156,15 +188,22 @@ function coverUrl(item: any): string {
   return pool[item.id % pool.length]
 }
 
+/** 状态码转 el-tag 颜色：草稿灰、报名中绿、进行中橙、已结束默认色、已取消红 */
 function statusTagType(status: number) {
   return ({ 0: 'info', 1: 'success', 2: 'warning', 3: '', 4: 'danger' } as Record<number, string>)[status] || 'info'
 }
 
+/** 把日期时间截成 yyyy-MM-dd 展示；空值显示 '-' @param d 后端日期字符串 */
 function formatDate(d: string | null) {
   if (!d) return '-'
   return d.substring(0, 10)
 }
 
+// ==================== 数据加载与筛选 ====================
+/**
+ * 加载当前页比赛列表。
+ * 副作用：写入 loading、list、total；兼容 ApiResponse 与直接返回 data 两种结构。
+ */
 async function loadData() {
   loading.value = true
   try {
@@ -178,12 +217,20 @@ async function loadData() {
   }
 }
 
+/** 点击查询：回到第 1 页后重新请求，避免筛选后页码越界 */
 function handleSearch() { searchForm.value.page = 1; loadData() }
+/** 重置全部筛选条件并回到第 1 页重新加载 */
 function handleReset() {
   searchForm.value = { page: 1, page_size: 9, keyword: '', competition_type: undefined, level: undefined }
   loadData()
 }
 
+// ==================== 详情交互 ====================
+/**
+ * 打开比赛详情抽屉。
+ * @param id 比赛 ID
+ * 副作用：GET 详情、把最新 view_count 回写到列表对应卡片、打开抽屉。
+ */
 async function goDetail(id: number) {
   const res = await getCompetitionDetail(id)
   detail.value = (res as any).data ?? res
@@ -195,8 +242,11 @@ async function goDetail(id: number) {
   detailVisible.value = true
 }
 
+/** 在新标签页打开赛事官方链接，避免当前浏览列表被覆盖 @param url 官方地址 */
 function openOfficial(url: string) { window.open(url, '_blank') }
 
+// ==================== 生命周期 ====================
+// 首次进入按默认条件加载第一页；离开页面后筛选状态不保留
 onMounted(loadData)
 </script>
 

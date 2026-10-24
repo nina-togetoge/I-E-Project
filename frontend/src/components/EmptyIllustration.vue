@@ -1,5 +1,17 @@
+<!--
+  ==== EmptyIllustration ====
+  职责：空状态 / 占位插画组件。用内联 SVG 提供 default / search / project / file / error 五种场景图，
+        下方配一句说明文案。
+  复用：表格空数据、搜索无结果、我的项目为空、附件缺失、页面异常等场景。
+  契约：props：type（五种场景之一，默认 default）、description（说明文案，默认"暂无数据"）；
+        插槽：默认插槽可完全替换文案区域。
+  注意：1) SVG 全部内联绘制，无外部图片资源，离线与深色主题下也能正常展示；
+        2) 颜色使用 CSS 变量并带兜底值，跟随全局主题色；
+        3) 组件只做展示，不包含重试 / 刷新等交互，需要时由父组件包一层按钮。
+-->
 <template>
   <div class="empty-illustration">
+    <!-- 区块：插画区域，按 type 选择对应 SVG，未知类型回落到 default -->
     <div class="illustration-svg">
       <svg-default v-if="type === 'default'" />
       <svg-search v-else-if="type === 'search'" />
@@ -8,6 +20,7 @@
       <svg-error v-else-if="type === 'error'" />
       <svg-default v-else />
     </div>
+    <!-- 区块：说明文案。默认插槽优先，其次 description，最后兜底"暂无数据" -->
     <p class="empty-desc">
       <slot>{{ description || '暂无数据' }}</slot>
     </p>
@@ -17,15 +30,32 @@
 <script setup lang="ts">
 import { h } from 'vue'
 
+// ==================== props ====================
+/**
+ * 展示配置。
+ * type 取值含义：default 通用空数据 / search 搜索无结果 / project 无项目 /
+ *               file 无附件或文件缺失 / error 加载异常。
+ */
 defineProps<{
+  /** 场景类型，默认 default；决定渲染哪一张 SVG */
   type?: 'default' | 'search' | 'project' | 'file' | 'error'
+  /** 说明文案，默认"暂无数据"；优先级低于默认插槽 */
   description?: string
 }>()
 
+// ==================== 配色常量 ====================
+/** 主题主色，用于插画中的强调元素，兜底为 Element Plus 默认蓝 */
 const strokeColor = 'var(--primary-color, #409EFF)'
+/** 次级文字色，用于线稿主体，兜底为灰色 */
 const strokeGray = 'var(--text-color-secondary, #909399)'
+/** 主色的低透明度填充，用于插画中的色块区域 */
 const fillLight = 'rgba(64, 158, 255, 0.08)'
 
+// ==================== 插画定义 ====================
+/**
+ * 通用空状态：虚线文档轮廓 + 一枚主色小方块，表达"内容待填充"。
+ * 使用 render 函数而非模板，便于按 type 动态切换且无需额外子组件文件。
+ */
 const svgDefault = {
   render() {
     return h('svg', {
@@ -68,6 +98,7 @@ const svgDefault = {
   },
 }
 
+/** 搜索无结果：放大镜 + 内部淡色圆，用于列表筛选/关键词搜索返回空的场景 */
 const svgSearch = {
   render() {
     return h('svg', {
@@ -99,6 +130,7 @@ const svgSearch = {
   },
 }
 
+/** 无项目：文件夹 + 加号徽标，用于「我的项目」「项目库」等列表为空 */
 const svgProject = {
   render() {
     return h('svg', {
@@ -138,6 +170,7 @@ const svgProject = {
   },
 }
 
+/** 无附件：带折角的文件 + 表格线，用于材料/佐证附件缺失提示 */
 const svgFile = {
   render() {
     return h('svg', {
@@ -173,6 +206,7 @@ const svgFile = {
   },
 }
 
+/** 异常/失败：云朵 + 沮丧表情（嘴角用错误红），用于接口失败或页面加载异常 */
 const svgError = {
   render() {
     return h('svg', {
@@ -215,6 +249,7 @@ const svgError = {
 </script>
 
 <style scoped>
+/* 容器：垂直居中排布，插画与文案之间由 .illustration-svg 的下边距隔开 */
 .empty-illustration {
   display: flex;
   flex-direction: column;
@@ -229,6 +264,7 @@ const svgError = {
   opacity: 0.95;
 }
 
+/* 文案：限制最大宽度，长说明自动换行并保持居中 */
 .empty-desc {
   font-size: 14px;
   color: var(--text-color-secondary, #909399);

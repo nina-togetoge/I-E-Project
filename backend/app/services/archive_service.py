@@ -1,10 +1,24 @@
-"""
-结项归档导出服务
-
-将已结题项目的关键信息与附件打包为 ZIP：
-- 项目归档信息.xlsx（项目概况 / 团队 / 预算 / 中期 / 成果 / 结项验收 / 附件清单）
-- 附件/（项目附件、中期检查附件、成果证明材料）
-"""
+# ============================================================================
+# 结项归档导出服务
+# ----------------------------------------------------------------------------
+# 业务功能：将已结题项目的关键信息与附件打包为 ZIP，供学院/学校留档：
+#   - 项目归档信息.xlsx（项目概况 / 团队 / 预算 / 中期 / 成果 / 结项验收 / 附件清单）
+#   - 附件/（项目附件、中期检查附件、成果证明材料）
+# 核心表：
+#   proj_project              项目主表（状态、预算、成员、成果、结项报告）
+#   proj_midterm              中期检查（进展、经费使用、审核意见）
+#   proj_achievement          成果（类型/级别/认定状态）
+#   proj_achievement_review   成果认定记录
+#   sys_attachment            附件（project/midterm/achievement 三类业务归属）
+# 上游路由：app/api/v1/archive.py（项目结项归档下载）
+# 下游依赖：ProjectService（详情 + 权限）、ProjectCRUD/MidtermCRUD、
+#           ExcelHelper（多 sheet 导出）、Python zipfile。
+# 关键约束：
+#   1) 仅“已结题”项目可导出归档，其他状态直接拒绝；
+#   2) 复用 ProjectService.get_detail 做数据权限校验，无权限用户无法导出；
+#   3) 源文件缺失时仍写入附件清单并标注“否（源文件缺失）”，不中断打包；
+#   4) 同一目录同名附件自动追加序号，避免 ZIP 内文件覆盖。
+# ============================================================================
 import io
 import os
 import re
@@ -25,35 +39,63 @@ from app.schemas.project import PROJECT_STATUS_FINISHED
 from app.schemas.review import MIDTERM_STATUS_NAME
 from app.utils.excel_helper import ExcelHelper
 
+# 成果类型映射：与 proj_achievement.achievement_type 对应
 ACHIEVEMENT_TYPE_NAME = {1: "论文", 2: "专利", 3: "软件著作权", 4: "竞赛获奖", 5: "创业成果", 6: "其他"}
+# 成果级别映射：1=校级 2=省级 3=国家级
 ACHIEVEMENT_LEVEL_NAME = {1: "校级", 2: "省级", 3: "国家级"}
+# 成果认定状态映射：0=待认定 1=已认定 2=不通过
 REVIEW_STATUS_NAME = {0: "待认定", 1: "已认定", 2: "不通过"}
 
 
 def _fmt_date(v) -> str:
+    """把日期/时间/字符串统一格式化为 YYYY-MM-DD，空值返回空串。"""
     if not v:
         return ""
     return str(v)[:10]
 
 
 def _fmt_money(v) -> str:
+    """把金额格式化为两位小数字符串；None/空值按 0 处理，避免 Excel 出现 None。"""
     return f"{Decimal(str(v or 0)):.2f}"
 
 
 def _safe_name(name: str, default: str = "未命名") -> str:
-    """去除文件/目录名中的非法字符"""
+    """去除文件/目录名中的非法字符。
+
+    参数：name 原始名称；default 清洗后为空时的兜底名称。
+    返回：最长 120 字符的安全名称。
+    """
     name = re.sub(r'[\\/:*?"<>|\r\n]+', "_", (name or "").strip())
     return name[:120] or default
 
 
 class ArchiveService:
-    """结项归档导出"""
+    """结项归档导出服务：汇总业务数据，生成 Excel 并将附件一并打包为 ZIP。"""
 
     @staticmethod
     def export_zip(db: Session, project_id: int, operator: SysUser) -> Tuple[str, bytes]:
+        """导出项目结项归档 ZIP。
+
+        参数：
+            db: 数据库会话。
+            project_id: 项目 id。
+            operator: 当前操作人，用于 ProjectService 的数据权限校验。
+        返回：
+            (建议下载文件名, ZIP 二进制内容)；文件在内存生成，不落临时文件。
+        异常：
+            项目不存在 / 非已结题状态 → ParamValidateException；
+            无权限 → 由 ProjectService.get_detail 抛出。
+        副作用：
+            无数据库写入；仅读取项目、中期、成果、附件并生成内存 ZIP。
+        注意：
+            使用 ProjectService.get_detail 而不是直接查表，确保复用了项目级的
+            负责人/学院/成员权限判断；附件源文件缺失不会中断导出。
+        """
+        # 延迟导入：避免 project_service 与本模块可能存在的循环依赖
         from app.services.project_service import ProjectService
 
         detail = ProjectService.get_detail(db, project_id, operator)
+        # 归档是结题后的最终快照，未结题项目的材料仍可能变化，提前导出会产生不可信档案
         if detail.status != PROJECT_STATUS_FINISHED:
             raise ParamValidateException(message="仅已结题项目支持导出结项归档")
         project = ProjectCRUD.get_by_id(db, project_id)
@@ -68,6 +110,7 @@ class ArchiveService:
         ach_ids = [a.id for a in achievements]
         reviews: Dict[int, ProjAchievementReview] = {}
         if ach_ids:
+            # 一次 IN 查询取全部成果认定记录，按成果 id 建索引，避免逐条查询
             for r in db.query(ProjAchievementReview).filter(
                 ProjAchievementReview.achievement_id.in_(ach_ids),
                 ProjAchievementReview.is_deleted == 0,
@@ -153,6 +196,7 @@ class ArchiveService:
             })
 
         # ---------- 2. 附件收集 ----------
+        # 统一收集为 (分类, 附件) 列表：分类决定 ZIP 内子目录，缺文件时用于清单标注
         attachments: List[Tuple[str, SysAttachment]] = []
         project_atts = db.query(SysAttachment).filter(
             SysAttachment.biz_type == "project",
@@ -186,6 +230,7 @@ class ArchiveService:
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             for category, att in attachments:
                 file_path = att.file_path or ""
+                # 数据库存的是相对路径，按进程工作目录还原；绝对路径则原样使用
                 if file_path and not os.path.isabs(file_path):
                     file_path = os.path.join(os.getcwd(), file_path)
                 packed = bool(file_path and os.path.isfile(file_path))
@@ -202,6 +247,7 @@ class ArchiveService:
                 folder = f"附件/{category}"
                 base_name = _safe_name(att.file_name, f"附件_{att.id}")
                 key = f"{folder}/{base_name}"
+                # ZIP 内同名文件会互相覆盖，这里用出现次数追加 _2/_3 后缀去重
                 if key in packed_names:
                     packed_names[key] += 1
                     stem, ext = os.path.splitext(base_name)
@@ -210,6 +256,7 @@ class ArchiveService:
                     packed_names[key] = 1
                 zf.write(file_path, key)
 
+            # 汇总 Excel 一次生成多 sheet 的字节流，直接写入 ZIP，避免落临时文件
             xlsx = ExcelHelper.export_sheets([
                 ("项目概况", [("字段", "k"), ("内容", "v")], overview_rows),
                 ("团队成员", [

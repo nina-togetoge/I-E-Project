@@ -1,10 +1,31 @@
 <!--
-  首页 Dashboard
-  根据角色显示差异化内容
+  页面名称：首页 Dashboard（当前位于 views/dashboard/index.vue）
+  面向角色：全部已登录角色（学生 / 教师 / 专家 / 管理员），内容按角色差异化
+  功能：
+    1. 欢迎卡片：头像、问候语、姓名、学院、角色、日期与实时时钟
+    2. 角色化统计卡片：管理员看项目/立项/结题/经费；学生看我的项目/报销/待办；
+       专家看待处理/评审项目；教师看待处理/指导项目/报销
+    3. 快捷入口：按角色过滤可用路由，避免进入无权限页面
+    4. 管理员额外展示：项目状态分布饼图、月度申报趋势折线图
+  调用 API：
+    - GET  /api/statistics/overview：项目统计，后端按当前用户数据权限过滤
+    - GET  /api/statistics/trend：月度申报趋势（仅管理员加载图表）
+    - POST /api/expenses/list：只取 total 作为报销申请数量（学生 / 教师）
+  权限 / 数据范围：
+    - 所有统计由后端按角色与学院过滤，前端不额外传学院参数
+    - 快捷入口依据路由 meta.roles 与当前角色做前端过滤，防止点击后跳 403
+  关键交互：
+    - 时钟每秒刷新，组件卸载时清理定时器
+    - 统计加载失败时静默降级为 0，不阻塞页面；报销数量仅对学生/教师请求
+    - 管理员的状态饼图与趋势图在同一个加载流程里赋值，切换角色登录不会渲染
 -->
 <template>
   <div class="dashboard">
-    <!-- 欢迎卡片 -->
+    <!--
+      欢迎卡片
+      头像优先使用用户头像，缺省时用姓名首字；学院名取 displayCollegeName（无学院时回退学校名）。
+      greeting 按当前小时计算，时间与日期由定时器每秒/每分钟更新。
+    -->
     <el-card class="welcome-card" shadow="never">
       <div class="welcome-content">
         <el-avatar :size="60" :src="userStore.userInfo?.avatar || undefined">
@@ -24,7 +45,11 @@
       </div>
     </el-card>
 
-    <!-- 统计卡片 -->
+    <!--
+      角色化统计卡片
+      statCards 是 computed：不同角色返回不同的指标名称与图标，但复用同一份 stats。
+      数值为 0 时 CountNumber 仍正常展示，避免接口失败造成空白。
+    -->
     <el-row :gutter="20" class="stat-row">
       <el-col v-for="card in statCards" :key="card.label" :span="6">
         <el-card shadow="hover" class="stat-card">
@@ -41,7 +66,11 @@
       </el-col>
     </el-row>
 
-    <!-- 快捷入口 -->
+    <!--
+      快捷入口
+      quickEntries 是 computed，按当前角色生成：只保留该角色有权访问的路径，
+      路由守卫会再次校验角色；每个入口 span=4，即一行最多展示 6 个。
+    -->
     <el-card shadow="never" class="quick-entry">
       <template #header>
         <span>快捷入口</span>
@@ -58,7 +87,12 @@
       </el-row>
     </el-card>
 
-    <!-- 管理员数据概览 -->
+    <!--
+      管理员数据概览
+      只有管理员渲染：左侧状态饼图使用 stats 中的立项/结题/待审核数量，
+      右侧趋势折线使用 getTrend 返回的按月申请数；非管理员不请求趋势接口。
+      图表 option 用 shallowRef 保存，整体替换即可触发 EChart 更新，避免深层响应式开销。
+    -->
     <el-row v-if="userStore.isAdmin" :gutter="20" style="margin-top: 20px;">
       <el-col :span="12">
         <el-card shadow="never">
@@ -92,10 +126,13 @@ import CountNumber from '@/components/CountNumber.vue'
 const router = useRouter()
 const userStore = useUserStore()
 
+// ==================== 时钟 ====================
+// 顶栏时间展示；timer 保存定时器句柄，卸载时清理
 const currentTime = ref('')
 const currentDate = ref('')
 let timer: number
 
+/** 刷新日期与时间：日期带星期，时间补零到 HH:mm:ss */
 function updateTime() {
   const now = new Date()
   const days = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
@@ -107,6 +144,8 @@ timer = window.setInterval(updateTime, 1000)
 
 onBeforeUnmount(() => clearInterval(timer))
 
+// ==================== 问候语 ====================
+// 按当前小时分段返回中文问候；不依赖接口，因此登录后立即可用
 const greeting = computed(() => {
   const h = new Date().getHours()
   if (h < 6) return '凌晨好'
@@ -118,7 +157,8 @@ const greeting = computed(() => {
   return '晚上好'
 })
 
-// 统计数据
+// ==================== 统计数据 ====================
+// 概览数据：字段与 /api/statistics/overview 对齐；不同角色复用的字段含义由后端按数据范围解释
 const stats = ref({
   total_projects: 0,
   approved_projects: 0,
@@ -128,6 +168,8 @@ const stats = ref({
   expense_count: 0,
 })
 
+// 统计卡片按角色分支：管理员看全校汇总；学生/教师看本人/本院项目与报销；
+// 专家只看待处理与评审相关数量。最后 else 分支作为教师默认展示。
 const statCards = computed(() => {
   if (userStore.isAdmin) {
     return [
@@ -160,9 +202,11 @@ const statCards = computed(() => {
   }
 })
 
+// ==================== 快捷入口 ====================
 // 快捷入口按角色过滤：目标路由的 meta.roles 必须包含当前角色，否则会跳 403
 // （/projects→[1,2]，/projects/create 仅学生使用，/expenses→[1]，
 //   /admin/expenses→[2,4]，/expert/pending→[3]，其余管理页→[4]）
+// 「归档项目库」对所有角色开放，因此不需要额外角色判断；管理员再追加看板与用户管理。
 const quickEntries = computed(() => {
   const entries: { label: string; path: string; icon: any; color: string }[] = []
   if (userStore.isStudent || userStore.isTeacher) {
@@ -190,10 +234,20 @@ const quickEntries = computed(() => {
   return entries
 })
 
-// 图表配置
+// ==================== 管理员图表配置 ====================
+// 用 shallowRef 存 option：ECharts 配置对象层级深，整体替换即可驱动更新，
+// 同时避免 Vue 递归代理带来额外开销。
 const statusChartOption = shallowRef<echarts.EChartsOption>({} as echarts.EChartsOption)
 const trendChartOption = shallowRef<echarts.EChartsOption>({} as echarts.EChartsOption)
 
+/**
+ * 加载首页统计与图表
+ * 1) 所有角色都请求 overview，后端按数据权限返回各自范围；
+ * 2) 学生/教师额外请求报销列表，只取 total 作为报销数量，page_size=1 减少传输；
+ * 3) 管理员再请求趋势并生成状态饼图与趋势折线。
+ * 失败处理：每个请求独立 try/catch 且静默失败，保持已有值（通常为 0），
+ *   首页作为入口页不应因统计接口异常而弹出错误或白屏。
+ */
 async function loadStatistics() {
   try {
     // 所有角色都加载项目统计（API 内部按数据权限过滤）
@@ -251,6 +305,8 @@ async function loadStatistics() {
   }
 }
 
+// ==================== 初始化 ====================
+// 先立即刷新一次时钟（定时器首次触发在 1 秒后），再加载统计数据
 onMounted(() => {
   updateTime()
   loadStatistics()

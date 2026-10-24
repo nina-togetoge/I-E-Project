@@ -1,9 +1,26 @@
 <!--
-  创新创业大赛 - 管理员管理页
-  仅超级管理员可进行增删改查
+  ==== 大赛管理（管理员端） ====
+
+  页面职责：维护全校创新创业赛事的全生命周期，包括新建/编辑比赛、调整发布状态、
+            生成校级比赛获奖名单、删除比赛，以及按关键词/状态筛选与分页浏览。
+  角色与路由：仅 role=4 管理员可进入，路由 /admin/competitions（name: CompetitionManage）。
+            超级管理员（role=4 且无 college_id）管理全部比赛；学院管理员（role=4 且有
+            college_id）通常只管理本院数据，最终范围由后端按 college_id 过滤。
+  调用接口：GET    /api/competitions                       列表（page / page_size，返回 items + total）
+            GET    /api/competitions/:id                   详情（顺带累加浏览次数）
+            POST   /api/competitions                       新建
+            PUT    /api/competitions/:id                   编辑
+            PATCH  /api/competitions/:id/status            修改状态（status 走 Query 参数）
+            POST   /api/competitions/:id/generate-awards   生成获奖名单
+            DELETE /api/competitions/:id                   删除
+  关键流程：筛选/翻页加载列表；行内下拉菜单按命令分发到查看、编辑、改状态、
+            生成获奖、删除；新建与编辑共用弹窗，编辑前先取详情回填；
+            提交前校验时间表先后顺序，并把空日期、空届次转为 undefined；
+            自动生成获奖名单只对 level=1（校级）开放，省级/国家级需人工登记证书。
 -->
 <template>
   <div class="page-container">
+    <!-- 区块：筛选与新建入口（关键词 / 状态查询，右侧为新建比赛按钮） -->
     <el-card shadow="never" class="filter-card">
       <div class="toolbar">
         <el-form :inline="true" :model="searchForm">
@@ -24,6 +41,7 @@
       </div>
     </el-card>
 
+    <!-- 区块：比赛列表（分页表格，操作列用下拉菜单聚合多类操作） -->
     <el-card shadow="never">
       <el-table v-loading="loading" :data="list" stripe style="width:100%">
         <el-table-column type="index" label="序号" width="60" align="center" />
@@ -39,6 +57,7 @@
             {{ fmt(row.registration_start) }} ~ {{ fmt(row.registration_end) }}
           </template>
         </el-table-column>
+        <!-- 状态码：0 草稿 / 1 报名中 / 2 进行中 / 3 已结束 / 4 已取消 -->
         <el-table-column label="状态" width="150">
           <template #default="{ row }">
             <el-tag :type="statusTagType(row.status)">{{ row.status_name }}</el-tag>
@@ -54,6 +73,7 @@
                   <el-dropdown-item command="view">查看详情</el-dropdown-item>
                   <el-dropdown-item command="edit">编辑</el-dropdown-item>
                   <el-dropdown-item command="status" divided>修改状态</el-dropdown-item>
+                  <!-- 自动分配仅支持校级（level=1）；省级/国家级需线下登记获奖证书 -->
                   <el-dropdown-item v-if="row.level === 1" command="awards" :disabled="awardLoading">生成获奖名单</el-dropdown-item>
                   <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
                 </el-dropdown-menu>
@@ -62,6 +82,7 @@
           </template>
         </el-table-column>
       </el-table>
+      <!-- 区块：分页区（page / page_size 变化后重新请求列表） -->
       <div class="pagination-wrap">
         <el-pagination
           v-model:current-page="searchForm.page"
@@ -75,7 +96,7 @@
       </div>
     </el-card>
 
-    <!-- 新建/编辑对话框 -->
+    <!-- 区块：新建/编辑弹窗（新建与编辑共用；编辑先拉详情回填，避免旧数据误提交） -->
     <el-dialog center v-model="dialogVisible" :title="isEdit ? '编辑比赛' : '新建比赛'" width="780px" :close-on-click-modal="false">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-form-item label="比赛名称" prop="title">
@@ -207,7 +228,7 @@
       </template>
     </el-dialog>
 
-    <!-- 详情抽屉 -->
+    <!-- 区块：详情抽屉（只读展示比赛基础信息、简介、参赛要求与奖项设置） -->
     <el-drawer v-model="detailVisible" :title="detail?.title || '比赛详情'" size="40%" direction="rtl">
       <div v-if="detail" class="detail-content">
         <el-descriptions :column="1" border>
@@ -233,7 +254,7 @@
       </div>
     </el-drawer>
 
-    <!-- 获奖名单生成结果 -->
+    <!-- 区块：获奖名单结果弹窗（按学院分组展示自动分配的名次与获奖等级） -->
     <el-dialog
       center
       v-model="awardVisible"
@@ -264,7 +285,7 @@
       </template>
     </el-dialog>
 
-    <!-- 修改状态弹窗 -->
+    <!-- 区块：修改状态弹窗（每个状态附业务说明，帮助管理员判断切换影响） -->
     <el-dialog center v-model="statusVisible" width="460px" class="status-dialog" :close-on-click-modal="false">
       <template #header>
         <div class="sd-header">
@@ -305,6 +326,7 @@
 </template>
 
 <script setup lang="ts">
+// ==================== 导入区 ====================
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Refresh, Plus, EditPen, Check } from '@element-plus/icons-vue'
@@ -314,29 +336,60 @@ import {
   type CompetitionListItem, type CompetitionDetail, type CompetitionForm, type AwardGenerateResult,
 } from '@/api/competition'
 
+// ==================== 枚举与展示映射 ====================
+// 比赛类型 competition_type：1 创新训练类 / 2 创业实践类 / 3 学科竞赛类 / 4 综合类
 const typeMap: Record<number, string> = { 1: '创新训练类', 2: '创业实践类', 3: '学科竞赛类', 4: '综合类' }
+// 比赛级别 level：1 校级 / 2 省级 / 3 国家级（仅校级支持自动生成获奖名单）
 const levelMap: Record<number, string> = { 1: '校级', 2: '省级', 3: '国家级' }
+// 比赛状态 status：0 草稿 / 1 报名中 / 2 进行中 / 3 已结束 / 4 已取消；学生端仅可见 1、2
 const statusMap: Record<number, string> = { 0: '草稿', 1: '报名中', 2: '进行中', 3: '已结束', 4: '已取消' }
 
+// ==================== 响应式状态 ====================
+// 列表加载态：控制表格 v-loading
 const loading = ref(false)
+// 提交中：控制新建/编辑与状态弹窗的确定按钮 loading，防止重复提交
 const submitting = ref(false)
+// 当前页比赛列表，对应 GET /api/competitions 返回的 items
 const list = ref<CompetitionListItem[]>([])
+// 列表总数，对应接口返回的 total，供分页组件计算页码
 const total = ref(0)
+// 当前查看的比赛详情，对应 GET /api/competitions/:id
 const detail = ref<CompetitionDetail | null>(null)
+// 详情抽屉显隐
 const detailVisible = ref(false)
+// 新建/编辑弹窗显隐
 const dialogVisible = ref(false)
+// 弹窗模式：true 为编辑（走 PUT），false 为新建（走 POST）
 const isEdit = ref(false)
+// 正在编辑的比赛 ID；新建时为 null，提交时据此决定调用哪个接口
 const editId = ref<number | null>(null)
+// el-form 实例引用，submit 时用于触发表单校验
 const formRef = ref()
-// 获奖名单生成
+
+// 获奖名单生成相关的弹窗与结果状态
+// 生成请求进行中：用于禁用行内「生成获奖名单」菜单项
 const awardLoading = ref(false)
+// 获奖结果弹窗显隐
 const awardVisible = ref(false)
+// 生成结果（按学院分组的获奖明细与总数）；为 null 表示尚未生成
 const awardResult = ref<AwardGenerateResult | null>(null)
-// 修改状态弹窗
+
+// 修改状态弹窗相关状态
+// 状态弹窗显隐
 const statusVisible = ref(false)
+// 当前要改状态的比赛行，用于展示名称并回填原状态
 const statusRow = ref<CompetitionListItem | null>(null)
+// 目标状态：0 草稿 / 1 报名中 / 2 进行中 / 3 已结束 / 4 已取消，默认 1 报名中
 const statusNew = ref<number>(1)
 
+// ==================== 获奖名单生成（事件处理） ====================
+/**
+ * 生成校级比赛获奖名单。
+ * 仅 level=1（校级）可用：按学院汇总参赛项目均分排名，名次 1/2/3 对应校级一/二/三等奖，
+ * 其后顺次分配参与奖；生成结果由后端落库为「竞赛获奖」成果，计入结题成果门槛。
+ * @param row 当前比赛行（需要 id / title / session）
+ * 副作用：二次确认、POST generate-awards、打开结果弹窗、成功消息提示
+ */
 async function handleGenerateAwards(row: CompetitionListItem) {
   const label = `${row.title}${row.session ? '（' + row.session + '）' : ''}`
   try {
@@ -359,8 +412,13 @@ async function handleGenerateAwards(row: CompetitionListItem) {
   }
 }
 
+// ==================== 查询条件与分页 ====================
+// 列表查询参数，直接作为 GET /api/competitions 的 query：
+// page 当前页、page_size 每页条数、keyword 名称/主办方模糊搜索、status 状态筛选
 const searchForm = reactive({ page: 1, page_size: 10, keyword: '', status: undefined as number | undefined })
 
+// ==================== 表单模型与校验 ====================
+// 新建表单默认值：草稿状态、校级、创新训练类；日期留空表示该流程阶段不锁定
 const defaultForm = (): CompetitionForm => ({
   title: '', session: '', competition_type: 1, level: 1, status: 0,
   organizer: '', co_organizer: '', description: '', requirements: '', rewards: '',
@@ -369,8 +427,10 @@ const defaultForm = (): CompetitionForm => ({
   midterm_deadline: '', final_deadline: '',
   location: '', contact: '', cover_image: '', official_url: '',
 })
+// 新建/编辑共用表单模型，编辑时用详情接口返回值整体回填
 const form = reactive<CompetitionForm>(defaultForm())
 
+// 必填校验：名称、类型、级别、状态；时间表先后关系由 validateDateOrder 额外兜底
 const rules = {
   title: [{ required: true, message: '请输入比赛名称', trigger: 'blur' }],
   competition_type: [{ required: true, message: '请选择类型', trigger: 'change' }],
@@ -378,17 +438,27 @@ const rules = {
   status: [{ required: true, message: '请选择状态', trigger: 'change' }],
 }
 
+// ==================== 展示辅助函数 ====================
+/** 截取日期前 10 位展示为 yyyy-MM-dd；空值显示 '-'。@param d 后端日期时间字符串 */
 function fmt(d: string | null) { return d ? d.substring(0, 10) : '-' }
+/** 状态码转 el-tag 颜色：草稿灰、报名中绿、进行中橙、已结束默认色、已取消红 */
 function statusTagType(s: number) {
   return ({ 0: 'info', 1: 'success', 2: 'warning', 3: '', 4: 'danger' } as Record<number, string>)[s] || 'info'
 }
+/** 状态码转修改状态弹窗的圆点颜色，配色与列表状态标签保持一致 */
 function statusColor(s: number) {
   return ({ 0: '#909399', 1: '#67C23A', 2: '#E6A23C', 3: '#409EFF', 4: '#F56C6C' } as Record<number, string>)[s] || '#909399'
 }
+/** 状态码转业务说明，展示在状态选项下方，提示切换后的可见性与流程影响 */
 function statusDesc(s: number) {
   return ({ 0: '尚未发布，学生不可见', 1: '开放报名，学生可申报', 2: '报名已截止，进行中', 3: '比赛结束并完成结项', 4: '比赛取消或提前终止' } as Record<number, string>)[s] || ''
 }
 
+// ==================== 数据加载与筛选 ====================
+/**
+ * 加载当前页比赛列表。
+ * 副作用：写入 loading、list、total；请求异常由 request 层统一提示。
+ */
 async function loadData() {
   loading.value = true
   try {
@@ -399,9 +469,17 @@ async function loadData() {
   } finally { loading.value = false }
 }
 
+/** 点击查询：先回到第 1 页再请求，避免筛选后当前页越界导致空白 */
 function handleSearch() { searchForm.page = 1; loadData() }
+/** 重置筛选条件（关键词、状态）并回到第 1 页重新查询 */
 function handleReset() { searchForm.page = 1; searchForm.keyword = ''; searchForm.status = undefined; loadData() }
 
+// ==================== 新建/编辑与提交 ====================
+/**
+ * 打开新建或编辑弹窗。
+ * @param row 传入则为编辑，会先请求详情回填表单；不传则为新建，套用 defaultForm
+ * 副作用：写 editId、回填 form，最终置 dialogVisible 为 true
+ */
 async function openDialog(row?: CompetitionListItem) {
   isEdit.value = !!row
   if (row) {
@@ -432,7 +510,12 @@ async function openDialog(row?: CompetitionListItem) {
   dialogVisible.value = true
 }
 
-/** 时间表顺序校验：与后端 CompetitionCreate.check_dates 保持一致 */
+/**
+ * 时间表顺序校验：与后端 CompetitionCreate.check_dates 保持一致。
+ * 规则：报名/比赛各自起止先后、学院初审到校级复审到专家评审递增、中期不晚于结题；
+ * 未填写的阶段不参与校验（对应「不填则该阶段不锁」的业务约定）。
+ * @returns 第一条不满足的提示文案；全部通过返回空字符串
+ */
 function validateDateOrder(): string {
   const ts = (v?: string) => (v ? new Date(v).getTime() : null)
   const later = (a?: string, b?: string) => {
@@ -452,6 +535,11 @@ function validateDateOrder(): string {
   return ''
 }
 
+/**
+ * 提交新建或编辑。
+ * 流程：时间表顺序校验、el-form 必填校验、空日期与空届次转 undefined，再按模式 POST 或 PUT。
+ * 副作用：发起请求、成功提示、关闭弹窗、刷新列表。
+ */
 async function submit() {
   const dateError = validateDateOrder()
   if (dateError) { ElMessage.warning(dateError); return }
@@ -479,6 +567,13 @@ async function submit() {
   } finally { submitting.value = false }
 }
 
+// ==================== 删除与状态变更 ====================
+/**
+ * 删除比赛。
+ * @param id 比赛 ID
+ * @param title 比赛名称，用于确认框文案
+ * 副作用：确认框、DELETE 请求、成功提示、刷新列表
+ */
 async function remove(id: number, title: string) {
   await ElMessageBox.confirm(`确定删除比赛"${title}"？`, '提示', { type: 'warning' })
   await deleteCompetition(id)
@@ -486,12 +581,24 @@ async function remove(id: number, title: string) {
   loadData()
 }
 
+/**
+ * 更新比赛状态。
+ * @param id 比赛 ID
+ * @param status 目标状态码：0 草稿 / 1 报名中 / 2 进行中 / 3 已结束 / 4 已取消
+ * 副作用：PATCH 请求、成功提示、刷新列表
+ */
 async function changeStatus(id: number, status: number) {
   await updateCompetitionStatus(id, status)
   ElMessage.success('状态更新成功')
   loadData()
 }
 
+// ==================== 详情与行操作分发 ====================
+/**
+ * 打开比赛详情抽屉。
+ * @param id 比赛 ID
+ * 副作用：GET 详情、把详情里的 view_count 回写到列表对应行、打开抽屉
+ */
 async function viewDetail(id: number) {
   const r = await getCompetitionDetail(id)
   detail.value = (r as any).data ?? r
@@ -503,6 +610,11 @@ async function viewDetail(id: number) {
   detailVisible.value = true
 }
 
+/**
+ * 行操作下拉菜单的统一分发入口。
+ * @param cmd 命令标识：view 查看详情 / edit 编辑 / awards 生成获奖 / status 改状态 / delete 删除
+ * @param row 当前行比赛数据
+ */
 function handleRowCommand(cmd: string, row: CompetitionListItem) {
   if (cmd === 'view') return viewDetail(row.id)
   if (cmd === 'edit') return openDialog(row)
@@ -515,6 +627,10 @@ function handleRowCommand(cmd: string, row: CompetitionListItem) {
   }
 }
 
+/**
+ * 确认修改状态：调用 changeStatus 并关闭状态弹窗。
+ * 副作用：复用 submitting 控制按钮 loading，成功后关闭弹窗并刷新列表。
+ */
 async function submitStatus() {
   if (!statusRow.value) return
   submitting.value = true
@@ -526,6 +642,8 @@ async function submitStatus() {
   }
 }
 
+// ==================== 生命周期 ====================
+// 首次进入页面即按默认分页请求列表，保证管理员看到最新的比赛状态与数量
 onMounted(loadData)
 </script>
 

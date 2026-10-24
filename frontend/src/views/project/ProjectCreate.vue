@@ -1,14 +1,29 @@
 <!--
-  项目申报页面（学生端）
-  分步式表单：基本信息 → 团队成员 → 指导教师 → 立项方案 → 预算编制
-  支持草稿保存与正式提交
+  页面名称：项目申报 / 编辑（学生端）
+  面向角色：学生（项目负责人）；通过 ?id= 复用为草稿编辑页
+  核心功能：五步式表单（基本信息 → 团队成员 → 指导教师 → 立项方案 → 预算编制），
+           模板套用、草稿自动保存与恢复、附件上传、保存草稿 / 正式提交。
+  调用 API：createProject、createAndSubmitProject、updateProject、getProjectDetail、
+           getColleges、getCompetitionList、getUserList。
+  权限 / 状态约束：
+    - 指导教师必须先被选择，且提交后需教师确认，项目才会进入学院初审。
+    - 团队成员必须能匹配到有效学生账号（student_id 非 0）才允许提交。
+    - 比赛仅展示「报名中 / 进行中」等可选状态，避免绑定已结束赛事。
+    - 编辑模式（?id=）不清空已有附件，新增附件通过 attachment_ids 追加绑定。
+  关键交互：
+    - 新建进入即弹模板选择器，套用模板会覆盖摘要、创新点、预期成果与预算。
+    - 表单每 30 秒自动暂存到本地（localStorage），下次进入可恢复或丢弃。
+    - 步骤 1 / 4 有独立表单校验，步骤 2 / 3 用轻量数量与必填判断，避免整表一次性报错。
+    - 提交前逐项做业务校验（比赛、预算、教师、成员关联），通过后创建并提交或更新后提交。
 -->
 <template>
   <div class="page-container">
+    <!-- 模板选择器：新建时自动弹出；套用模板会覆盖部分字段，跳过则保持空白表单 -->
     <ProjectTemplatePicker v-model="showTemplatePicker" @select="handleSelectTemplate" @skip="handleSkipTemplate" />
 
     <el-card shadow="never">
-      <!-- 草稿提示条 -->
+      <!-- 草稿提示条：本地存在未提交草稿时提示恢复 / 丢弃；
+           已恢复过或已套用模板后不再重复打扰 -->
       <el-alert
         v-if="(hasDraft || savedAt) && !templateApplied"
         :title="alertTitle"
@@ -24,7 +39,7 @@
         </template>
       </el-alert>
 
-      <!-- 步骤条 -->
+      <!-- 步骤条：仅作进度展示，实际步进由 nextStep / prevStep 控制并带业务校验 -->
       <el-steps :active="currentStep" finish-status="success" align-center>
         <el-step title="基本信息" icon="Document" />
         <el-step title="团队成员" icon="User" />
@@ -33,7 +48,8 @@
         <el-step title="预算编制" icon="Money" />
       </el-steps>
 
-      <!-- Step 1: 基本信息 -->
+      <!-- Step 1 基本信息：学院决定初审归属，比赛决定项目可参与的赛事；
+           起止时间不允许早于今天（disabledDate） -->
       <div v-show="currentStep === 0" class="step-content">
         <el-form ref="form1Ref" :model="formData" :rules="form1Rules" label-width="100px" style="max-width: 1000px; margin: 0 auto;">
           <el-form-item label="项目名称" prop="project_name">
@@ -82,7 +98,8 @@
         </el-form>
       </div>
 
-      <!-- Step 2: 团队成员 -->
+      <!-- Step 2 团队成员：学号失焦时自动匹配学生账号并回填姓名 / 专业 / 年级；
+           匹配不到也允许手填，但提交时要求 student_id 有效 -->
       <div v-show="currentStep === 1" class="step-content">
         <div class="step-header">
           <p class="step-desc">添加团队成员，每位成员需填写学号、姓名和分工</p>
@@ -128,7 +145,7 @@
         </el-table>
       </div>
 
-      <!-- Step 3: 指导教师 -->
+      <!-- Step 3 指导教师：远程按姓名搜索；绑定后需教师确认才能进入审核流程 -->
       <div v-show="currentStep === 2" class="step-content">
         <el-form label-width="100px" style="max-width: 1000px; margin: 0 auto;">
           <el-form-item label="指导教师">
@@ -155,7 +172,7 @@
         </el-form>
       </div>
 
-      <!-- Step 4: 立项方案 -->
+      <!-- Step 4 立项方案：创新点与预期成果使用富文本编辑器，内容以 HTML 字符串提交 -->
       <div v-show="currentStep === 3" class="step-content">
         <el-form ref="form2Ref" :model="formData" :rules="form2Rules" label-width="100px" style="max-width: 1000px; margin: 0 auto;">
           <el-form-item label="创新点" prop="innovation_points">
@@ -167,7 +184,7 @@
         </el-form>
       </div>
 
-      <!-- Step 5: 预算编制 -->
+      <!-- Step 5 预算编制：科目固定枚举，金额允许为 0，合计由表格 summary 实时计算 -->
       <div v-show="currentStep === 4" class="step-content">
         <div class="step-header">
           <p class="step-desc">编制项目预算，各科目金额合计为项目总预算</p>
@@ -206,7 +223,8 @@
           </el-table-column>
         </el-table>
 
-        <!-- 附件上传 -->
+        <!-- 附件上传：编辑模式回显已有附件；新增材料先上传为临时文件（biz_id=0），
+             保存 / 提交时通过 attachment_ids 绑定到项目 -->
         <el-form label-width="100px" style="max-width: 1000px; margin: 20px auto 0;">
           <el-form-item label="已有附件" v-if="isEditMode && formData.attachments.length > 0">
             <ProjectAttachmentList :attachments="formData.attachments" />
@@ -222,7 +240,8 @@
         </el-form>
       </div>
 
-      <!-- 按钮区 -->
+      <!-- 按钮区：最后一步才出现「保存草稿 / 正式提交」；
+           保存草稿不校验必填，正式提交会逐项拦截业务缺失 -->
       <div class="step-actions">
         <el-button v-if="currentStep > 0" @click="prevStep">上一步</el-button>
         <el-button v-if="currentStep < 4" type="primary" @click="nextStep">下一步</el-button>
@@ -250,24 +269,32 @@ import ProjectTemplatePicker from '@/components/ProjectTemplatePicker.vue'
 import RichEditor from '@/components/RichEditor.vue'
 import type { ProjectTemplate } from '@/data/projectTemplates'
 
-// 禁用今天之前的日期
+/** 禁用今天之前的日期：统一按当天 00:00 比较，避免同一天因时分秒被误判为过去 */
 const disabledDate = (date: Date) => {
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   return date.getTime() < today.getTime()
 }
 
+// ==================== 路由 / Store / 页面模式 ====================
+// isEditMode 由 URL 是否带 id 决定：带 id 时先拉详情回填，否则走新建流程。
 const router = useRouter()
 const route = useRoute()
 const processStore = useProcessStore()
+/** 当前步骤索引（0-4），仅控制展示与按钮显隐 */
 const currentStep = ref(0)
 const isEditMode = computed(() => !!route.query.id)
 const editingId = computed(() => Number(route.query.id))
+/** 是否已从本地草稿恢复，避免恢复后提示条反复出现 */
 const isRestored = ref(false)
+/** 模板选择器显隐 */
 const showTemplatePicker = ref(false)
+/** 是否已处理过模板（套用或跳过）；处理前才展示草稿恢复提示，避免两套弹层叠加 */
 const templateApplied = ref(false)
 
 // ==================== 表单数据 ====================
+// 五个步骤共用一份 formData；dateRange 为 [开始, 结束]，提交时拆成两个字段；
+// teamMembers / budgets 为动态行数组，attachments 保存已有与新增附件。
 const formData = reactive({
   project_name: '',
   project_type: undefined as number | undefined,
@@ -293,9 +320,12 @@ const formData = reactive({
 })
 
 // ==================== 自动保存草稿 ====================
+// 草稿 key 区分新建与编辑，防止编辑 A 项目的草稿串到 B 项目；
+// 30 秒自动写入一次，savedAt 用于展示「草稿已自动保存」时间。
 const draftKey = computed(() => (isEditMode.value ? `edit_${editingId.value}` : 'create'))
 const { savedAt, saveDraft, loadDraft, clearDraft, hasDraft } = useAutoSaveDraft(draftKey.value, formData, 30000)
 
+/** 草稿提示文案：有自动保存时间则展示时分秒，否则回退为空串（由 v-if 控制不显示） */
 const alertTitle = computed(() => {
   if (savedAt.value) {
     const d = new Date(savedAt.value)
@@ -307,6 +337,10 @@ const alertTitle = computed(() => {
   return ''
 })
 
+/**
+ * 恢复本地草稿：整体覆盖 formData。
+ * 说明：草稿可能来自旧版本字段结构，因此这里不做逐字段校验，异常由使用方自行兜底。
+ */
 function restoreDraft() {
   const draft = loadDraft()
   if (draft) {
@@ -316,6 +350,7 @@ function restoreDraft() {
   }
 }
 
+/** 丢弃本地草稿：只清理 localStorage，不影响当前表单已填内容 */
 function discardDraft() {
   clearDraft()
   isRestored.value = true
@@ -342,6 +377,11 @@ const form2Rules: FormRules = {
 }
 
 // ==================== 步骤导航 ====================
+/**
+ * 进入下一步：按当前步骤执行不同校验。
+ * 步骤 0 / 3 走 el-form 校验；步骤 1 要求至少一名成员；步骤 2 要求已选教师。
+ * 失败处理：校验不通过只提示，不推进步骤。
+ */
 async function nextStep() {
   if (currentStep.value === 0) {
     if (!form1Ref.value) return
@@ -374,11 +414,13 @@ async function nextStep() {
   currentStep.value++
 }
 
+/** 返回上一步：不做校验，已填数据保留 */
 function prevStep() {
   if (currentStep.value > 0) currentStep.value--
 }
 
 // ==================== 团队成员 ====================
+/** 添加一行空成员：student_id 先置 0，待学号匹配成功后回填 */
 function addMember() {
   formData.teamMembers.push({
     student_id: 0,
@@ -391,10 +433,17 @@ function addMember() {
   })
 }
 
+/** 删除指定行成员：直接 splice，提交前会再次校验成员有效性 */
 function removeMember(index: number) {
   formData.teamMembers.splice(index, 1)
 }
 
+/**
+ * 根据学号搜索学生并自动填充信息。
+ * 参数 row：成员行；_index 仅保留插槽签名，当前未使用。
+ * 副作用：匹配唯一时回填 student_id / 姓名 / 专业 / 年级；无匹配时清空关联。
+ * 失败处理：接口异常提示手动填写，并清空 student_id 防止提交脏数据。
+ */
 /** 根据学号搜索学生并自动填充信息 */
 async function searchStudent(row: any, _index: number) {
   const no = row.student_no?.trim()
@@ -427,10 +476,16 @@ async function searchStudent(row: any, _index: number) {
   }
 }
 
-// ==================== 指导教师 ====================
+// ==================== 模板与下拉选项 ====================
+// 教师下拉走远程搜索；学院与比赛在 onMounted 中一次性加载。
 const teacherOptions = ref<any[]>([])
 const teacherLoading = ref(false)
 
+/**
+ * 套用模板：覆盖项目类别、级别、摘要、创新点、预期成果与预算。
+ * 说明：模板是「起步脚手架」，用户仍可在后续步骤中修改；
+ * 已填内容会被覆盖，因此入口只在新建流程首次进入时自动弹出。
+ */
 function handleSelectTemplate(tpl: ProjectTemplate) {
   formData.project_type = tpl.category
   formData.project_level = tpl.level
@@ -442,14 +497,17 @@ function handleSelectTemplate(tpl: ProjectTemplate) {
   ElMessage.success(`已应用模板：${tpl.name}`)
 }
 
+/** 跳过模板：仅标记已处理，保持空白表单，后续不再自动弹出选择器 */
 function handleSkipTemplate() {
   templateApplied.value = true
 }
 
-// 学院下拉选项
+// 学院下拉选项：决定项目归属，提交后由该学院管理员初审
 const collegeOptions = ref<any[]>([])
-// 比赛下拉选项
+// 比赛下拉选项：只保留仍在报名 / 进行中的赛事
 const competitionOptions = ref<any[]>([])
+// 首次进入：新建模式立即弹出模板选择器（不等接口，避免页面空白）；
+// 随后加载学院与比赛；编辑模式再拉详情回填各步骤数据。
 onMounted(async () => {
   // 新建模式下立即弹出模板选择对话框，避免等待接口时页面空白
   if (!isEditMode.value) {
@@ -506,6 +564,11 @@ onMounted(async () => {
 
 onBeforeUnmount(() => processStore.reset())
 
+/**
+ * 远程搜索指导教师（后端限定 role=2）。
+ * 参数 query：姓名关键词；为空时清空候选，避免请求全量用户。
+ * 失败处理：提示「教师搜索失败」，保留已有候选供继续选择。
+ */
 async function searchTeacher(query: string) {
   if (!query) {
     teacherOptions.value = []
@@ -523,14 +586,17 @@ async function searchTeacher(query: string) {
 }
 
 // ==================== 预算 ====================
+/** 添加一行空预算：默认金额 0，科目需用户从固定枚举中选择 */
 function addBudget() {
   formData.budgets.push({ budget_item: '', budget_amount: 0, remark: '' })
 }
 
+/** 删除指定行预算：合计会由表格 summary 自动重算 */
 function removeBudget(index: number) {
   formData.budgets.splice(index, 1)
 }
 
+/** 预算表格合计行：第 0 列显示「合计」，金额列累加并格式化为两位小数 */
 function getBudgetSummary({ columns, data }: { columns: any[]; data: any[] }) {
   const sums: string[] = []
   columns.forEach((col, index) => {
@@ -547,14 +613,22 @@ function getBudgetSummary({ columns, data }: { columns: any[]; data: any[] }) {
 }
 
 // ==================== 附件上传 ====================
+/** 新增材料上传成功：追加到 formData.attachments，提交时统一转换为 attachment_ids */
 function handleFileUpload(file: any) {
   formData.attachments.push(file)
 }
 
-// ==================== 保存/提交 ====================
+// ==================== 保存 / 提交 ====================
+/** 保存草稿按钮 loading */
 const draftLoading = ref(false)
+/** 正式提交按钮 loading */
 const submitLoading = ref(false)
 
+/**
+ * 组装创建 / 更新接口的 payload。
+ * 说明：dateRange 拆成 start_date / end_date；附件只下发 id 列表，
+ * 学院与比赛缺失时置 null，由后端做最终校验。
+ */
 function buildPayload() {
   return {
     project_name: formData.project_name,
@@ -574,6 +648,10 @@ function buildPayload() {
   }
 }
 
+/**
+ * 保存草稿：编辑模式更新、新建模式创建；成功后清掉本地缓存并返回列表。
+ * 说明：这里不做必填校验，允许保存未完成的项目；请求失败时保留页面让用户重试。
+ */
 async function handleSaveDraft() {
   draftLoading.value = true
   try {
@@ -591,6 +669,12 @@ async function handleSaveDraft() {
   }
 }
 
+/**
+ * 正式提交：先做业务前置校验（比赛、预算、教师、成员关联），
+ * 编辑模式「更新后提交」，新建模式走 createAndSubmitProject 一次性创建并提交。
+ * 说明：团队成员必须关联到真实学生账号，避免出现无法参与流程的“幽灵成员”。
+ * 失败处理：任一校验失败即中止并提示；接口异常由全局拦截器提示，finally 复位 loading。
+ */
 async function handleSubmit() {
   if (!formData.competition_id) {
     ElMessage.warning('请选择参加的比赛')
